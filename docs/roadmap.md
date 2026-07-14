@@ -42,5 +42,6 @@ Performance, a11y audit, full empty/loading/error pass, seed/demo data, security
 ## Status
 | Module | Status |
 |---|---|
-| 0 Foundation | Spec presented — awaiting approval to scaffold |
-| 1–6 | Planned |
+| 0 Foundation | ✅ Shipped 2026-07-14 — builds, typechecks, tests pass, verified in browser |
+| 1 Project Management | Next — spec pending approval |
+| 2–6 | Planned |

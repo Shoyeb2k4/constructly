@@ -66,3 +66,20 @@ Status legend: `Accepted` · `Superseded` · `Proposed`
 ## ADR-0012 — UI/UX: premium, minimal, design-system-first
 **Status:** Accepted · 2026-07-14
 **Decision:** Not a traditional ERP. Inspiration: Linear, Notion, Vercel, Stripe, Arc, Apple HIG. Build the complete **design system (tokens, type, color, icons, components, spacing, motion, empty/loading/error states, dark mode) before any business screen.** Tailwind + shadcn/ui (Radix) as the component foundation.
+
+## ADR-0013 — Prisma pinned to v6 (not v7)
+**Status:** Accepted · 2026-07-14
+**Context:** Prisma 7 removes `url`/`directUrl` from the schema datasource and requires a `prisma.config.ts` + driver-adapter runtime — a brand-new connection paradigm released recently.
+**Decision:** Pin to Prisma **6.x** (engine-based, url-in-schema) for the foundation. Stable and battle-tested for a commercial product.
+**Consequences:** Generator is `prisma-client-js` with output to `src/generated/prisma` (gitignored, regenerated via `npm run db:generate`). Revisit a Prisma 7 migration once its config model settles.
+
+## ADR-0014 — Demo mode for credential-free preview
+**Status:** Accepted · 2026-07-14
+**Context:** The UI must be reviewable and E2E-testable without a live Supabase backend.
+**Decision:** A `CONSTRUCTLY_DEMO` flag (auto-on when Supabase env is absent) serves a seeded demo identity ("Meridian Build Co.", owner Aarav Mehta) with no real auth. All env branching lives in `src/lib/env.ts`; `getCurrentUser()` returns the demo user in this mode. Playwright runs against demo mode.
+**Consequences:** `npm run dev` renders the full app immediately. Real auth activates automatically once Supabase env vars are set.
+
+## ADR-0015 — Offline sync via a generic reusable engine (implemented)
+**Status:** Accepted · 2026-07-14
+**Decision:** Implemented the ADR-0007 engine as `src/lib/sync/*`: a Dexie outbox, a `SyncableEntity` registry, an idempotent `enqueue`/`flush` engine, and the `POST /api/sync` contract endpoint. Modules 2–3 register entities; no per-feature sync code.
+**Consequences:** The `/api/sync` server handler map is empty until domain tables exist. `useSync()` powers the topbar offline indicator.

@@ -4,6 +4,16 @@ _Human-readable log of what changed and when. Newest first. Keep entries short; 
 
 ## [Unreleased]
 
+### 2026-07-14 — Module 0: Foundation shipped
+Production-grade scaffold, reusable design system, and app shell — no business features.
+- **Stack:** Next.js 16 (App Router) + TS, Tailwind v4 (CSS-first tokens), Prisma 6, Supabase (auth/db/storage), TanStack Query, Zod.
+- **Design system ("Blueprint"):** light/dark tokens, Inter + JetBrains Mono, 15 UI primitives (button, card, badge, input, dialog, dropdown, tabs, tooltip, switch, command, toaster, …) + app patterns (StatCard, StatusBadge, EmptyState, ErrorState, skeletons, MoneyText, OfflineIndicator). Live gallery at `/style`.
+- **App shell:** responsive sidebar + topbar, ⌘K command palette, theme toggle, user menu; routes for all 7 modules as polished empty states; executive dashboard with demo data.
+- **Auth/tenancy:** Prisma schema (Company, User, roles) + RLS scaffold (`prisma/rls.sql`); Supabase browser/server clients; demo mode for credential-free preview.
+- **Offline engine:** Dexie outbox + `SyncableEntity` registry + idempotent `/api/sync` contract + `useSync()`.
+- **Money:** integer-paise utilities with INR/lakh-crore formatting (unit-tested).
+- **Tooling:** Vitest (5 tests passing), Playwright E2E harness (3 smoke tests), strict TS, ESLint clean. `npm run build` green; verified in light + dark in-browser.
+
 ### 2026-07-14 — Project kickoff & foundation planning
 - Established product scope, target market (India-first), and MVP module set.
 - Locked foundational decisions: Next.js + Supabase + Vercel, RLS multi-tenancy,

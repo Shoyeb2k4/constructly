@@ -1,0 +1,59 @@
+// Constructly — Prisma schema
+// Module 0 ships the tenant + auth foundation. Business entities (projects,
+// laborers, attendance, vendors, purchase orders, …) are added per module.
+// Full target model documented in docs/database.md. Tenant isolation is
+// enforced by Postgres RLS — see prisma/rls.sql.
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum Role {
+  OWNER
+  PROJECT_MANAGER
+}
+
+enum UserStatus {
+  ACTIVE
+  INVITED
+  DISABLED
+}
+
+/// A tenant. Every domain row (added in later modules) carries companyId.
+model Company {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String
+  gstin     String?
+  /// { poApprovalRequired: boolean, currency: "INR", ... }
+  settings  Json     @default("{\"poApprovalRequired\": false, \"currency\": \"INR\"}")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  users User[]
+
+  @@map("companies")
+}
+
+/// Application user. `id` mirrors the Supabase auth user id.
+model User {
+  id        String     @id @db.Uuid
+  companyId String     @map("company_id") @db.Uuid
+  email     String     @unique
+  fullName  String     @map("full_name")
+  role      Role       @default(PROJECT_MANAGER)
+  status    UserStatus @default(ACTIVE)
+  createdAt DateTime   @default(now()) @map("created_at")
+  updatedAt DateTime   @updatedAt @map("updated_at")
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@map("users")
+}

@@ -36,6 +36,16 @@ yarn-error.log*
 # vercel
 .vercel
 
+# local Claude settings (machine-specific)
+.claude/settings.local.json
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# prisma generated client (regenerated via `npm run db:generate`)
+/src/generated
+
+# playwright
+/test-results
+/playwright-report

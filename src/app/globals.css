@@ -1,26 +1,162 @@
 @import "tailwindcss";
+@import "tw-animate-css";
 
+@custom-variant dark (&:is(.dark *));
+
+/* ─────────────────────────────────────────────────────────────
+   Constructly "Blueprint" design tokens
+   Light values on :root, dark overrides on .dark.
+   Mapped into Tailwind utilities via @theme inline below.
+   ───────────────────────────────────────────────────────────── */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #fbfbfd;
+  --surface: #ffffff;
+  --surface-muted: #f4f5f7;
+  --border: #e9eaee;
+  --border-strong: #dcdee3;
+
+  --foreground: #16181d;
+  --foreground-muted: #5c6270;
+  --foreground-subtle: #8a909e;
+
+  --primary: #2e5bff;
+  --primary-hover: #2449d6;
+  --primary-foreground: #ffffff;
+
+  --success: #0e9f6e;
+  --success-subtle: #e1f5ee;
+  --success-foreground: #0f6e56;
+
+  --warning: #d98a00;
+  --warning-subtle: #faeeda;
+  --warning-foreground: #854f0b;
+
+  --danger: #e02424;
+  --danger-subtle: #fcebeb;
+  --danger-foreground: #a32d2d;
+
+  --info: #2e5bff;
+  --info-subtle: #e6f1fb;
+  --info-foreground: #185fa5;
+
+  --ring: #2e5bff;
+  --radius: 0.5rem;
+}
+
+.dark {
+  --background: #0b0c0f;
+  --surface: #141619;
+  --surface-muted: #1c1f24;
+  --border: #262a31;
+  --border-strong: #333842;
+
+  --foreground: #f2f3f5;
+  --foreground-muted: #a0a6b0;
+  --foreground-subtle: #6c727e;
+
+  --primary: #4b77ff;
+  --primary-hover: #6a8fff;
+  --primary-foreground: #ffffff;
+
+  --success: #1d9e75;
+  --success-subtle: #0e2a23;
+  --success-foreground: #5dcaa5;
+
+  --warning: #e0a020;
+  --warning-subtle: #2b2210;
+  --warning-foreground: #f0c069;
+
+  --danger: #f05252;
+  --danger-subtle: #2c1414;
+  --danger-foreground: #f09595;
+
+  --info: #4b77ff;
+  --info-subtle: #10233f;
+  --info-foreground: #85b7eb;
+
+  --ring: #4b77ff;
 }
 
 @theme inline {
   --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-surface-muted: var(--surface-muted);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-foreground-muted: var(--foreground-muted);
+  --color-foreground-subtle: var(--foreground-subtle);
+
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-foreground: var(--primary-foreground);
+
+  --color-success: var(--success);
+  --color-success-subtle: var(--success-subtle);
+  --color-success-foreground: var(--success-foreground);
+
+  --color-warning: var(--warning);
+  --color-warning-subtle: var(--warning-subtle);
+  --color-warning-foreground: var(--warning-foreground);
+
+  --color-danger: var(--danger);
+  --color-danger-subtle: var(--danger-subtle);
+  --color-danger-foreground: var(--danger-foreground);
+
+  --color-info: var(--info);
+  --color-info-subtle: var(--info-subtle);
+  --color-info-foreground: var(--info-foreground);
+
+  --color-ring: var(--ring);
+
+  --font-sans: var(--font-inter);
+  --font-mono: var(--font-jetbrains);
+
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-xl: calc(var(--radius) + 4px);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+@layer base {
+  * {
+    border-color: var(--border);
   }
-}
-
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  html {
+    scroll-behavior: smooth;
+  }
+  body {
+    background: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+  ::selection {
+    background: color-mix(in srgb, var(--primary) 24%, transparent);
+  }
+  ::-webkit-scrollbar {
+    width: 11px;
+    height: 11px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--border-strong);
+    border-radius: 999px;
+    border: 3px solid var(--background);
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--foreground-subtle);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
 }
