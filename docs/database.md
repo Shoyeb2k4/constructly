@@ -104,5 +104,12 @@ USING (company_id = (select company_id from users where id = auth.uid()))
 -- PROJECT_MANAGER additionally scoped to assigned projects on project-linked tables
 ```
 
+## Module 2 — Labor (implemented)
+`Contractor` (lean; future payments/invoices/advances/ledger attach as new tables — no redesign),
+`Laborer` (trade, `daily_wage_paise` Int, optional `contractor_id`, status), and `Attendance`
+(`status`, `ot_hours`, **`wage_rate_paise` + `wage_payable_paise` snapshots**, `client_uuid`
+unique + `client_seq` for offline). Unique `(project_id, laborer_id, date)`; RLS scopes
+attendance via `can_access_project`. Enums: `AttendanceStatus`, `LaborerStatus`, `ContractorStatus`.
+
 ## Deferred (post-MVP, schema-ready)
 Contractor payouts · payroll · inventory · multi-currency · PO receipts/GRN · client portal.

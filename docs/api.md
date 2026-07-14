@@ -57,6 +57,23 @@ client repository (`demo/demo-repository.ts`) behind the same `ProjectsRepositor
 Money crosses this boundary as integer **paise** (`number`); Prisma stores BigInt and
 converts in the mapper.
 
+## Module 2 — Labor & Attendance (server actions)
+Defined in `src/features/labor/server/actions.ts` behind the `LaborRepository` interface
+(demo impl mirrors it client-side). Attendance is also a registered sync entity; `/api/sync`
+applies `attendance` mutations idempotently.
+
+| Action | Who | Notes |
+|---|---|---|
+| `listLaborers(filters)` / `createLaborer` / `updateLaborer` | all / all / all | search + trade/contractor/status filters |
+| `setLaborerStatus` / `bulkSetLaborerStatus` | all | bulk (de)activate |
+| `findDuplicateLaborers(name, phone)` | all | powers add-form warnings |
+| `listContractors` / `createContractor` / `setContractorStatus` | all | contractor rollups included |
+| `getSheet(projectId, date)` | Owner, PM(assigned) | crew + per-cell status |
+| `setAttendance(projectId, laborerId, date, status, otHours)` | Owner, PM(assigned) | wage snapshot; null status = unmark |
+| `markAllPresent` / `copyYesterday` / `addToCrew` | Owner, PM(assigned) | fast-entry helpers |
+| `crossProjectPresence` | all | soft double-booking warning |
+| `laborCostByProject(range)` / `laborCostByContractor(range)` | all | reporting foundation |
+
 ## Later modules
-Endpoints for laborers/attendance, vendors/POs, dashboard aggregates, and report exports
-are documented here as each module is built.
+Endpoints for vendors/POs, dashboard aggregates, and report exports are documented here
+as each module is built.

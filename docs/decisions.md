@@ -79,6 +79,12 @@ Status legend: `Accepted` · `Superseded` · `Proposed`
 **Decision:** A `CONSTRUCTLY_DEMO` flag (auto-on when Supabase env is absent) serves a seeded demo identity ("Meridian Build Co.", owner Aarav Mehta) with no real auth. All env branching lives in `src/lib/env.ts`; `getCurrentUser()` returns the demo user in this mode. Playwright runs against demo mode.
 **Consequences:** `npm run dev` renders the full app immediately. Real auth activates automatically once Supabase env vars are set.
 
+## ADR-0017 — Attendance: wage snapshot + local-first offline
+**Status:** Accepted · 2026-07-14
+**Decision:** Each attendance row stores a **snapshot** of the wage rate and computed payable (`wageRatePaise`, `wagePayablePaise`). Editing a laborer's daily wage later never recomputes historical attendance. Attendance is registered with the reusable sync engine (ADR-0007); the demo path writes local-first (data survives offline), and `/api/sync` applies attendance idempotently with last-write-wins on the `(project, laborer, date)` key.
+**Consequences:** Correct historical labor cost. `computeWage` is the single pure source of pay math (unit-tested). Full production offline (client outbox for attendance) builds on this foundation.
+**Also:** the "Mark all present → flag exceptions" default is the primary lever for sub-2-minute entry.
+
 ## ADR-0016 — Projects: repository interface with demo + server implementations
 **Status:** Accepted · 2026-07-14
 **Context:** The UI must be fully interactive in demo mode (no DB) yet production-ready with Prisma + RLS.

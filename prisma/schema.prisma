@@ -64,9 +64,12 @@ model Company {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  users    User[]
-  projects Project[]
-  activity ActivityLog[]
+  users       User[]
+  projects    Project[]
+  activity    ActivityLog[]
+  contractors Contractor[]
+  laborers    Laborer[]
+  attendance  Attendance[]
 
   @@map("companies")
 }
@@ -82,11 +85,12 @@ model User {
   createdAt DateTime   @default(now()) @map("created_at")
   updatedAt DateTime   @updatedAt @map("updated_at")
 
-  company         Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  createdProjects Project[]         @relation("ProjectCreatedBy")
-  managedProjects Project[]         @relation("ProjectManager")
-  favorites       ProjectFavorite[]
-  activity        ActivityLog[]
+  company            Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdProjects    Project[]         @relation("ProjectCreatedBy")
+  managedProjects    Project[]         @relation("ProjectManager")
+  favorites          ProjectFavorite[]
+  activity           ActivityLog[]
+  recordedAttendance Attendance[]
 
   @@index([companyId])
   @@map("users")
@@ -123,10 +127,11 @@ model Project {
   company   Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
   pm        User?             @relation("ProjectManager", fields: [pmId], references: [id], onDelete: SetNull)
   createdBy User              @relation("ProjectCreatedBy", fields: [createdById], references: [id])
-  deadlines Deadline[]
-  documents ProjectDocument[]
-  notes     Note[]
-  favorites ProjectFavorite[]
+  deadlines  Deadline[]
+  documents  ProjectDocument[]
+  notes      Note[]
+  favorites  ProjectFavorite[]
+  attendance Attendance[]
 
   @@unique([companyId, code])
   @@index([companyId, stage])
@@ -214,4 +219,92 @@ model ActivityLog {
 
   @@index([companyId, createdAt])
   @@map("activity_logs")
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  HALF_DAY
+}
+
+enum LaborerStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum ContractorStatus {
+  ACTIVE
+  INACTIVE
+}
+
+/// Labor contractor. Kept intentionally lean; future modules add payments,
+/// invoices, advances, and a ledger as NEW tables referencing contractorId —
+/// no redesign of this model required.
+model Contractor {
+  id        String           @id @default(uuid()) @db.Uuid
+  companyId String           @map("company_id") @db.Uuid
+  name      String
+  phone     String?
+  status    ContractorStatus @default(ACTIVE)
+  createdAt DateTime         @default(now()) @map("created_at")
+  updatedAt DateTime         @updatedAt @map("updated_at")
+
+  company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  laborers Laborer[]
+
+  @@index([companyId, status])
+  @@map("contractors")
+}
+
+/// A daily-wage worker.
+model Laborer {
+  id             String        @id @default(uuid()) @db.Uuid
+  companyId      String        @map("company_id") @db.Uuid
+  fullName       String        @map("full_name")
+  phone          String?
+  trade          String
+  dailyWagePaise Int           @map("daily_wage_paise")
+  contractorId   String?       @map("contractor_id") @db.Uuid
+  status         LaborerStatus @default(ACTIVE)
+  notes          String?
+  createdAt      DateTime      @default(now()) @map("created_at")
+  updatedAt      DateTime      @updatedAt @map("updated_at")
+
+  company    Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  contractor Contractor?  @relation(fields: [contractorId], references: [id], onDelete: SetNull)
+  attendance Attendance[]
+
+  @@index([companyId, status])
+  @@index([companyId, contractorId])
+  @@map("laborers")
+}
+
+/// Daily attendance — offline-syncable (clientUuid idempotency, clientSeq order).
+/// wageRatePaise + wagePayablePaise are SNAPSHOTS at record time: editing a
+/// laborer's daily wage later never rewrites historical cost.
+model Attendance {
+  id               String           @id @default(uuid()) @db.Uuid
+  companyId        String           @map("company_id") @db.Uuid
+  projectId        String           @map("project_id") @db.Uuid
+  laborerId        String           @map("laborer_id") @db.Uuid
+  date             DateTime         @db.Date
+  status           AttendanceStatus
+  otHours          Decimal          @default(0) @map("ot_hours") @db.Decimal(4, 2)
+  wageRatePaise    Int              @map("wage_rate_paise")
+  wagePayablePaise Int              @map("wage_payable_paise")
+  recordedById     String           @map("recorded_by_id") @db.Uuid
+  clientUuid       String           @unique @map("client_uuid")
+  clientSeq        BigInt           @map("client_seq")
+  createdAt        DateTime         @default(now()) @map("created_at")
+  updatedAt        DateTime         @updatedAt @map("updated_at")
+
+  company    Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  project    Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  laborer    Laborer  @relation(fields: [laborerId], references: [id], onDelete: Cascade)
+  recordedBy User     @relation(fields: [recordedById], references: [id])
+
+  @@unique([projectId, laborerId, date])
+  @@index([companyId, projectId, date])
+  @@index([companyId, laborerId, date])
+  @@map("attendance")
 }

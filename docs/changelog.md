@@ -4,6 +4,18 @@ _Human-readable log of what changed and when. Newest first. Keep entries short; 
 
 ## [Unreleased]
 
+### 2026-07-14 — Module 2: Labor & Attendance shipped
+The MVP's core differentiator — offline-first attendance built for sub-2-minute entry.
+- **Flagship attendance screen:** pick project (remembers last) + date (defaults today) → **Mark all present** → flag exceptions (P / ½ / A) with large touch targets, OT steppers, **Copy yesterday**, Add-workers picker, desktop keyboard shortcuts (P/H/A + arrows), live sticky totals, and a clear sync chip. Verified: mark-all → 8 present, ₹6,400.
+- **Wage math (snapshotted):** `computeWage` is pure + unit-tested; `wageRatePaise`/`wagePayablePaise` are frozen onto each attendance row so later wage changes never rewrite history.
+- **Roster:** virtualized workers table (300+ ready), search + trade/contractor/status filters, bulk deactivate, intelligent duplicate warnings on add.
+- **Contractors:** first-class model (extensible for future payments/invoices/advances/ledger) with per-contractor worker count and labor-cost rollup.
+- **Rollups / reporting foundation:** labor cost by project and by contractor (incl. a Direct-labor bucket) over a date range.
+- **Offline:** attendance registered with the reusable sync engine (ADR-0007); demo path is local-first (data never lost); `/api/sync` gained the idempotent attendance upsert handler.
+- **Schema:** Contractor, Laborer, Attendance + enums + RLS (attendance PM-scoped via project access).
+- **Tests:** wage unit tests + full demo-repository integration (48 total) + Playwright attendance E2E. Build/typecheck/lint clean; verified in-browser.
+- **Fix:** demo `read()` now clones seed constants (they were handed out by reference — a latent bug that could corrupt the first in-app demo session).
+
 ### 2026-07-14 — Module 1: Project Management shipped
 Full projects feature, built to the Module 0 bar.
 - **Views:** virtualized table + **Kanban board** with dnd-kit drag between lifecycle stages (optimistic); rich **detail** with Overview, Deadlines, Documents, Notes, Activity tabs.
