@@ -43,6 +43,84 @@ create policy users_owner_manage on public.users
     )
   );
 
+-- ── Helper: is the caller an OWNER? ────────────────────────────────────
+create or replace function public.is_owner()
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1 from public.users where id = auth.uid() and role = 'OWNER'
+  )
+$$;
+
+-- ── projects ───────────────────────────────────────────────────────────
+-- Owners see every project in their company; PMs only assigned ones.
+alter table public.projects enable row level security;
+
+create policy projects_read on public.projects
+  for select using (
+    company_id = public.current_company_id()
+    and (public.is_owner() or pm_id = auth.uid())
+  );
+
+-- Owners create/delete; owners and the assigned PM may update.
+create policy projects_insert on public.projects
+  for insert with check (company_id = public.current_company_id() and public.is_owner());
+
+create policy projects_update on public.projects
+  for update using (
+    company_id = public.current_company_id()
+    and (public.is_owner() or pm_id = auth.uid())
+  );
+
+create policy projects_delete on public.projects
+  for delete using (company_id = public.current_company_id() and public.is_owner());
+
+-- ── Project-scoped children (deadlines, documents, notes) ──────────────
+-- Access follows the parent project's visibility.
+create or replace function public.can_access_project(pid uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1 from public.projects p
+    where p.id = pid
+      and p.company_id = public.current_company_id()
+      and (public.is_owner() or p.pm_id = auth.uid())
+  )
+$$;
+
+alter table public.deadlines enable row level security;
+create policy deadlines_all on public.deadlines
+  for all using (company_id = public.current_company_id() and public.can_access_project(project_id))
+  with check (company_id = public.current_company_id() and public.can_access_project(project_id));
+
+alter table public.project_documents enable row level security;
+create policy documents_all on public.project_documents
+  for all using (company_id = public.current_company_id() and public.can_access_project(project_id))
+  with check (company_id = public.current_company_id() and public.can_access_project(project_id));
+
+alter table public.notes enable row level security;
+create policy notes_all on public.notes
+  for all using (company_id = public.current_company_id() and public.can_access_project(project_id))
+  with check (company_id = public.current_company_id() and public.can_access_project(project_id));
+
+-- ── project_favorites (per-user) ───────────────────────────────────────
+alter table public.project_favorites enable row level security;
+create policy favorites_own on public.project_favorites
+  for all using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+-- ── activity_logs (read within company; writes via service role) ───────
+alter table public.activity_logs enable row level security;
+create policy activity_read on public.activity_logs
+  for select using (company_id = public.current_company_id());
+
 -- ── Template for future domain tables ──────────────────────────────────
 -- alter table public.<table> enable row level security;
 -- create policy <table>_tenant on public.<table>

@@ -42,6 +42,7 @@ Performance, a11y audit, full empty/loading/error pass, seed/demo data, security
 ## Status
 | Module | Status |
 |---|---|
-| 0 Foundation | ✅ Shipped 2026-07-14 — builds, typechecks, tests pass, verified in browser |
-| 1 Project Management | Next — spec pending approval |
-| 2–6 | Planned |
+| 0 Foundation | ✅ Shipped 2026-07-14 — tagged v0.1.0-foundation |
+| 1 Project Management | ✅ Shipped 2026-07-14 — list, board, detail, CRUD, 27 tests, verified |
+| 2 Labor & Attendance | Next — spec pending approval |
+| 3–6 | Planned |

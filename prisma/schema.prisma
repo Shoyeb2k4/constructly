@@ -1,6 +1,5 @@
 // Constructly — Prisma schema
-// Module 0 ships the tenant + auth foundation. Business entities (projects,
-// laborers, attendance, vendors, purchase orders, …) are added per module.
+// Module 0: tenant + auth foundation. Module 1: project management.
 // Full target model documented in docs/database.md. Tenant isolation is
 // enforced by Postgres RLS — see prisma/rls.sql.
 
@@ -26,7 +25,36 @@ enum UserStatus {
   DISABLED
 }
 
-/// A tenant. Every domain row (added in later modules) carries companyId.
+enum ProjectType {
+  RESIDENTIAL
+  COMMERCIAL
+  INDUSTRIAL
+  INFRASTRUCTURE
+  RENOVATION
+  INTERIOR_FITOUT
+}
+
+enum ProjectStage {
+  CREATED
+  PLANNING
+  ESTIMATION
+  PROCUREMENT
+  CONSTRUCTION
+  QUALITY_INSPECTION
+  COMPLETION
+  HANDOVER
+  CLOSED
+}
+
+enum DocumentCategory {
+  DRAWING
+  PDF
+  PHOTO
+  CONTRACT
+  OTHER
+}
+
+/// A tenant. Every domain row carries companyId.
 model Company {
   id        String   @id @default(uuid()) @db.Uuid
   name      String
@@ -36,7 +64,9 @@ model Company {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  users User[]
+  users    User[]
+  projects Project[]
+  activity ActivityLog[]
 
   @@map("companies")
 }
@@ -52,8 +82,136 @@ model User {
   createdAt DateTime   @default(now()) @map("created_at")
   updatedAt DateTime   @updatedAt @map("updated_at")
 
-  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  company         Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdProjects Project[]         @relation("ProjectCreatedBy")
+  managedProjects Project[]         @relation("ProjectManager")
+  favorites       ProjectFavorite[]
+  activity        ActivityLog[]
 
   @@index([companyId])
   @@map("users")
+}
+
+/// A construction project — the spine other modules reference.
+model Project {
+  id                     String       @id @default(uuid()) @db.Uuid
+  companyId              String       @map("company_id") @db.Uuid
+  code                   String
+  name                   String
+  type                   ProjectType
+  stage                  ProjectStage @default(CREATED)
+  clientName             String?      @map("client_name")
+  clientContact          String?      @map("client_contact")
+  clientPhone            String?      @map("client_phone")
+  clientEmail            String?      @map("client_email")
+  siteAddress            String?      @map("site_address")
+  gpsLat                 Float?       @map("gps_lat")
+  gpsLng                 Float?       @map("gps_lng")
+  /// Integer paise (BigInt — budgets can exceed Int32). DTOs expose as number.
+  budgetPaise            BigInt       @default(0) @map("budget_paise")
+  contractValuePaise     BigInt       @default(0) @map("contract_value_paise")
+  startDate              DateTime?    @map("start_date") @db.Date
+  expectedCompletionDate DateTime?    @map("expected_completion_date") @db.Date
+  tags                   String[]     @default([])
+  pmId                   String?      @map("pm_id") @db.Uuid
+  createdById            String       @map("created_by_id") @db.Uuid
+  archivedAt             DateTime?    @map("archived_at")
+  deletedAt              DateTime?    @map("deleted_at")
+  createdAt              DateTime     @default(now()) @map("created_at")
+  updatedAt              DateTime     @updatedAt @map("updated_at")
+
+  company   Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  pm        User?             @relation("ProjectManager", fields: [pmId], references: [id], onDelete: SetNull)
+  createdBy User              @relation("ProjectCreatedBy", fields: [createdById], references: [id])
+  deadlines Deadline[]
+  documents ProjectDocument[]
+  notes     Note[]
+  favorites ProjectFavorite[]
+
+  @@unique([companyId, code])
+  @@index([companyId, stage])
+  @@index([companyId, pmId])
+  @@index([companyId, archivedAt])
+  @@map("projects")
+}
+
+model Deadline {
+  id          String    @id @default(uuid()) @db.Uuid
+  companyId   String    @map("company_id") @db.Uuid
+  projectId   String    @map("project_id") @db.Uuid
+  title       String
+  dueDate     DateTime  @map("due_date") @db.Date
+  completedAt DateTime? @map("completed_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, projectId])
+  @@map("deadlines")
+}
+
+model ProjectDocument {
+  id           String           @id @default(uuid()) @db.Uuid
+  companyId    String           @map("company_id") @db.Uuid
+  projectId    String           @map("project_id") @db.Uuid
+  category     DocumentCategory @default(OTHER)
+  storagePath  String           @map("storage_path")
+  filename     String
+  sizeBytes    Int              @map("size_bytes")
+  mimeType     String           @map("mime_type")
+  uploadedById String           @map("uploaded_by_id") @db.Uuid
+  createdAt    DateTime         @default(now()) @map("created_at")
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, projectId])
+  @@map("project_documents")
+}
+
+model Note {
+  id         String   @id @default(uuid()) @db.Uuid
+  companyId  String   @map("company_id") @db.Uuid
+  projectId  String   @map("project_id") @db.Uuid
+  body       String
+  authorId   String   @map("author_id") @db.Uuid
+  /// Client-generated id for offline idempotency (see lib/sync).
+  clientUuid String   @unique @map("client_uuid")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, projectId])
+  @@map("notes")
+}
+
+/// Per-user project pin/favorite.
+model ProjectFavorite {
+  userId    String   @map("user_id") @db.Uuid
+  projectId String   @map("project_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@id([userId, projectId])
+  @@map("project_favorites")
+}
+
+/// Immutable audit trail. Feeds the dashboard "Recent activity".
+model ActivityLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  companyId  String   @map("company_id") @db.Uuid
+  actorId    String?  @map("actor_id") @db.Uuid
+  action     String
+  entityType String   @map("entity_type")
+  entityId   String   @map("entity_id")
+  summary    String
+  meta       Json?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  actor   User?   @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, createdAt])
+  @@map("activity_logs")
 }

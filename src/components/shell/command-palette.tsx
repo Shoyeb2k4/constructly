@@ -4,6 +4,7 @@ import * as React from "react";
 import { useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
 import { Moon, Plus, Sun } from "lucide-react";
+import { FolderKanban } from "lucide-react";
 import {
   CommandDialog,
   CommandEmpty,
@@ -14,6 +15,7 @@ import {
   CommandShortcut,
 } from "@/components/ui/command";
 import { NAV_ITEMS } from "@/config/nav";
+import { useProjects } from "@/features/projects/hooks";
 
 /** Open the command palette from anywhere (e.g. the topbar search button). */
 export function openCommandPalette() {
@@ -24,6 +26,7 @@ export function CommandPalette() {
   const [open, setOpen] = React.useState(false);
   const router = useRouter();
   const { resolvedTheme, setTheme } = useTheme();
+  const { data: projects = [] } = useProjects({});
 
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -63,6 +66,21 @@ export function CommandPalette() {
             </CommandItem>
           ))}
         </CommandGroup>
+        {projects.length > 0 && (
+          <CommandGroup heading="Projects">
+            {projects.slice(0, 50).map((p) => (
+              <CommandItem
+                key={p.id}
+                value={`${p.name} ${p.code}`}
+                onSelect={() => go(`/projects/${p.id}`)}
+              >
+                <FolderKanban />
+                <span className="flex-1 truncate">{p.name}</span>
+                <CommandShortcut>{p.code}</CommandShortcut>
+              </CommandItem>
+            ))}
+          </CommandGroup>
+        )}
         <CommandGroup heading="Actions">
           <CommandItem value="New project" onSelect={() => go("/projects")}>
             <Plus />

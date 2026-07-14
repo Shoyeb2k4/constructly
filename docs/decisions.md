@@ -79,6 +79,12 @@ Status legend: `Accepted` · `Superseded` · `Proposed`
 **Decision:** A `CONSTRUCTLY_DEMO` flag (auto-on when Supabase env is absent) serves a seeded demo identity ("Meridian Build Co.", owner Aarav Mehta) with no real auth. All env branching lives in `src/lib/env.ts`; `getCurrentUser()` returns the demo user in this mode. Playwright runs against demo mode.
 **Consequences:** `npm run dev` renders the full app immediately. Real auth activates automatically once Supabase env vars are set.
 
+## ADR-0016 — Projects: repository interface with demo + server implementations
+**Status:** Accepted · 2026-07-14
+**Context:** The UI must be fully interactive in demo mode (no DB) yet production-ready with Prisma + RLS.
+**Decision:** The projects UI depends only on a `ProjectsRepository` interface (`src/features/projects/repository.ts`). Demo mode binds it to a client-side, localStorage-backed implementation; otherwise it binds to Prisma-backed server actions (`server/actions.ts`) enforcing role + assignment on top of RLS. Selection happens in `data.ts`; nothing above it changes. Reads/writes go through TanStack Query with optimistic updates for stage changes and favorites.
+**Consequences:** `npm run dev` and Playwright run with no backend. Server path enforces three-layer auth. `usedPaise` is 0 in the server path until Modules 2–3 derive spend; the demo seeds realistic values.
+
 ## ADR-0015 — Offline sync via a generic reusable engine (implemented)
 **Status:** Accepted · 2026-07-14
 **Decision:** Implemented the ADR-0007 engine as `src/lib/sync/*`: a Dexie outbox, a `SyncableEntity` registry, an idempotent `enqueue`/`flush` engine, and the `POST /api/sync` contract endpoint. Modules 2–3 register entities; no per-feature sync code.

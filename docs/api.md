@@ -34,6 +34,29 @@ Response:
 ```
 Conflict resolution: last-write-wins per field; conflicts returned for UI surfacing.
 
+## Module 1 — Projects (server actions)
+Defined in `src/features/projects/server/actions.ts`. All derive the tenant from the
+session and enforce role + assignment on top of RLS. Demo mode uses an equivalent
+client repository (`demo/demo-repository.ts`) behind the same `ProjectsRepository` interface.
+
+| Action | Who | Notes |
+|---|---|---|
+| `listProjects(filters)` | all (PM: assigned) | search + stage/type/pm/tag/favorites/archived filters |
+| `getProject(id)` | all (PM: assigned) | detail incl. deadlines, documents, notes, activity |
+| `createProject(input)` | Owner | auto `PRJ-####`; logs activity |
+| `updateProject(id, patch)` | Owner, PM(assigned) | |
+| `changeStage(id, stage)` | Owner, PM(assigned) | optimistic on client |
+| `assignManager(id, pmId)` | Owner | |
+| `duplicateProject(id)` / `setArchived(id, bool)` / `removeProject(id)` | Owner | delete is soft |
+| `toggleFavorite(id)` | all | per-user |
+| `addDeadline` / `toggleDeadline` / `removeDeadline` | Owner, PM(assigned) | |
+| `addNote` | Owner, PM(assigned) | offline-capable entity |
+| `addDocument` / `removeDocument` | Owner, PM(assigned) | Supabase Storage path recorded |
+| `listManagers()` | all | active PMs for assignment |
+
+Money crosses this boundary as integer **paise** (`number`); Prisma stores BigInt and
+converts in the mapper.
+
 ## Later modules
-Endpoints for projects, laborers/attendance, vendors/POs, dashboard aggregates, and report exports
+Endpoints for laborers/attendance, vendors/POs, dashboard aggregates, and report exports
 are documented here as each module is built.
