@@ -138,6 +138,34 @@ create policy attendance_all on public.attendance
   for all using (company_id = public.current_company_id() and public.can_access_project(project_id))
   with check (company_id = public.current_company_id() and public.can_access_project(project_id));
 
+-- ── vendors (tenant-scoped) ────────────────────────────────────────────
+alter table public.vendors enable row level security;
+create policy vendors_tenant on public.vendors
+  for all using (company_id = public.current_company_id())
+  with check (company_id = public.current_company_id());
+
+alter table public.vendor_favorites enable row level security;
+create policy vendor_favorites_own on public.vendor_favorites
+  for all using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+-- ── purchase_orders (tenant + PM-scoped via project) ───────────────────
+alter table public.purchase_orders enable row level security;
+create policy purchase_orders_all on public.purchase_orders
+  for all using (company_id = public.current_company_id() and public.can_access_project(project_id))
+  with check (company_id = public.current_company_id() and public.can_access_project(project_id));
+
+-- ── po_line_items (via parent PO access) ───────────────────────────────
+alter table public.po_line_items enable row level security;
+create policy po_line_items_all on public.po_line_items
+  for all using (
+    exists (
+      select 1 from public.purchase_orders po
+      where po.id = purchase_order_id
+        and po.company_id = public.current_company_id()
+        and public.can_access_project(po.project_id)
+    )
+  );
+
 -- ── Template for future domain tables ──────────────────────────────────
 -- alter table public.<table> enable row level security;
 -- create policy <table>_tenant on public.<table>

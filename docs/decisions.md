@@ -79,6 +79,17 @@ Status legend: `Accepted` · `Superseded` · `Proposed`
 **Decision:** A `CONSTRUCTLY_DEMO` flag (auto-on when Supabase env is absent) serves a seeded demo identity ("Meridian Build Co.", owner Aarav Mehta) with no real auth. All env branching lives in `src/lib/env.ts`; `getCurrentUser()` returns the demo user in this mode. Playwright runs against demo mode.
 **Consequences:** `npm run dev` renders the full app immediately. Real auth activates automatically once Supabase env vars are set.
 
+## ADR-0018 — One budget source across the app
+**Status:** Accepted · 2026-07-14
+**Context:** The project Overview, list meters, and dashboard must never disagree on budget numbers.
+**Decision:** A neutral `src/features/budget` feature is the single source: `deriveBudget(budgetPaise, { laborPaise, procurementPaise })` (pure, tested) plus demo (localStorage) and server (Prisma) spend readers. Labor = Σ attendance wages (Module 2); procurement = Σ POs counted per the company's approval setting (`poCountsForBudget`). Projects derive `usedPaise` from it; the Overview budget card and dashboard consume it. Replaces the Module 1 placeholder (`usedPaise = 0`).
+**Consequences:** Consistent numbers everywhere. Adding a spend source later means extending one function.
+
+## ADR-0019 — Approved purchase orders are immutable (Revise workflow)
+**Status:** Accepted · 2026-07-14
+**Decision:** Approval OFF → Draft is final on save. Approval ON → Draft → Submitted → Approved. An APPROVED PO cannot be edited; **Revise** clones it to a new DRAFT linked by `revisedFromId`, preserving an audit trail. Never silently mutate an approved financial document. Line items carry `sortOrder` for future drag-to-reorder.
+**Consequences:** Financial documents are auditable. Budget counts only APPROVED POs when approval is on (else all non-draft).
+
 ## ADR-0017 — Attendance: wage snapshot + local-first offline
 **Status:** Accepted · 2026-07-14
 **Decision:** Each attendance row stores a **snapshot** of the wage rate and computed payable (`wageRatePaise`, `wagePayablePaise`). Editing a laborer's daily wage later never recomputes historical attendance. Attendance is registered with the reusable sync engine (ADR-0007); the demo path writes local-first (data survives offline), and `/api/sync` applies attendance idempotently with last-write-wins on the `(project, laborer, date)` key.

@@ -4,6 +4,17 @@ _Human-readable log of what changed and when. Newest first. Keep entries short; 
 
 ## [Unreleased]
 
+### 2026-07-14 — Module 3: Vendors & Procurement shipped
+The financial backbone — vendor CRM, purchase orders, and real budget derivation.
+- **PO editor (side-sheet):** inline editable line items, live total, and **live budget impact** banner; auto `PO-####`; keyboard-friendly; mobile responsive.
+- **Configurable approval:** OFF → Draft becomes Final on save; ON → Draft → Submitted → Approved. **Approved POs are immutable**; changes go through a **Revise** workflow that clones to a new linked draft (full audit trail via `revisedFromId`).
+- **Owner approvals inbox** with pending count; approve to count toward budget.
+- **Real budget derivation (ADR-0018):** a shared `budget` feature combines labor (Module 2) + counted procurement into one source used by the project Overview (Total Budget, Labor, Procurement, Used, Remaining, Utilization %, soft over-budget warning), the projects list meters, and — next — the dashboard. Replaces the Module 1 placeholder. Verified: Skyline 64% (₹76.7L procurement + labor).
+- **Vendor CRM:** search, status + material filters, favorites, recently-used, lifetime purchases + PO count rollups, and a per-vendor purchase timeline. Model kept lean so payments/ledger/credit/GST reports attach later without redesign.
+- **Schema:** Vendor, VendorFavorite, PurchaseOrder (+ `revisedFromId`), POLineItem (+ `sortOrder` for future drag-reorder) + enums + RLS.
+- **Tests:** budget + procurement calc unit tests + full procurement demo integration (66 total) + Playwright procurement E2E. Build/typecheck/lint clean; verified in-browser.
+- Settings PO-approval toggle now persists (demo) and drives budget counting.
+
 ### 2026-07-14 — Module 2: Labor & Attendance shipped
 The MVP's core differentiator — offline-first attendance built for sub-2-minute entry.
 - **Flagship attendance screen:** pick project (remembers last) + date (defaults today) → **Mark all present** → flag exceptions (P / ½ / A) with large touch targets, OT steppers, **Copy yesterday**, Add-workers picker, desktop keyboard shortcuts (P/H/A + arrows), live sticky totals, and a clear sync chip. Verified: mark-all → 8 present, ₹6,400.

@@ -74,6 +74,17 @@ applies `attendance` mutations idempotently.
 | `crossProjectPresence` | all | soft double-booking warning |
 | `laborCostByProject(range)` / `laborCostByContractor(range)` | all | reporting foundation |
 
+## Module 3 — Vendors & Procurement (server actions)
+`src/features/procurement/server/actions.ts` behind `ProcurementRepository` (demo mirror).
+Vendors: `listVendors` / `getVendor` (+ history) / `createVendor` (Owner) / `updateVendor` (Owner) /
+`setVendorStatus` (Owner) / `toggleVendorFavorite` / `listMaterials`.
+POs: `listPurchaseOrders` / `getPurchaseOrder` / `createPurchaseOrder` / `updatePurchaseOrder`
+(DRAFT only) / `submitPurchaseOrder` / `approvePurchaseOrder` (Owner) / `revisePurchaseOrder` /
+`deletePurchaseOrder` (Owner) / `pendingApprovalCount`. PO writes invalidate budget + projects.
+
+## Module 3 — Budget (shared source · ADR-0018)
+`src/features/budget`: `deriveBudget()` (pure) + `projectSpend` / `spendByProject` (demo + server).
+Consumed by the project Overview budget card and projects list; the dashboard uses the same source.
+
 ## Later modules
-Endpoints for vendors/POs, dashboard aggregates, and report exports are documented here
-as each module is built.
+Endpoints for dashboard aggregates and report exports are documented here as each module is built.

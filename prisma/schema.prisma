@@ -64,12 +64,14 @@ model Company {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  users       User[]
-  projects    Project[]
-  activity    ActivityLog[]
-  contractors Contractor[]
-  laborers    Laborer[]
-  attendance  Attendance[]
+  users          User[]
+  projects       Project[]
+  activity       ActivityLog[]
+  contractors    Contractor[]
+  laborers       Laborer[]
+  attendance     Attendance[]
+  vendors        Vendor[]
+  purchaseOrders PurchaseOrder[]
 
   @@map("companies")
 }
@@ -85,12 +87,15 @@ model User {
   createdAt DateTime   @default(now()) @map("created_at")
   updatedAt DateTime   @updatedAt @map("updated_at")
 
-  company            Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  createdProjects    Project[]         @relation("ProjectCreatedBy")
-  managedProjects    Project[]         @relation("ProjectManager")
-  favorites          ProjectFavorite[]
-  activity           ActivityLog[]
-  recordedAttendance Attendance[]
+  company                  Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdProjects          Project[]         @relation("ProjectCreatedBy")
+  managedProjects          Project[]         @relation("ProjectManager")
+  favorites                ProjectFavorite[]
+  activity                 ActivityLog[]
+  recordedAttendance       Attendance[]
+  createdPurchaseOrders    PurchaseOrder[]   @relation("POCreatedBy")
+  approvedPurchaseOrders   PurchaseOrder[]   @relation("POApprovedBy")
+  vendorFavorites          VendorFavorite[]
 
   @@index([companyId])
   @@map("users")
@@ -127,11 +132,12 @@ model Project {
   company   Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
   pm        User?             @relation("ProjectManager", fields: [pmId], references: [id], onDelete: SetNull)
   createdBy User              @relation("ProjectCreatedBy", fields: [createdById], references: [id])
-  deadlines  Deadline[]
-  documents  ProjectDocument[]
-  notes      Note[]
-  favorites  ProjectFavorite[]
-  attendance Attendance[]
+  deadlines      Deadline[]
+  documents      ProjectDocument[]
+  notes          Note[]
+  favorites      ProjectFavorite[]
+  attendance     Attendance[]
+  purchaseOrders PurchaseOrder[]
 
   @@unique([companyId, code])
   @@index([companyId, stage])
@@ -307,4 +313,108 @@ model Attendance {
   @@index([companyId, projectId, date])
   @@index([companyId, laborerId, date])
   @@map("attendance")
+}
+
+enum VendorStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum PurchaseOrderStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+}
+
+/// A material supplier. Lean by design; future payments, ledger, credit
+/// balances, and GST reports attach as NEW tables referencing vendorId —
+/// no redesign of this model required.
+model Vendor {
+  id               String       @id @default(uuid()) @db.Uuid
+  companyId        String       @map("company_id") @db.Uuid
+  businessName     String       @map("business_name")
+  contactPerson    String?      @map("contact_person")
+  phone            String?
+  email            String?
+  gstin            String?
+  address          String?
+  materialsSupplied String[]    @default([]) @map("materials_supplied")
+  paymentTerms     String?      @map("payment_terms")
+  status           VendorStatus @default(ACTIVE)
+  notes            String?
+  createdAt        DateTime     @default(now()) @map("created_at")
+  updatedAt        DateTime     @updatedAt @map("updated_at")
+
+  company        Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  purchaseOrders PurchaseOrder[]
+  favorites      VendorFavorite[]
+
+  @@index([companyId, status])
+  @@map("vendors")
+}
+
+/// Per-user vendor pin/favorite (optional).
+model VendorFavorite {
+  userId    String   @map("user_id") @db.Uuid
+  vendorId  String   @map("vendor_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  vendor Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  @@id([userId, vendorId])
+  @@map("vendor_favorites")
+}
+
+/// A purchase order. Approved POs are immutable — changes go through a
+/// "revise" that clones to a new draft linked via revisedFromId (audit trail).
+model PurchaseOrder {
+  id            String              @id @default(uuid()) @db.Uuid
+  companyId     String              @map("company_id") @db.Uuid
+  vendorId      String              @map("vendor_id") @db.Uuid
+  projectId     String              @map("project_id") @db.Uuid
+  poNumber      String              @map("po_number")
+  status        PurchaseOrderStatus @default(DRAFT)
+  invoiceNumber String?             @map("invoice_number")
+  purchaseDate  DateTime            @map("purchase_date") @db.Date
+  notes         String?
+  /// Denormalized sum of line item amounts (integer paise).
+  totalPaise    BigInt              @default(0) @map("total_paise")
+  createdById   String              @map("created_by_id") @db.Uuid
+  approvedById  String?             @map("approved_by_id") @db.Uuid
+  approvedAt    DateTime?           @map("approved_at")
+  revisedFromId String?             @map("revised_from_id") @db.Uuid
+  createdAt     DateTime            @default(now()) @map("created_at")
+  updatedAt     DateTime            @updatedAt @map("updated_at")
+
+  company     Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  vendor      Vendor         @relation(fields: [vendorId], references: [id])
+  project     Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdBy   User           @relation("POCreatedBy", fields: [createdById], references: [id])
+  approvedBy  User?          @relation("POApprovedBy", fields: [approvedById], references: [id])
+  revisedFrom PurchaseOrder? @relation("PORevision", fields: [revisedFromId], references: [id])
+  revisions   PurchaseOrder[] @relation("PORevision")
+  lineItems   POLineItem[]
+
+  @@unique([companyId, poNumber])
+  @@index([companyId, status])
+  @@index([companyId, projectId])
+  @@index([companyId, vendorId])
+  @@map("purchase_orders")
+}
+
+model POLineItem {
+  id              String  @id @default(uuid()) @db.Uuid
+  purchaseOrderId String  @map("purchase_order_id") @db.Uuid
+  material        String
+  quantity        Decimal @db.Decimal(12, 3)
+  unit            String
+  ratePaise       Int     @map("rate_paise")
+  amountPaise     BigInt  @map("amount_paise")
+  sortOrder       Int     @default(0) @map("sort_order")
+
+  purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+
+  @@index([purchaseOrderId])
+  @@map("po_line_items")
 }

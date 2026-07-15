@@ -111,5 +111,13 @@ USING (company_id = (select company_id from users where id = auth.uid()))
 unique + `client_seq` for offline). Unique `(project_id, laborer_id, date)`; RLS scopes
 attendance via `can_access_project`. Enums: `AttendanceStatus`, `LaborerStatus`, `ContractorStatus`.
 
+## Module 3 — Vendors & Procurement (implemented)
+`Vendor` (lean; future payments/invoices/advances/ledger/GST attach as new tables — no redesign),
+`VendorFavorite` (per-user), `PurchaseOrder` (`status` DRAFT/SUBMITTED/APPROVED, `total_paise` BigInt,
+`revised_from_id` self-relation for the Revise workflow, unique `(company_id, po_number)`), and
+`POLineItem` (`quantity` Decimal, `rate_paise` Int, `amount_paise` BigInt, `sort_order` for future
+drag-reorder). RLS: vendors tenant-scoped; POs + line items PM-scoped via `can_access_project`.
+Budget is derived (labor + counted POs), not stored — see ADR-0018.
+
 ## Deferred (post-MVP, schema-ready)
 Contractor payouts · payroll · inventory · multi-currency · PO receipts/GRN · client portal.

@@ -6,13 +6,18 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import { ThemeToggle } from "@/components/shell/theme-toggle";
+import {
+  getApprovalRequired,
+  setApprovalRequired,
+  subscribeSettings,
+} from "@/features/settings/demo-settings";
 
-export function SettingsPreferences({
-  initialApproval,
-}: {
-  initialApproval: boolean;
-}) {
-  const [approval, setApproval] = React.useState(initialApproval);
+export function SettingsPreferences() {
+  const approval = React.useSyncExternalStore(
+    subscribeSettings,
+    getApprovalRequired,
+    () => true,
+  );
 
   return (
     <Card>
@@ -31,9 +36,9 @@ export function SettingsPreferences({
           <Switch
             checked={approval}
             onCheckedChange={(v) => {
-              setApproval(v);
+              setApprovalRequired(v);
               toast(v ? "Approval required" : "Approval disabled", {
-                description: "Saved to your workspace (persisted in demo only in memory).",
+                description: "Purchase orders " + (v ? "need owner approval." : "are final on save."),
               });
             }}
           />

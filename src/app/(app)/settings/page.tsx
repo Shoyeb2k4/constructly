@@ -48,7 +48,7 @@ export default async function SettingsPage() {
           </CardContent>
         </Card>
 
-        <SettingsPreferences initialApproval />
+        <SettingsPreferences />
       </div>
     </div>
   );

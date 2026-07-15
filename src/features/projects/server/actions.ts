@@ -14,6 +14,7 @@ import type {
   Manager,
 } from "../types";
 import { Prisma } from "@/generated/prisma";
+import { spendByProject, projectSpend } from "@/features/budget/server-actions";
 
 /**
  * Server-side projects API. Every function enforces authorization (role +
@@ -122,7 +123,13 @@ export async function listProjects(
     select: listSelect,
     orderBy: { updatedAt: "desc" },
   });
-  return rows.map((r) => toItem(r, user.id));
+  const spend = await spendByProject();
+  return rows.map((r) => {
+    const item = toItem(r, user.id);
+    const s = spend[r.id];
+    item.usedPaise = s ? s.laborPaise + s.procurementPaise : 0;
+    return item;
+  });
 }
 
 export async function getProject(id: string): Promise<ProjectDetail | null> {
@@ -154,8 +161,10 @@ export async function getProject(id: string): Promise<ProjectDetail | null> {
     include: { actor: { select: { fullName: true } } },
   });
 
+  const spend = await projectSpend(id);
   return {
     ...toItem({ ...p, favorites: p.favorites }, user.id),
+    usedPaise: spend.laborPaise + spend.procurementPaise,
     clientName: p.clientName,
     clientContact: p.clientContact,
     clientPhone: p.clientPhone,

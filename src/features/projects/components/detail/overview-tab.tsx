@@ -8,12 +8,11 @@ import {
   ExternalLink,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { MoneyText } from "@/components/patterns/money-text";
 import { TagChip } from "../tag-chip";
-import { BudgetMeter } from "../budget-meter";
+import { BudgetCard } from "./budget-card";
 import type { ProjectDetail } from "../../types";
 import { TYPE_LABEL } from "../../constants";
-import { formatDate, deadlineCountdown, budgetPct } from "../../format";
+import { formatDate, deadlineCountdown } from "../../format";
 
 function Line({
   icon: Icon,
@@ -36,45 +35,16 @@ function Line({
 }
 
 export function OverviewTab({ project }: { project: ProjectDetail }) {
-  const remaining = project.budgetPaise - project.usedPaise;
-  const pct = budgetPct(project.usedPaise, project.budgetPaise);
   const cd = deadlineCountdown(project.expectedCompletionDate);
 
   return (
     <div className="grid gap-6 lg:grid-cols-3">
       <div className="space-y-6 lg:col-span-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>Budget</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex items-end justify-between">
-              <div>
-                <p className="text-xs text-foreground-subtle">Used</p>
-                <p className="text-2xl font-semibold">
-                  <MoneyText paise={project.usedPaise} compact />
-                </p>
-              </div>
-              <div className="text-right">
-                <p className="text-xs text-foreground-subtle">Budget</p>
-                <p className="text-lg font-medium">
-                  <MoneyText paise={project.budgetPaise} compact />
-                </p>
-              </div>
-            </div>
-            <BudgetMeter usedPaise={project.usedPaise} budgetPaise={project.budgetPaise} />
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-foreground-muted">{pct}% deployed</span>
-              <span className={remaining < 0 ? "text-danger-foreground" : "text-success-foreground"}>
-                {remaining < 0 ? "Over by " : "Remaining "}
-                <MoneyText paise={Math.abs(remaining)} compact />
-              </span>
-            </div>
-            <div className="border-t border-border pt-3">
-              <Line icon={Building2} label="Contract value" value={<MoneyText paise={project.contractValuePaise} compact />} />
-            </div>
-          </CardContent>
-        </Card>
+        <BudgetCard
+          projectId={project.id}
+          budgetPaise={project.budgetPaise}
+          contractValuePaise={project.contractValuePaise}
+        />
 
         <Card>
           <CardHeader>

@@ -9,6 +9,7 @@ import type {
 } from "../types";
 import { STAGE_LABEL } from "../constants";
 import { demoSeed, DEMO_MANAGERS } from "./seed";
+import { demoProjectSpend } from "@/features/budget/spend";
 
 const KEY = "constructly.demo.projects.v1";
 const ACTOR = "Aarav Mehta";
@@ -49,6 +50,7 @@ function nextCode(rows: ProjectDetail[]): string {
 }
 
 function toItem(p: ProjectDetail): ProjectListItem {
+  const spend = demoProjectSpend(p.id);
   return {
     id: p.id,
     code: p.code,
@@ -57,7 +59,7 @@ function toItem(p: ProjectDetail): ProjectListItem {
     stage: p.stage,
     budgetPaise: p.budgetPaise,
     contractValuePaise: p.contractValuePaise,
-    usedPaise: p.usedPaise,
+    usedPaise: spend.laborPaise + spend.procurementPaise,
     startDate: p.startDate,
     expectedCompletionDate: p.expectedCompletionDate,
     pm: p.pm,
@@ -116,7 +118,10 @@ export const demoRepository: ProjectsRepository = {
   },
 
   async get(id) {
-    return load().find((p) => p.id === id) ?? null;
+    const p = load().find((x) => x.id === id);
+    if (!p) return null;
+    const spend = demoProjectSpend(id);
+    return { ...p, usedPaise: spend.laborPaise + spend.procurementPaise };
   },
 
   async create(input: CreateProjectInput) {
