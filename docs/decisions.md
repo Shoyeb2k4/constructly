@@ -79,6 +79,12 @@ Status legend: `Accepted` · `Superseded` · `Proposed`
 **Decision:** A `CONSTRUCTLY_DEMO` flag (auto-on when Supabase env is absent) serves a seeded demo identity ("Meridian Build Co.", owner Aarav Mehta) with no real auth. All env branching lives in `src/lib/env.ts`; `getCurrentUser()` returns the demo user in this mode. Playwright runs against demo mode.
 **Consequences:** `npm run dev` renders the full app immediately. Real auth activates automatically once Supabase env vars are set.
 
+## ADR-0020 — Dashboard: one pure assembler, two gatherers
+**Status:** Accepted · 2026-07-14
+**Context:** The dashboard must show real data from every module with no duplicated business logic, and work in demo + production.
+**Decision:** `src/features/dashboard/assemble.ts` holds a single **pure** `assembleDashboard(raw)` (KPIs, week bucketing, overdue/upcoming/stale detection, budget health, cost split, activity merge). Demo and server each **gather** `RawDashboardData` their own way (localStorage vs Prisma), then call the same assembler. Charts are custom SVG/CSS (no chart lib) for a premium, theme-aware look and small bundle. Widgets are independent components composed by `DashboardView` — new widgets (cash flow, equipment, weather, AI insights) add without redesign. Role-aware: PM scoped to assigned projects.
+**Consequences:** Business logic lives once (tested in isolation). Date math is UTC-based to stay TZ-stable. The gather/assemble split seeds Module 5 report exports.
+
 ## ADR-0018 — One budget source across the app
 **Status:** Accepted · 2026-07-14
 **Context:** The project Overview, list meters, and dashboard must never disagree on budget numbers.

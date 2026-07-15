@@ -1,0 +1,119 @@
+import { describe, it, expect } from "vitest";
+import { assembleDashboard, bucketSpendByWeek, weekStart } from "./assemble";
+import type { RawDashboardData, RawProject } from "./types";
+
+const today = "2026-07-15"; // a Wednesday
+
+function project(over: Partial<RawProject> & Pick<RawProject, "id" | "name">): RawProject {
+  return {
+    code: "PRJ-0001",
+    stage: "CONSTRUCTION",
+    archived: false,
+    budgetPaise: 10_000_000,
+    laborPaise: 2_000_000,
+    procurementPaise: 3_000_000,
+    expectedCompletionDate: "2026-12-31",
+    deadlines: [],
+    lastActivityAt: today + "T00:00:00.000Z",
+    ...over,
+  };
+}
+
+function raw(over: Partial<RawDashboardData> = {}): RawDashboardData {
+  return {
+    projects: [],
+    spendEntries: [],
+    todaysLaborCount: 0,
+    todaysWagesPaise: 0,
+    pendingPOs: [],
+    activity: [],
+    today,
+    ...over,
+  };
+}
+
+describe("weekStart", () => {
+  it("returns the Monday of the week", () => {
+    expect(weekStart("2026-07-15")).toBe("2026-07-13"); // Mon
+    expect(weekStart("2026-07-13")).toBe("2026-07-13");
+  });
+});
+
+describe("bucketSpendByWeek", () => {
+  it("produces 8 weekly buckets ending this week", () => {
+    const b = bucketSpendByWeek([{ date: today, laborPaise: 100, procurementPaise: 200 }], today);
+    expect(b).toHaveLength(8);
+    expect(b[7].weekStart).toBe("2026-07-13");
+    expect(b[7].laborPaise).toBe(100);
+    expect(b[7].procurementPaise).toBe(200);
+  });
+  it("ignores entries outside the window", () => {
+    const b = bucketSpendByWeek([{ date: "2020-01-01", laborPaise: 999, procurementPaise: 0 }], today);
+    expect(b.reduce((s, w) => s + w.laborPaise, 0)).toBe(0);
+  });
+});
+
+describe("assembleDashboard", () => {
+  it("flags an empty company", () => {
+    expect(assembleDashboard(raw()).isEmpty).toBe(true);
+  });
+
+  it("counts active projects (excludes closed + archived)", () => {
+    const snap = assembleDashboard(
+      raw({
+        projects: [
+          project({ id: "1", name: "A" }),
+          project({ id: "2", name: "B", stage: "CLOSED" }),
+          project({ id: "3", name: "C", archived: true }),
+        ],
+      }),
+    );
+    expect(snap.kpis.activeProjects).toBe(1);
+  });
+
+  it("detects overdue projects and over-budget warnings", () => {
+    const snap = assembleDashboard(
+      raw({
+        projects: [
+          project({ id: "1", name: "Late", expectedCompletionDate: "2026-07-01" }),
+          project({ id: "2", name: "Hot", budgetPaise: 4_000_000 }), // used 5M > 4M
+        ],
+      }),
+    );
+    expect(snap.kpis.overdue).toBe(1);
+    expect(snap.attention.overdueProjects[0].name).toBe("Late");
+    expect(snap.attention.budgetWarnings.some((b) => b.name === "Hot")).toBe(true);
+  });
+
+  it("surfaces upcoming deadlines within 14 days", () => {
+    const snap = assembleDashboard(
+      raw({
+        projects: [
+          project({
+            id: "1",
+            name: "A",
+            deadlines: [
+              { id: "d1", title: "Soon", dueDate: "2026-07-20", completedAt: null },
+              { id: "d2", title: "Far", dueDate: "2026-09-01", completedAt: null },
+              { id: "d3", title: "Done", dueDate: "2026-07-18", completedAt: today },
+            ],
+          }),
+        ],
+      }),
+    );
+    expect(snap.attention.upcomingDeadlines.map((d) => d.title)).toEqual(["Soon"]);
+  });
+
+  it("flags stale projects with no recent activity", () => {
+    const snap = assembleDashboard(
+      raw({ projects: [project({ id: "1", name: "Quiet", lastActivityAt: "2026-06-01T00:00:00Z" })] }),
+    );
+    expect(snap.attention.staleProjects[0].name).toBe("Quiet");
+  });
+
+  it("sums budget and computes cost split from active projects", () => {
+    const snap = assembleDashboard(raw({ projects: [project({ id: "1", name: "A" })] }));
+    expect(snap.kpis.budgetUsedPaise).toBe(5_000_000);
+    expect(snap.costSplit).toEqual({ laborPaise: 2_000_000, procurementPaise: 3_000_000 });
+  });
+});

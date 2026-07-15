@@ -45,6 +45,7 @@ Performance, a11y audit, full empty/loading/error pass, seed/demo data, security
 | 0 Foundation | ✅ Shipped 2026-07-14 — tagged v0.1.0-foundation |
 | 1 Project Management | ✅ Shipped 2026-07-14 — tagged v0.2.0-projects |
 | 2 Labor & Attendance | ✅ Shipped 2026-07-14 — tagged v0.3.0-labor |
-| 3 Vendors & Procurement | ✅ Shipped 2026-07-14 — vendors, POs, approval/revise, real budget, 66 tests |
-| 4 Executive Dashboard | Next — spec pending approval |
-| 5–6 | Planned |
+| 3 Vendors & Procurement | ✅ Shipped 2026-07-14 — tagged v0.4.0-procurement |
+| 4 Executive Dashboard | ✅ Shipped 2026-07-14 — real KPIs, charts, attention, activity, 75 tests |
+| 5 Reports & Analytics | Next — spec pending approval |
+| 6 Hardening | Planned |

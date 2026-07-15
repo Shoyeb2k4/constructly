@@ -86,5 +86,11 @@ POs: `listPurchaseOrders` / `getPurchaseOrder` / `createPurchaseOrder` / `update
 `src/features/budget`: `deriveBudget()` (pure) + `projectSpend` / `spendByProject` (demo + server).
 Consumed by the project Overview budget card and projects list; the dashboard uses the same source.
 
+## Module 4 — Dashboard (aggregation)
+`src/features/dashboard`: `getDashboard({ userId, isOwner })` = `assembleDashboard(raw)` where `raw`
+comes from `gatherDemoDashboard` (localStorage) or `gatherServerDashboard` (Prisma, one batched
+`Promise.all`). Pure `assembleDashboard` is the single business-logic source (ADR-0020). Role-aware;
+cached via TanStack Query with background refetch.
+
 ## Later modules
-Endpoints for dashboard aggregates and report exports are documented here as each module is built.
+Report export endpoints (PDF/Excel) are documented here as Module 5 is built.

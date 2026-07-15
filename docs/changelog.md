@@ -4,6 +4,19 @@ _Human-readable log of what changed and when. Newest first. Keep entries short; 
 
 ## [Unreleased]
 
+### 2026-07-14 — Module 4: Executive Dashboard shipped
+The centerpiece — a real, aggregated overview understandable in 10 seconds.
+- **Single pure `assembleDashboard()`** consumed by both demo (localStorage) and server (Prisma) gatherers → zero duplicated business logic. One cached fetch, background-refreshed, role-aware (PM scoped to assigned projects).
+- **Actionable KPIs (drill-down):** Active projects, Upcoming deadlines, Overdue, Today's labor, Budget used, Pending approvals — each links to its module.
+- **Custom SVG/CSS charts** (no chart lib, theme-aware): weekly **Spend trend** (stacked labor+procurement), **Cost split** donut, **Budget utilization** bars. Widget architecture composes independent components — new widgets add without redesign.
+- **Budget health** from the shared source (ADR-0018): total/used/remaining/utilization + per-project bars with over-budget flags.
+- **Attention center** (the owner's daily action list): pending approvals, overdue projects, budget warnings, upcoming deadlines, stale projects — prioritized, deep-linked.
+- **Unified activity feed** merged from projects, attendance, and purchase orders, sorted chronologically, each deep-linking to its record.
+- **Onboarding dashboard** for the empty-company state; mobile-first responsive layout.
+- Real budget now also flows into the projects list meters. Verified: Skyline 64%, company 8% of ₹9.5Cr, ₹76.8L procurement.
+- **Tests:** pure aggregation unit tests (week bucketing, overdue/upcoming/stale/budget detection — 75 total) + Playwright dashboard E2E. Build/typecheck/lint clean; verified in-browser.
+- **Fix:** week bucketing now UTC-based (was TZ-shifting dates in IST).
+
 ### 2026-07-14 — Module 3: Vendors & Procurement shipped
 The financial backbone — vendor CRM, purchase orders, and real budget derivation.
 - **PO editor (side-sheet):** inline editable line items, live total, and **live budget impact** banner; auto `PO-####`; keyboard-friendly; mobile responsive.

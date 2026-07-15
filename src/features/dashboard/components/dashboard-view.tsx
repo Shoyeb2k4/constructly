@@ -1,0 +1,113 @@
+"use client";
+
+import {
+  FolderKanban,
+  CalendarClock,
+  AlertTriangle,
+  HardHat,
+  Wallet,
+  Inbox,
+} from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
+import { StatGridSkeleton } from "@/components/patterns/loading-state";
+import { MoneyText } from "@/components/patterns/money-text";
+import { formatPaiseCompact } from "@/lib/money";
+import { useDashboard } from "../hooks";
+import { KpiCard } from "./kpi-card";
+import { SpendTrendChart } from "./charts/spend-trend-chart";
+import { CostSplitDonut } from "./charts/cost-split-donut";
+import { BudgetHealthCard } from "./budget-health-card";
+import { AttentionCenter } from "./attention-center";
+import { ActivityFeed } from "./activity-feed";
+import { QuickActions } from "./quick-actions";
+import { OnboardingDashboard } from "./onboarding-dashboard";
+
+export function DashboardView({
+  userId,
+  isOwner,
+  greeting,
+  firstName,
+}: {
+  userId: string;
+  isOwner: boolean;
+  greeting: string;
+  firstName: string;
+}) {
+  const { data, isLoading } = useDashboard(userId, isOwner);
+
+  if (isLoading || !data) {
+    return (
+      <div className="space-y-8">
+        <div className="space-y-2">
+          <Skeleton className="h-8 w-64" />
+          <Skeleton className="h-4 w-80" />
+        </div>
+        <StatGridSkeleton count={6} />
+        <div className="grid gap-6 lg:grid-cols-3">
+          <Skeleton className="h-56 rounded-xl" />
+          <Skeleton className="h-56 rounded-xl" />
+          <Skeleton className="h-56 rounded-xl" />
+        </div>
+      </div>
+    );
+  }
+
+  if (data.isEmpty) return <OnboardingDashboard firstName={firstName} />;
+
+  const k = data.kpis;
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">{greeting}, {firstName}</h1>
+          <p className="text-sm text-foreground-muted">Here&apos;s your company at a glance.</p>
+        </div>
+        <QuickActions />
+      </div>
+
+      {/* KPI row — every card drills down */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+        <KpiCard label="Active projects" value={k.activeProjects} icon={FolderKanban} href="/projects" />
+        <KpiCard label="Upcoming deadlines" value={k.upcomingDeadlines} icon={CalendarClock} href="/projects" tone={k.upcomingDeadlines > 0 ? "warning" : "default"} />
+        <KpiCard label="Overdue" value={k.overdue} icon={AlertTriangle} href="/projects" tone={k.overdue > 0 ? "danger" : "default"} />
+        <KpiCard label="Today's labor" value={k.todaysLaborCount} hint={k.todaysWagesPaise > 0 ? `${formatPaiseCompact(k.todaysWagesPaise)} wages` : "Not recorded yet"} icon={HardHat} href="/labor" />
+        <KpiCard label="Budget used" value={<MoneyText paise={k.budgetUsedPaise} compact />} hint={`of ${formatPaiseCompact(k.budgetTotalPaise)}`} icon={Wallet} href="/projects" />
+        <KpiCard label="Pending approvals" value={k.pendingApprovals} icon={Inbox} href="/procurement" tone={k.pendingApprovals > 0 ? "warning" : "default"} />
+      </div>
+
+      {/* Charts + budget health */}
+      <div className="grid gap-6 lg:grid-cols-3">
+        <Card className="lg:col-span-1">
+          <CardHeader className="flex-row items-baseline justify-between">
+            <CardTitle>Spend trend</CardTitle>
+            <div className="flex items-center gap-3 text-[11px] text-foreground-subtle">
+              <span className="flex items-center gap-1"><span className="size-2 rounded-full bg-primary" />Procurement</span>
+              <span className="flex items-center gap-1"><span className="size-2 rounded-full bg-warning" />Labor</span>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <SpendTrendChart data={data.spendTrend} />
+            <p className="mt-3 text-xs text-foreground-subtle">Weekly, last 8 weeks</p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader><CardTitle>Cost split</CardTitle></CardHeader>
+          <CardContent className="flex items-center justify-center py-2">
+            <CostSplitDonut laborPaise={data.costSplit.laborPaise} procurementPaise={data.costSplit.procurementPaise} />
+          </CardContent>
+        </Card>
+
+        <BudgetHealthCard items={data.budgetHealth} budgetUsedPaise={k.budgetUsedPaise} budgetTotalPaise={k.budgetTotalPaise} />
+      </div>
+
+      {/* Attention + activity */}
+      <div className="grid gap-6 lg:grid-cols-2">
+        <AttentionCenter attention={data.attention} isOwner={isOwner} />
+        <ActivityFeed items={data.recentActivity} />
+      </div>
+    </div>
+  );
+}
