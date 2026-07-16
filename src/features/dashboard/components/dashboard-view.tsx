@@ -20,6 +20,7 @@ import { CostSplitDonut } from "./charts/cost-split-donut";
 import { BudgetHealthCard } from "./budget-health-card";
 import { AttentionCenter } from "./attention-center";
 import { ActivityFeed } from "./activity-feed";
+import { LabourCard } from "./labour-card";
 import { QuickActions } from "./quick-actions";
 import { OnboardingDashboard } from "./onboarding-dashboard";
 
@@ -103,9 +104,10 @@ export function DashboardView({
         <BudgetHealthCard items={data.budgetHealth} budgetUsedPaise={k.budgetUsedPaise} budgetTotalPaise={k.budgetTotalPaise} />
       </div>
 
-      {/* Attention + activity */}
-      <div className="grid gap-6 lg:grid-cols-2">
+      {/* Attention + labour + activity */}
+      <div className="grid gap-6 lg:grid-cols-3">
         <AttentionCenter attention={data.attention} isOwner={isOwner} />
+        <LabourCard labour={data.labour} />
         <ActivityFeed items={data.recentActivity} />
       </div>
     </div>

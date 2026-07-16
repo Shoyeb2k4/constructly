@@ -3,6 +3,7 @@ import { demoApprovalRequired } from "@/features/budget/spend";
 import type {
   DashActivity,
   RawDashboardData,
+  RawLabourEntry,
   RawProject,
   RawSpendEntry,
 } from "../types";
@@ -10,7 +11,8 @@ import type { PurchaseOrderListItem } from "@/features/procurement/types";
 
 const K = {
   projects: "constructly.demo.projects.v1",
-  attendance: "constructly.demo.attendance.v1",
+  labourAttendance: "constructly.demo.labourAttendance.v1",
+  labourCategories: "constructly.demo.labourCategories.v1",
   pos: "constructly.demo.pos.v1",
   vendors: "constructly.demo.vendors.v1",
 };
@@ -31,7 +33,8 @@ interface StoredProject {
   deadlines: { id: string; title: string; dueDate: string; completedAt: string | null }[];
   activity: { id: string; summary: string; actorName?: string; createdAt: string }[];
 }
-interface StoredAtt { projectId: string; laborerId: string; date: string; status: string; wagePayablePaise: number; recordedByName: string }
+interface StoredLabour { projectId: string; date: string; labourCategoryId: string; quantityPresent: number }
+interface StoredCategory { id: string; name: string; color: string; dailyRatePaise: number | null }
 interface StoredPO { id: string; poNumber: string; vendorId: string; projectId: string; status: string; purchaseDate: string; totalPaise: number; invoiceNumber: string | null; createdByName: string; createdAt: string; approvedByName: string | null; approvedAt: string | null }
 interface StoredVendor { id: string; businessName: string }
 
@@ -44,14 +47,19 @@ export function gatherDemoDashboard(opts: { userId: string; isOwner: boolean }):
   const projectIds = new Set(projects.map((p) => p.id));
   const projMeta = new Map(projects.map((p) => [p.id, { name: p.name, code: p.code }]));
 
-  const attendance = read<StoredAtt>(K.attendance).filter((a) => projectIds.has(a.projectId));
+  const categories = read<StoredCategory>(K.labourCategories);
+  const catById = new Map(categories.map((c) => [c.id, c]));
+  const labour = read<StoredLabour>(K.labourAttendance).filter((a) => projectIds.has(a.projectId));
   const pos = read<StoredPO>(K.pos).filter((p) => projectIds.has(p.projectId));
   const vendors = read<StoredVendor>(K.vendors);
   const vendorName = (id: string) => vendors.find((v) => v.id === id)?.businessName ?? "Unknown";
 
-  // Per-project labor + procurement.
+  // Per-project labor (rate × headcount) + procurement.
   const laborByProject = new Map<string, number>();
-  attendance.forEach((a) => laborByProject.set(a.projectId, (laborByProject.get(a.projectId) ?? 0) + a.wagePayablePaise));
+  labour.forEach((a) => {
+    const cost = (catById.get(a.labourCategoryId)?.dailyRatePaise ?? 0) * a.quantityPresent;
+    laborByProject.set(a.projectId, (laborByProject.get(a.projectId) ?? 0) + cost);
+  });
   const procByProject = new Map<string, number>();
   pos
     .filter((p) => poCountsForBudget(p.status as "DRAFT" | "SUBMITTED" | "APPROVED", approval))
@@ -71,17 +79,27 @@ export function gatherDemoDashboard(opts: { userId: string; isOwner: boolean }):
     lastActivityAt: p.activity[0]?.createdAt ?? p.updatedAt ?? null,
   }));
 
-  // Spend entries (weekly-trend source).
+  const labourEntries: RawLabourEntry[] = labour.map((a) => {
+    const c = catById.get(a.labourCategoryId);
+    return {
+      date: a.date,
+      categoryName: c?.name ?? "Unknown",
+      color: c?.color ?? "#64748B",
+      quantityPresent: a.quantityPresent,
+      ratePaise: c?.dailyRatePaise ?? null,
+    };
+  });
+
   const spendEntries: RawSpendEntry[] = [
-    ...attendance.map((a) => ({ date: a.date, laborPaise: a.wagePayablePaise, procurementPaise: 0 })),
+    ...labourEntries.map((e) => ({
+      date: e.date,
+      laborPaise: (e.ratePaise ?? 0) * e.quantityPresent,
+      procurementPaise: 0,
+    })),
     ...pos
       .filter((p) => poCountsForBudget(p.status as "DRAFT" | "SUBMITTED" | "APPROVED", approval))
       .map((p) => ({ date: p.purchaseDate, laborPaise: 0, procurementPaise: p.totalPaise })),
   ];
-
-  const todays = attendance.filter((a) => a.date === today);
-  const todaysLaborCount = todays.filter((a) => a.status === "PRESENT" || a.status === "HALF_DAY").length;
-  const todaysWagesPaise = todays.reduce((s, a) => s + a.wagePayablePaise, 0);
 
   const pendingPOs: PurchaseOrderListItem[] = pos
     .filter((p) => p.status === "SUBMITTED")
@@ -108,15 +126,11 @@ export function gatherDemoDashboard(opts: { userId: string; isOwner: boolean }):
     activity.push({ id: `${p.id}-c`, summary: `created ${p.poNumber} for ${vendorName(p.vendorId)}`, actorName: p.createdByName, createdAt: p.createdAt, href: `/procurement/${p.id}`, kind: "purchase_order" });
     if (p.approvedAt) activity.push({ id: `${p.id}-a`, summary: `approved ${p.poNumber}`, actorName: p.approvedByName, createdAt: p.approvedAt, href: `/procurement/${p.id}`, kind: "purchase_order" });
   });
-  const byDate = new Map<string, { count: number; who: string }>();
-  attendance.forEach((a) => {
-    const e = byDate.get(a.date) ?? { count: 0, who: a.recordedByName };
-    e.count += 1;
-    byDate.set(a.date, e);
-  });
-  [...byDate.entries()].forEach(([date, e]) =>
-    activity.push({ id: `att-${date}`, summary: `recorded attendance for ${e.count} workers`, actorName: e.who, createdAt: `${date}T09:00:00.000Z`, href: "/labor", kind: "attendance" }),
+  const byDate = new Map<string, number>();
+  labour.forEach((a) => byDate.set(a.date, (byDate.get(a.date) ?? 0) + a.quantityPresent));
+  [...byDate.entries()].slice(-6).forEach(([date, total]) =>
+    activity.push({ id: `att-${date}`, summary: `recorded labour attendance — ${total} workers`, actorName: null, createdAt: `${date}T09:00:00.000Z`, href: "/labor", kind: "attendance" }),
   );
 
-  return { projects: rawProjects, spendEntries, todaysLaborCount, todaysWagesPaise, pendingPOs, activity, today };
+  return { projects: rawProjects, spendEntries, labourEntries, pendingPOs, activity, today };
 }

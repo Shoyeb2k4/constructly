@@ -57,22 +57,21 @@ client repository (`demo/demo-repository.ts`) behind the same `ProjectsRepositor
 Money crosses this boundary as integer **paise** (`number`); Prisma stores BigInt and
 converts in the mapper.
 
-## Module 2 — Labor & Attendance (server actions)
-Defined in `src/features/labor/server/actions.ts` behind the `LaborRepository` interface
-(demo impl mirrors it client-side). Attendance is also a registered sync entity; `/api/sync`
-applies `attendance` mutations idempotently.
+## Module 2 — Labour & Attendance (category-based · ADR-0021)
+`src/features/labor/server/actions.ts` behind `LaborRepository` (demo mirror). Attendance is a
+registered sync entity (`labour_attendance`); `/api/sync` upserts idempotently on the
+`(project, date, category)` key (quantity 0 deletes).
 
 | Action | Who | Notes |
 |---|---|---|
-| `listLaborers(filters)` / `createLaborer` / `updateLaborer` | all / all / all | search + trade/contractor/status filters |
-| `setLaborerStatus` / `bulkSetLaborerStatus` | all | bulk (de)activate |
-| `findDuplicateLaborers(name, phone)` | all | powers add-form warnings |
-| `listContractors` / `createContractor` / `setContractorStatus` | all | contractor rollups included |
-| `getSheet(projectId, date)` | Owner, PM(assigned) | crew + per-cell status |
-| `setAttendance(projectId, laborerId, date, status, otHours)` | Owner, PM(assigned) | wage snapshot; null status = unmark |
-| `markAllPresent` / `copyYesterday` / `addToCrew` | Owner, PM(assigned) | fast-entry helpers |
-| `crossProjectPresence` | all | soft double-booking warning |
-| `laborCostByProject(range)` / `laborCostByContractor(range)` | all | reporting foundation |
+| `listCategories` / `createCategory` / `updateCategory` / `deleteCategory` | all | color + optional day rate; delete cascades attendance |
+| `getSheet(projectId, date)` | Owner, PM(assigned) | one row per category with headcount + notes |
+| `setQuantity(projectId, date, categoryId, quantity, notes?)` | Owner, PM(assigned) | upsert; 0 deletes |
+| `copyPreviousDay(projectId, date)` | Owner, PM(assigned) | fast-entry helper |
+| `listAttendance(filters)` | all (PM scoped) | project / date / range filters — feeds exports |
+| `summary(filters)` | all (PM scoped) | man-days by category/project, daily trend, cost estimate |
+
+PDF/Excel export is client-side (`src/features/labor/exports.ts`, jsPDF + SheetJS).
 
 ## Module 3 — Vendors & Procurement (server actions)
 `src/features/procurement/server/actions.ts` behind `ProcurementRepository` (demo mirror).

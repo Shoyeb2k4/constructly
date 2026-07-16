@@ -6,7 +6,8 @@ import { poCountsForBudget, type ProjectSpend } from "./calc";
  * server-actions.ts. Both feed the same deriveBudget().
  */
 
-const ATT = "constructly.demo.attendance.v1";
+const LABOUR_ATT = "constructly.demo.labourAttendance.v1";
+const LABOUR_CATS = "constructly.demo.labourCategories.v1";
 const POS = "constructly.demo.pos.v1";
 const SETTINGS = "constructly.demo.settings.v1";
 
@@ -34,8 +35,16 @@ export function demoSpendByProject(): Map<string, ProjectSpend> {
   const get = (id: string) =>
     map.get(id) ?? map.set(id, { laborPaise: 0, procurementPaise: 0 }).get(id)!;
 
-  for (const a of readStore<{ projectId: string; wagePayablePaise: number }>(ATT)) {
-    get(a.projectId).laborPaise += a.wagePayablePaise;
+  // Labor cost ESTIMATE = category day rate × headcount (categories without a
+  // rate contribute ₹0) — see the category-based labour redesign (ADR-0021).
+  const rates = new Map(
+    readStore<{ id: string; dailyRatePaise: number | null }>(LABOUR_CATS).map((c) => [
+      c.id,
+      c.dailyRatePaise ?? 0,
+    ]),
+  );
+  for (const a of readStore<{ projectId: string; labourCategoryId: string; quantityPresent: number }>(LABOUR_ATT)) {
+    get(a.projectId).laborPaise += (rates.get(a.labourCategoryId) ?? 0) * a.quantityPresent;
   }
   for (const po of readStore<{ projectId: string; status: string; totalPaise: number }>(POS)) {
     if (poCountsForBudget(po.status as "DRAFT" | "SUBMITTED" | "APPROVED", approval)) {

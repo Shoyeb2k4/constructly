@@ -1,29 +1,29 @@
 import { test, expect } from "@playwright/test";
 
-test("attendance: mark all present updates the live totals", async ({ page }) => {
+test("attendance: stepping a category updates the totals", async ({ page }) => {
   await page.goto("/labor");
-  const markAll = page.getByRole("button", { name: "Mark all present" });
-  await expect(markAll).toBeVisible();
-  await markAll.click();
-  // Sticky summary reflects the crew.
-  await expect(page.getByText(/\d+ present/)).toBeVisible();
-  await expect(page.getByText(/Wages payable/)).toBeVisible();
+  // Increment Helper twice via the stepper.
+  await page.getByRole("button", { name: "More Helper" }).click();
+  await page.getByRole("button", { name: "More Helper" }).click();
+  await expect(page.getByText("Total present")).toBeVisible();
+  await expect(page.getByLabel("Helper present")).toHaveValue("2");
 });
 
-test("labor sub-navigation works", async ({ page }) => {
+test("copy yesterday fills the sheet", async ({ page }) => {
   await page.goto("/labor");
-  await page.getByRole("link", { name: "Workers" }).click();
-  await expect(page).toHaveURL(/\/labor\/workers$/);
-  await expect(page.getByText("Ramesh Kumar")).toBeVisible();
+  await page.getByRole("button", { name: "Copy yesterday" }).click();
+  await expect(page.getByText(/Total present/)).toBeVisible();
 });
 
-test("workers can be filtered to inactive", async ({ page }) => {
-  await page.goto("/labor/workers");
-  await expect(page.getByText("Manoj Verma")).toBeVisible();
+test("categories can be managed", async ({ page }) => {
+  await page.goto("/labor/categories");
+  await expect(page.getByText("Mason")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add category" }).first()).toBeVisible();
 });
 
-test("labor summary shows cost rollups", async ({ page }) => {
+test("labour summary shows man-days and trend", async ({ page }) => {
   await page.goto("/labor/summary");
-  await expect(page.getByText("Cost by project")).toBeVisible();
-  await expect(page.getByText("Cost by contractor")).toBeVisible();
+  await expect(page.getByText("Total man-days")).toBeVisible();
+  await expect(page.getByText("Man-days by category")).toBeVisible();
+  await expect(page.getByText("Labour trend")).toBeVisible();
 });

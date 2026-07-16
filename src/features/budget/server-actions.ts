@@ -10,23 +10,43 @@ async function approvalRequired(companyId: string): Promise<boolean> {
   return s?.poApprovalRequired ?? false;
 }
 
+/** Labor cost ESTIMATE = category day rate × headcount (null rate → ₹0). */
+async function labourByProject(companyId: string): Promise<Map<string, number>> {
+  const rows = await prisma.labourAttendance.findMany({
+    where: { companyId },
+    select: {
+      projectId: true,
+      quantityPresent: true,
+      category: { select: { dailyRatePaise: true } },
+    },
+  });
+  const map = new Map<string, number>();
+  for (const r of rows) {
+    const cost = (r.category.dailyRatePaise ?? 0) * r.quantityPresent;
+    map.set(r.projectId, (map.get(r.projectId) ?? 0) + cost);
+  }
+  return map;
+}
+
 export async function projectSpend(projectId: string): Promise<ProjectSpend> {
   const user = await requireUser();
-  const labor = await prisma.attendance.aggregate({
-    where: { companyId: user.company.id, projectId },
-    _sum: { wagePayablePaise: true },
-  });
   const approval = await approvalRequired(user.company.id);
-  const pos = await prisma.purchaseOrder.findMany({
-    where: {
-      companyId: user.company.id,
-      projectId,
-      status: approval ? "APPROVED" : { not: "DRAFT" },
-    },
-    select: { totalPaise: true },
-  });
+  const [labour, pos] = await Promise.all([
+    prisma.labourAttendance.findMany({
+      where: { companyId: user.company.id, projectId },
+      select: { quantityPresent: true, category: { select: { dailyRatePaise: true } } },
+    }),
+    prisma.purchaseOrder.findMany({
+      where: {
+        companyId: user.company.id,
+        projectId,
+        status: approval ? "APPROVED" : { not: "DRAFT" },
+      },
+      select: { totalPaise: true },
+    }),
+  ]);
   return {
-    laborPaise: labor._sum.wagePayablePaise ?? 0,
+    laborPaise: labour.reduce((s, r) => s + (r.category.dailyRatePaise ?? 0) * r.quantityPresent, 0),
     procurementPaise: pos.reduce((s, p) => s + Number(p.totalPaise), 0),
   };
 }
@@ -34,19 +54,17 @@ export async function projectSpend(projectId: string): Promise<ProjectSpend> {
 export async function spendByProject(): Promise<Record<string, ProjectSpend>> {
   const user = await requireUser();
   const approval = await approvalRequired(user.company.id);
-  const labor = await prisma.attendance.groupBy({
-    by: ["projectId"],
-    where: { companyId: user.company.id },
-    _sum: { wagePayablePaise: true },
-  });
-  const pos = await prisma.purchaseOrder.groupBy({
-    by: ["projectId"],
-    where: { companyId: user.company.id, status: approval ? "APPROVED" : { not: "DRAFT" } },
-    _sum: { totalPaise: true },
-  });
+  const [labour, pos] = await Promise.all([
+    labourByProject(user.company.id),
+    prisma.purchaseOrder.groupBy({
+      by: ["projectId"],
+      where: { companyId: user.company.id, status: approval ? "APPROVED" : { not: "DRAFT" } },
+      _sum: { totalPaise: true },
+    }),
+  ]);
   const out: Record<string, ProjectSpend> = {};
   const get = (id: string) => (out[id] ??= { laborPaise: 0, procurementPaise: 0 });
-  labor.forEach((l) => (get(l.projectId).laborPaise = l._sum.wagePayablePaise ?? 0));
+  labour.forEach((paise, projectId) => (get(projectId).laborPaise = paise));
   pos.forEach((p) => (get(p.projectId).procurementPaise = Number(p._sum.totalPaise ?? 0)));
   return out;
 }

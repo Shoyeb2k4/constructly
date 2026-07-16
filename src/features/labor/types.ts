@@ -1,105 +1,77 @@
-/** Labor & attendance domain types (DTOs). Money is integer paise as `number`. */
+/** Category-based labour domain (client change request). An attendance record
+ *  is a headcount per labour category per project per date — no individual
+ *  worker tracking. Money is integer paise. */
 
-export type AttendanceStatus = "PRESENT" | "ABSENT" | "HALF_DAY";
-export type LaborerStatus = "ACTIVE" | "INACTIVE";
-export type ContractorStatus = "ACTIVE" | "INACTIVE";
-export type SyncState = "pending" | "synced" | "conflict";
-
-export interface Contractor {
+export interface LabourCategory {
   id: string;
   name: string;
-  phone: string | null;
-  status: ContractorStatus;
-  /** Derived rollups (present in list responses). */
-  laborerCount: number;
-  laborCostPaise: number;
+  color: string; // hex
+  /** Optional category-level day rate for labor-cost ESTIMATES (rate × headcount). */
+  dailyRatePaise: number | null;
 }
 
-export interface Laborer {
-  id: string;
-  fullName: string;
-  phone: string | null;
-  trade: string;
-  dailyWagePaise: number;
-  contractorId: string | null;
-  contractorName: string | null;
-  status: LaborerStatus;
+export interface CreateCategoryInput {
+  name: string;
+  color: string;
+  dailyRatePaise?: number | null;
+}
+
+export type UpdateCategoryInput = Partial<CreateCategoryInput>;
+
+/** One category row on the daily sheet. quantity 0 = not recorded. */
+export interface SheetRow {
+  categoryId: string;
+  name: string;
+  color: string;
+  dailyRatePaise: number | null;
+  quantity: number;
   notes: string | null;
-}
-
-/** One worker's attendance for a given project + date. `status: null` = unmarked. */
-export interface AttendanceCell {
-  laborerId: string;
-  fullName: string;
-  trade: string;
-  dailyWagePaise: number;
-  contractorId: string | null;
-  contractorName: string | null;
-  status: AttendanceStatus | null;
-  otHours: number;
-  wagePayablePaise: number;
-  syncState: SyncState;
-}
-
-export interface AttendanceSummary {
-  present: number;
-  half: number;
-  absent: number;
-  unmarked: number;
-  crew: number;
-  totalWagePaise: number;
 }
 
 export interface AttendanceSheet {
   projectId: string;
   date: string; // YYYY-MM-DD
-  cells: AttendanceCell[];
-  summary: AttendanceSummary;
+  rows: SheetRow[];
+  totalPresent: number;
+  estimatedCostPaise: number;
 }
 
-export interface LaborFilters {
-  search?: string;
-  trade?: string | "ALL";
-  contractorId?: string | "ALL";
-  status?: LaborerStatus | "ALL";
-}
-
-export interface CreateLaborerInput {
-  fullName: string;
-  phone?: string | null;
-  trade: string;
-  dailyWagePaise: number;
-  contractorId?: string | null;
-  notes?: string | null;
-}
-
-export type UpdateLaborerInput = Partial<CreateLaborerInput> & {
-  status?: LaborerStatus;
-};
-
-export interface CreateContractorInput {
-  name: string;
-  phone?: string | null;
-}
-
-export interface DuplicateWarning {
-  laborerId: string;
-  fullName: string;
-  reason: "name" | "phone";
-}
-
-export interface ProjectLaborCost {
+/** Flat record for range views and exports. */
+export interface AttendanceRecordItem {
+  id: string;
   projectId: string;
   projectName: string;
-  code: string;
-  totalPaise: number;
-  workerCount: number;
-  manDays: number;
+  date: string;
+  categoryId: string;
+  categoryName: string;
+  color: string;
+  quantityPresent: number;
+  notes: string | null;
 }
 
-export interface ContractorLaborCost {
-  contractorId: string | null;
+export interface AttendanceFilters {
+  projectId?: string | "ALL";
+  from?: string;
+  to?: string;
+}
+
+export interface CategoryManDays {
+  categoryId: string;
   name: string;
-  totalPaise: number;
-  workerCount: number;
+  color: string;
+  manDays: number;
+  estimatedCostPaise: number;
+}
+
+export interface LabourTrendPoint {
+  date: string;
+  total: number;
+}
+
+export interface LabourSummary {
+  totalManDays: number;
+  estimatedCostPaise: number;
+  byCategory: CategoryManDays[];
+  byProject: { projectId: string; projectName: string; manDays: number; estimatedCostPaise: number }[];
+  trend: LabourTrendPoint[];
 }

@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db/prisma";
 import { requireUser } from "@/lib/auth/current-user";
 import { spendByProject } from "@/features/budget/server-actions";
 import { poCountsForBudget } from "@/features/budget/calc";
-import type { DashActivity, RawDashboardData, RawSpendEntry } from "../types";
+import type { DashActivity, RawDashboardData, RawLabourEntry, RawSpendEntry } from "../types";
 
 export async function gatherServerDashboard(): Promise<RawDashboardData> {
   const user = await requireUser();
@@ -15,13 +15,13 @@ export async function gatherServerDashboard(): Promise<RawDashboardData> {
 
   const projectWhere = { companyId, deletedAt: null, ...(isOwner ? {} : { pmId: user.id }) };
 
-  const [projects, spend, company, attendance, pos, logs] = await Promise.all([
+  const [projects, spend, company, labour, pos, logs] = await Promise.all([
     prisma.project.findMany({ where: projectWhere, include: { deadlines: true } }),
     spendByProject(),
     prisma.company.findUnique({ where: { id: companyId }, select: { settings: true } }),
-    prisma.attendance.findMany({
+    prisma.labourAttendance.findMany({
       where: { companyId, date: { gte: windowStart }, ...(isOwner ? {} : { project: { pmId: user.id } }) },
-      select: { projectId: true, date: true, status: true, wagePayablePaise: true },
+      include: { category: { select: { name: true, color: true, dailyRatePaise: true } } },
     }),
     prisma.purchaseOrder.findMany({
       where: { companyId, ...(isOwner ? {} : { project: { pmId: user.id } }) },
@@ -58,14 +58,24 @@ export async function gatherServerDashboard(): Promise<RawDashboardData> {
     };
   });
 
+  const labourEntries: RawLabourEntry[] = labour.map((a) => ({
+    date: a.date.toISOString().slice(0, 10),
+    categoryName: a.category.name,
+    color: a.category.color,
+    quantityPresent: a.quantityPresent,
+    ratePaise: a.category.dailyRatePaise,
+  }));
+
   const spendEntries: RawSpendEntry[] = [
-    ...attendance.map((a) => ({ date: a.date.toISOString().slice(0, 10), laborPaise: a.wagePayablePaise, procurementPaise: 0 })),
+    ...labourEntries.map((e) => ({
+      date: e.date,
+      laborPaise: (e.ratePaise ?? 0) * e.quantityPresent,
+      procurementPaise: 0,
+    })),
     ...pos
       .filter((p) => poCountsForBudget(p.status, approval))
       .map((p) => ({ date: p.purchaseDate.toISOString().slice(0, 10), laborPaise: 0, procurementPaise: Number(p.totalPaise) })),
   ];
-
-  const todays = attendance.filter((a) => a.date.toISOString().slice(0, 10) === today);
 
   const pendingPOs = pos
     .filter((p) => p.status === "SUBMITTED")
@@ -90,13 +100,5 @@ export async function gatherServerDashboard(): Promise<RawDashboardData> {
     kind: "project",
   }));
 
-  return {
-    projects: rawProjects,
-    spendEntries,
-    todaysLaborCount: todays.filter((a) => a.status === "PRESENT" || a.status === "HALF_DAY").length,
-    todaysWagesPaise: todays.reduce((s, a) => s + a.wagePayablePaise, 0),
-    pendingPOs,
-    activity,
-    today,
-  };
+  return { projects: rawProjects, spendEntries, labourEntries, pendingPOs, activity, today };
 }

@@ -79,6 +79,12 @@ Status legend: `Accepted` · `Superseded` · `Proposed`
 **Decision:** A `CONSTRUCTLY_DEMO` flag (auto-on when Supabase env is absent) serves a seeded demo identity ("Meridian Build Co.", owner Aarav Mehta) with no real auth. All env branching lives in `src/lib/env.ts`; `getCurrentUser()` returns the demo user in this mode. Playwright runs against demo mode.
 **Consequences:** `npm run dev` renders the full app immediately. Real auth activates automatically once Supabase env vars are set.
 
+## ADR-0021 — Labour redesigned to category-based attendance (supersedes ADR-0017)
+**Status:** Accepted · 2026-07-15 (client change request)
+**Context:** Client feedback: the MVP must not track individual laborers, wages, per-worker attendance, or payroll. Attendance is a **headcount per labour category per project per date**.
+**Decision:** Removed `Laborer` + individual `Attendance` (and their UI). New models: `LabourCategory` (name, color, **optional `dailyRatePaise`**) and `LabourAttendance` (projectId, date, labourCategoryId, quantityPresent, notes; unique per (project, date, category); `clientUuid`/`clientSeq` kept for the sync engine). Labor **cost is now an estimate** = category day rate × headcount (user-approved); categories without a rate contribute ₹0. Budget (ADR-0018), dashboard cost split, and Overview all consume the estimate from the same source. Features: add/edit/delete via quantity steppers (0 deletes), copy previous day, project/date/range filters, PDF + Excel export (jsPDF + SheetJS, pulled forward from Module 5), man-days/trend summaries, dashboard labour widgets. `Contractor` stays in the schema (dormant for future payments) but leaves the Labor UI.
+**Consequences:** Sub-1-minute entry (a handful of steppers). No payroll surface. Repository pattern, offline sync entity (`labour_attendance`), permissions, and design system all reused. ADR-0017's wage snapshot is superseded — historical correctness now derives from headcounts × current category rate (estimates, not payables).
+
 ## ADR-0020 — Dashboard: one pure assembler, two gatherers
 **Status:** Accepted · 2026-07-14
 **Context:** The dashboard must show real data from every module with no duplicated business logic, and work in demo + production.

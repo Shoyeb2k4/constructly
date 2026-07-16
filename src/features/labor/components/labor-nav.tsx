@@ -2,13 +2,12 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { CalendarCheck, Users, Truck, BarChart3 } from "lucide-react";
+import { CalendarCheck, Tags, BarChart3 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const ITEMS = [
   { label: "Attendance", href: "/labor", icon: CalendarCheck, exact: true },
-  { label: "Workers", href: "/labor/workers", icon: Users },
-  { label: "Contractors", href: "/labor/contractors", icon: Truck },
+  { label: "Categories", href: "/labor/categories", icon: Tags },
   { label: "Summary", href: "/labor/summary", icon: BarChart3 },
 ];
 
@@ -17,9 +16,7 @@ export function LaborNav() {
   return (
     <div className="flex items-center gap-1 overflow-x-auto border-b border-border pb-px">
       {ITEMS.map((item) => {
-        const active = item.exact
-          ? pathname === item.href
-          : pathname.startsWith(item.href);
+        const active = item.exact ? pathname === item.href : pathname.startsWith(item.href);
         const Icon = item.icon;
         return (
           <Link

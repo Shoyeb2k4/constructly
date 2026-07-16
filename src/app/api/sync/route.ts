@@ -24,11 +24,10 @@ const mutationSchema = z.object({
 });
 const bodySchema = z.object({ mutations: z.array(mutationSchema) });
 
-async function applyAttendance(clientUuid: string, payload: unknown, user: SessionUser) {
+async function applyLabourAttendance(clientUuid: string, payload: unknown, user: SessionUser) {
   const { prisma } = await import("@/lib/db/prisma");
-  const { attendanceMutationSchema } = await import("@/features/labor/schema");
-  const { computeWage } = await import("@/features/labor/wage");
-  const p = attendanceMutationSchema.parse(payload);
+  const { labourAttendanceMutationSchema } = await import("@/features/labor/schema");
+  const p = labourAttendanceMutationSchema.parse(payload);
 
   // Tenant + project-access guard (RLS is the backstop).
   const project = await prisma.project.findFirst({
@@ -41,38 +40,34 @@ async function applyAttendance(clientUuid: string, payload: unknown, user: Sessi
   });
   if (!project) throw new Error("FORBIDDEN");
 
-  if (p.status == null) {
-    await prisma.attendance.deleteMany({
-      where: { projectId: p.projectId, laborerId: p.laborerId, date: new Date(p.date), companyId: user.company.id },
-    });
+  const key = {
+    projectId: p.projectId,
+    date: new Date(p.date),
+    labourCategoryId: p.labourCategoryId,
+  };
+  if (p.quantityPresent <= 0) {
+    await prisma.labourAttendance.deleteMany({ where: { ...key, companyId: user.company.id } });
     return;
   }
-  const laborer = await prisma.laborer.findFirstOrThrow({
-    where: { id: p.laborerId, companyId: user.company.id },
-    select: { dailyWagePaise: true },
-  });
-  const { wageRatePaise, wagePayablePaise } = computeWage(laborer.dailyWagePaise, p.status, p.otHours);
-  await prisma.attendance.upsert({
-    where: { projectId_laborerId_date: { projectId: p.projectId, laborerId: p.laborerId, date: new Date(p.date) } },
+  await prisma.labourAttendance.upsert({
+    where: { projectId_date_labourCategoryId: key },
     create: {
       companyId: user.company.id,
-      projectId: p.projectId,
-      laborerId: p.laborerId,
-      date: new Date(p.date),
-      status: p.status,
-      otHours: p.otHours,
-      wageRatePaise,
-      wagePayablePaise,
-      recordedById: user.id,
+      ...key,
+      quantityPresent: p.quantityPresent,
+      notes: p.notes ?? null,
       clientUuid,
       clientSeq: BigInt(Date.now()),
     },
-    update: { status: p.status, otHours: p.otHours, wageRatePaise, wagePayablePaise, recordedById: user.id },
+    update: {
+      quantityPresent: p.quantityPresent,
+      ...(p.notes !== undefined ? { notes: p.notes } : {}),
+    },
   });
 }
 
 const handlers: Record<string, SyncHandler> = {
-  attendance: applyAttendance,
+  labour_attendance: applyLabourAttendance,
 };
 
 export async function POST(req: Request) {

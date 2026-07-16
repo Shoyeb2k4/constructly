@@ -134,20 +134,42 @@ export function assembleDashboard(raw: RawDashboardData): DashboardSnapshot {
     procurementPaise: active.reduce((s, p) => s + p.procurementPaise, 0),
   };
 
+  // Labour widget (category-based): today's headcounts, 30-day man-days, trend.
+  const todays = raw.labourEntries.filter((e) => e.date === today);
+  const byCat = new Map<string, { name: string; color: string; quantity: number }>();
+  todays.forEach((e) => {
+    const c = byCat.get(e.categoryName) ?? { name: e.categoryName, color: e.color, quantity: 0 };
+    c.quantity += e.quantityPresent;
+    byCat.set(e.categoryName, c);
+  });
+  const byDay = new Map<string, number>();
+  raw.labourEntries.forEach((e) => byDay.set(e.date, (byDay.get(e.date) ?? 0) + e.quantityPresent));
+  const labour = {
+    todayByCategory: [...byCat.values()].sort((a, b) => b.quantity - a.quantity),
+    manDays30: raw.labourEntries
+      .filter((e) => daysBetween(today, e.date) <= 30)
+      .reduce((s, e) => s + e.quantityPresent, 0),
+    trend: [...byDay.entries()]
+      .map(([date, total]) => ({ date, total }))
+      .sort((a, b) => a.date.localeCompare(b.date))
+      .slice(-28),
+  };
+
   return {
     isEmpty: projects.length === 0,
     kpis: {
       activeProjects: active.length,
       upcomingDeadlines: upcomingDeadlines.length + overdueProjects.length,
       overdue: overdueProjects.length,
-      todaysLaborCount: raw.todaysLaborCount,
-      todaysWagesPaise: raw.todaysWagesPaise,
+      todaysLaborCount: todays.reduce((s, e) => s + e.quantityPresent, 0),
+      todaysWagesPaise: todays.reduce((s, e) => s + (e.ratePaise ?? 0) * e.quantityPresent, 0),
       budgetUsedPaise,
       budgetTotalPaise,
       pendingApprovals: raw.pendingPOs.length,
     },
     spendTrend: bucketSpendByWeek(raw.spendEntries, today),
     costSplit,
+    labour,
     budgetHealth,
     attention: {
       overdueProjects,

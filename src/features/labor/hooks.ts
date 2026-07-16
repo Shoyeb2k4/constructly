@@ -3,28 +3,18 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { laborApi, laborKeys } from "./data";
-import type { DateRange } from "./repository";
-import { computeWage } from "./wage";
+import { sheetTotals } from "./calc";
 import type {
+  AttendanceFilters,
   AttendanceSheet,
-  AttendanceStatus,
-  CreateContractorInput,
-  CreateLaborerInput,
-  LaborerStatus,
-  LaborFilters,
-  UpdateLaborerInput,
+  CreateCategoryInput,
+  UpdateCategoryInput,
 } from "./types";
 
 /* ── Queries ─────────────────────────────────────────────────────────── */
 
-export function useLaborers(filters: LaborFilters = {}) {
-  return useQuery({ queryKey: laborKeys.laborers(filters), queryFn: () => laborApi.listLaborers(filters) });
-}
-export function useTrades() {
-  return useQuery({ queryKey: laborKeys.trades, queryFn: () => laborApi.listTrades(), staleTime: 5 * 60_000 });
-}
-export function useContractors() {
-  return useQuery({ queryKey: laborKeys.contractors, queryFn: () => laborApi.listContractors() });
+export function useCategories() {
+  return useQuery({ queryKey: laborKeys.categories, queryFn: () => laborApi.listCategories() });
 }
 export function useAttendanceSheet(projectId: string | null, date: string) {
   return useQuery({
@@ -33,58 +23,38 @@ export function useAttendanceSheet(projectId: string | null, date: string) {
     enabled: !!projectId,
   });
 }
-export function useLaborCostByProject(range: DateRange) {
-  return useQuery({ queryKey: laborKeys.costByProject(range), queryFn: () => laborApi.laborCostByProject(range) });
+export function useAttendanceList(filters: AttendanceFilters) {
+  return useQuery({ queryKey: laborKeys.attendance(filters), queryFn: () => laborApi.listAttendance(filters) });
 }
-export function useLaborCostByContractor(range: DateRange) {
-  return useQuery({ queryKey: laborKeys.costByContractor(range), queryFn: () => laborApi.laborCostByContractor(range) });
-}
-
-/* ── Attendance mutations (optimistic — taps feel instant) ───────────── */
-
-function recompute(sheet: AttendanceSheet): AttendanceSheet {
-  const c = sheet.cells;
-  return {
-    ...sheet,
-    summary: {
-      present: c.filter((x) => x.status === "PRESENT").length,
-      half: c.filter((x) => x.status === "HALF_DAY").length,
-      absent: c.filter((x) => x.status === "ABSENT").length,
-      unmarked: c.filter((x) => x.status == null).length,
-      crew: c.length,
-      totalWagePaise: c.reduce((s, x) => s + x.wagePayablePaise, 0),
-    },
-  };
+export function useLabourSummary(filters: AttendanceFilters) {
+  return useQuery({ queryKey: laborKeys.summary(filters), queryFn: () => laborApi.summary(filters) });
 }
 
-export function useSetAttendance(projectId: string, date: string) {
+/* ── Attendance mutations (optimistic — entry feels instant) ─────────── */
+
+function invalidateLabour(qc: ReturnType<typeof useQueryClient>) {
+  qc.invalidateQueries({ queryKey: laborKeys.all });
+  qc.invalidateQueries({ queryKey: ["budget"] });
+  qc.invalidateQueries({ queryKey: ["projects"] });
+  qc.invalidateQueries({ queryKey: ["dashboard"] });
+}
+
+export function useSetQuantity(projectId: string, date: string) {
   const qc = useQueryClient();
   const key = laborKeys.sheet(projectId, date);
   return useMutation({
-    mutationFn: (v: { laborerId: string; status: AttendanceStatus | null; otHours: number }) =>
-      laborApi.setAttendance(projectId, v.laborerId, date, v.status, v.otHours),
+    mutationFn: (v: { categoryId: string; quantity: number; notes?: string | null }) =>
+      laborApi.setQuantity(projectId, date, v.categoryId, v.quantity, v.notes),
     onMutate: async (v) => {
       await qc.cancelQueries({ queryKey: key });
       const prev = qc.getQueryData<AttendanceSheet>(key);
       if (prev) {
-        qc.setQueryData<AttendanceSheet>(
-          key,
-          recompute({
-            ...prev,
-            cells: prev.cells.map((cell) =>
-              cell.laborerId === v.laborerId
-                ? {
-                    ...cell,
-                    status: v.status,
-                    otHours: v.otHours,
-                    wagePayablePaise: computeWage(cell.dailyWagePaise, v.status, v.otHours)
-                      .wagePayablePaise,
-                    syncState: "pending",
-                  }
-                : cell,
-            ),
-          }),
+        const rows = prev.rows.map((r) =>
+          r.categoryId === v.categoryId
+            ? { ...r, quantity: v.quantity, notes: v.notes !== undefined ? (v.notes ?? null) : r.notes }
+            : r,
         );
+        qc.setQueryData<AttendanceSheet>(key, { ...prev, rows, ...sheetTotals(rows) });
       }
       return { prev };
     },
@@ -93,87 +63,48 @@ export function useSetAttendance(projectId: string, date: string) {
       toast.error("Couldn't save — will retry");
     },
     onSuccess: (sheet) => qc.setQueryData(key, sheet),
-    onSettled: () => qc.invalidateQueries({ queryKey: laborKeys.all }),
+    onSettled: () => invalidateLabour(qc),
   });
 }
 
-export function useSheetActions(projectId: string, date: string) {
+export function useCopyPreviousDay(projectId: string, date: string) {
   const qc = useQueryClient();
-  const key = laborKeys.sheet(projectId, date);
-  const write = (sheet: AttendanceSheet) => qc.setQueryData(key, sheet);
-
-  const markAllPresent = useMutation({
-    mutationFn: () => laborApi.markAllPresent(projectId, date),
-    onSuccess: (s) => {
-      write(s);
-      toast.success("Marked all present");
+  return useMutation({
+    mutationFn: () => laborApi.copyPreviousDay(projectId, date),
+    onSuccess: (sheet) => {
+      qc.setQueryData(laborKeys.sheet(projectId, date), sheet);
+      invalidateLabour(qc);
+      toast.success("Copied from the previous working day");
     },
   });
-  const copyYesterday = useMutation({
-    mutationFn: () => laborApi.copyYesterday(projectId, date),
-    onSuccess: (s) => {
-      write(s);
-      toast.success("Copied from last working day");
-    },
-  });
-  const addToCrew = useMutation({
-    mutationFn: (laborerIds: string[]) => laborApi.addToCrew(projectId, laborerIds, date),
-    onSuccess: write,
-  });
-
-  return { markAllPresent, copyYesterday, addToCrew };
 }
 
-/* ── Roster & contractor mutations ───────────────────────────────────── */
+/* ── Category mutations ──────────────────────────────────────────────── */
 
-export function useLaborerMutations() {
+export function useCategoryMutations() {
   const qc = useQueryClient();
-  const invalidate = () => qc.invalidateQueries({ queryKey: laborKeys.all });
-
   const create = useMutation({
-    mutationFn: (input: CreateLaborerInput) => laborApi.createLaborer(input),
-    onSuccess: (l) => {
-      invalidate();
-      toast.success("Worker added", { description: l.fullName });
+    mutationFn: (input: CreateCategoryInput) => laborApi.createCategory(input),
+    onSuccess: (c) => {
+      invalidateLabour(qc);
+      toast.success("Category added", { description: c.name });
     },
+    onError: (e) =>
+      toast.error(e instanceof Error && e.message === "DUPLICATE_NAME" ? "That category already exists" : "Couldn't add the category"),
   });
   const update = useMutation({
-    mutationFn: (v: { id: string; patch: UpdateLaborerInput }) => laborApi.updateLaborer(v.id, v.patch),
+    mutationFn: (v: { id: string; patch: UpdateCategoryInput }) => laborApi.updateCategory(v.id, v.patch),
     onSuccess: () => {
-      invalidate();
+      invalidateLabour(qc);
       toast.success("Saved");
     },
   });
-  const setStatus = useMutation({
-    mutationFn: (v: { id: string; status: LaborerStatus }) => laborApi.setLaborerStatus(v.id, v.status),
-    onSuccess: () => invalidate(),
-  });
-  const bulkStatus = useMutation({
-    mutationFn: (v: { ids: string[]; status: LaborerStatus }) =>
-      laborApi.bulkSetLaborerStatus(v.ids, v.status),
-    onSuccess: (_r, v) => {
-      invalidate();
-      toast.success(`${v.ids.length} worker${v.ids.length > 1 ? "s" : ""} ${v.status === "INACTIVE" ? "deactivated" : "activated"}`);
+  const remove = useMutation({
+    mutationFn: (id: string) => laborApi.deleteCategory(id),
+    onSuccess: () => {
+      invalidateLabour(qc);
+      toast.success("Category deleted");
     },
   });
-
-  return { create, update, setStatus, bulkStatus };
-}
-
-export function useContractorMutations() {
-  const qc = useQueryClient();
-  const invalidate = () => qc.invalidateQueries({ queryKey: laborKeys.all });
-  const create = useMutation({
-    mutationFn: (input: CreateContractorInput) => laborApi.createContractor(input),
-    onSuccess: (c) => {
-      invalidate();
-      toast.success("Contractor added", { description: c.name });
-    },
-  });
-  const setStatus = useMutation({
-    mutationFn: (v: { id: string; status: "ACTIVE" | "INACTIVE" }) =>
-      laborApi.setContractorStatus(v.id, v.status),
-    onSuccess: () => invalidate(),
-  });
-  return { create, setStatus };
+  return { create, update, remove };
 }

@@ -104,12 +104,13 @@ USING (company_id = (select company_id from users where id = auth.uid()))
 -- PROJECT_MANAGER additionally scoped to assigned projects on project-linked tables
 ```
 
-## Module 2 — Labor (implemented)
-`Contractor` (lean; future payments/invoices/advances/ledger attach as new tables — no redesign),
-`Laborer` (trade, `daily_wage_paise` Int, optional `contractor_id`, status), and `Attendance`
-(`status`, `ot_hours`, **`wage_rate_paise` + `wage_payable_paise` snapshots**, `client_uuid`
-unique + `client_seq` for offline). Unique `(project_id, laborer_id, date)`; RLS scopes
-attendance via `can_access_project`. Enums: `AttendanceStatus`, `LaborerStatus`, `ContractorStatus`.
+## Module 2 — Labour (category-based · redesigned per client change request, ADR-0021)
+`LabourCategory` (name, color, **optional `daily_rate_paise`** for cost estimates; unique name per
+company) and `LabourAttendance` (project, `date`, category, `quantity_present`, notes; unique
+`(project_id, date, labour_category_id)`; `client_uuid` unique + `client_seq` for offline sync).
+No individual laborers, wages, or payroll. Labor cost = estimate (rate × headcount), derived —
+never stored. `Contractor` remains (lean, dormant) for future payments/ledger. RLS scopes
+attendance via `can_access_project`; categories are tenant-scoped.
 
 ## Module 3 — Vendors & Procurement (implemented)
 `Vendor` (lean; future payments/invoices/advances/ledger/GST attach as new tables — no redesign),

@@ -4,6 +4,19 @@ _Human-readable log of what changed and when. Newest first. Keep entries short; 
 
 ## [Unreleased]
 
+### 2026-07-15 — Labour redesigned: category-based attendance (client change request)
+Individual labor tracking removed from the MVP; attendance is now a headcount per category.
+- **Removed:** Laborer/Attendance models, workers roster, per-worker rows, wages, contractor-per-laborer, payroll surface. Contractor model stays dormant in the schema.
+- **New schema:** `LabourCategory` (name, color, optional `dailyRatePaise`) + `LabourAttendance` (project, date, category, `quantityPresent`, notes; unique per (project, date, category); sync-ready `clientUuid`/`clientSeq`). RLS updated.
+- **New attendance screen (sub-1-minute):** one stepper row per category (− qty +, direct input, per-row notes), Copy yesterday, project + date selection, live total + estimated cost, **PDF/Excel export** of the daily sheet.
+- **Categories management:** add/edit/delete (cascade confirm), color swatches, optional day rate.
+- **Summary:** total man-days, estimated cost, working days, man-days by category (colored bars), labour trend (daily), by-project rollup, range + project filters, PDF/Excel export.
+- **Labor cost is now an estimate** (user-approved): category day rate × headcount, flowing through the same budget source (ADR-0018) to project Overview, list meters, dashboard cost split, and spend trend.
+- **Dashboard:** Today's-labor KPI now sums headcounts; new **Labour widget** (today by category, 30-day man-days, daily trend sparkline).
+- Sync engine entity swapped to `labour_attendance` (idempotent upsert on the (project, date, category) key).
+- Exports: `xlsx` + `jspdf`/`jspdf-autotable` added (pulled forward from Module 5).
+- **Tests:** 68 passing (new calc + demo-repository + dashboard labour widget suites replace the individual-labor tests). Build/typecheck/lint clean; verified in-browser (steppers, copy-yesterday, persistence, summary, dashboard).
+
 ### 2026-07-14 — Module 4: Executive Dashboard shipped
 The centerpiece — a real, aggregated overview understandable in 10 seconds.
 - **Single pure `assembleDashboard()`** consumed by both demo (localStorage) and server (Prisma) gatherers → zero duplicated business logic. One cached fetch, background-refreshed, role-aware (PM scoped to assigned projects).

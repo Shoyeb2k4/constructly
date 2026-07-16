@@ -1,14 +1,14 @@
 import { registerEntity } from "@/lib/sync/registry";
-import { attendanceMutationSchema } from "./schema";
+import { labourAttendanceMutationSchema } from "./schema";
 
 /**
- * Registers attendance with the reusable offline sync engine (ADR-0007).
- * Importing this module (done by the attendance screen) makes `attendance`
- * a known syncable entity: mutations can be queued in the Dexie outbox and
- * flushed idempotently to /api/sync with last-write-wins resolution.
+ * Registers category-based labour attendance with the reusable offline sync
+ * engine (ADR-0007). Mutations queue in the Dexie outbox and flush
+ * idempotently to /api/sync with last-write-wins on
+ * (project, date, category).
  */
 registerEntity({
-  name: "attendance",
-  schema: attendanceMutationSchema,
+  name: "labour_attendance",
+  schema: labourAttendanceMutationSchema,
   conflict: "last-write-wins",
 });

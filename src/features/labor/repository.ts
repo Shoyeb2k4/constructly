@@ -1,62 +1,38 @@
 import type {
+  AttendanceFilters,
+  AttendanceRecordItem,
   AttendanceSheet,
-  AttendanceStatus,
-  Contractor,
-  ContractorLaborCost,
-  ContractorStatus,
-  CreateContractorInput,
-  CreateLaborerInput,
-  DuplicateWarning,
-  Laborer,
-  LaborerStatus,
-  LaborFilters,
-  ProjectLaborCost,
-  UpdateLaborerInput,
+  CreateCategoryInput,
+  LabourCategory,
+  LabourSummary,
+  UpdateCategoryInput,
 } from "./types";
 
-export interface DateRange {
-  from: string; // YYYY-MM-DD
-  to: string;
-}
-
 /**
- * Labor & attendance data contract. Demo (localStorage) and server
- * (Prisma + sync engine) implementations satisfy it; the UI depends only here.
+ * Category-based labour data contract. Demo (localStorage) and server
+ * (Prisma + RLS) implementations satisfy it; the UI depends only here.
  */
 export interface LaborRepository {
-  // Roster
-  listLaborers(filters?: LaborFilters): Promise<Laborer[]>;
-  createLaborer(input: CreateLaborerInput): Promise<Laborer>;
-  updateLaborer(id: string, patch: UpdateLaborerInput): Promise<Laborer>;
-  setLaborerStatus(id: string, status: LaborerStatus): Promise<Laborer>;
-  bulkSetLaborerStatus(ids: string[], status: LaborerStatus): Promise<void>;
-  findDuplicateLaborers(fullName: string, phone?: string | null): Promise<DuplicateWarning[]>;
-  listTrades(): Promise<string[]>;
+  // Categories
+  listCategories(): Promise<LabourCategory[]>;
+  createCategory(input: CreateCategoryInput): Promise<LabourCategory>;
+  updateCategory(id: string, patch: UpdateCategoryInput): Promise<LabourCategory>;
+  /** Cascades: removes the category's attendance rows too (UI confirms). */
+  deleteCategory(id: string): Promise<void>;
 
-  // Contractors
-  listContractors(): Promise<Contractor[]>;
-  createContractor(input: CreateContractorInput): Promise<Contractor>;
-  setContractorStatus(id: string, status: ContractorStatus): Promise<Contractor>;
-
-  // Attendance
+  // Attendance (one row per project + date + category)
   getSheet(projectId: string, date: string): Promise<AttendanceSheet>;
-  setAttendance(
+  /** Upsert a headcount; quantity 0 deletes the row. */
+  setQuantity(
     projectId: string,
-    laborerId: string,
     date: string,
-    status: AttendanceStatus | null,
-    otHours: number,
+    categoryId: string,
+    quantity: number,
+    notes?: string | null,
   ): Promise<AttendanceSheet>;
-  markAllPresent(projectId: string, date: string): Promise<AttendanceSheet>;
-  copyYesterday(projectId: string, date: string): Promise<AttendanceSheet>;
-  addToCrew(projectId: string, laborerIds: string[], date: string): Promise<AttendanceSheet>;
-  crossProjectPresence(
-    laborerId: string,
-    date: string,
-    excludeProjectId: string,
-  ): Promise<string[]>;
+  copyPreviousDay(projectId: string, date: string): Promise<AttendanceSheet>;
 
-  // Rollups (reporting foundation)
-  laborCostByProject(range: DateRange): Promise<ProjectLaborCost[]>;
-  laborCostByContractor(range: DateRange): Promise<ContractorLaborCost[]>;
+  // Range views, reports, exports
+  listAttendance(filters: AttendanceFilters): Promise<AttendanceRecordItem[]>;
+  summary(filters: AttendanceFilters): Promise<LabourSummary>;
 }

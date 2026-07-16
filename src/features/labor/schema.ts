@@ -1,55 +1,38 @@
 import { z } from "zod";
 import { toPaise } from "@/lib/money";
-import type { CreateLaborerInput } from "./types";
+import type { CreateCategoryInput } from "./types";
 
-const phone = z
-  .string()
-  .trim()
-  .regex(/^(\+91[-\s]?)?[6-9]\d{9}$/, "Enter a valid Indian mobile number")
-  .optional()
-  .or(z.literal(""))
-  .transform((v) => (v ? v : undefined));
-
-export const laborerFormSchema = z.object({
-  fullName: z.string().trim().min(2, "Name is too short").max(80),
-  phone,
-  trade: z.string().trim().min(1, "Pick a trade").max(40),
-  dailyWageRupees: z.coerce.number().min(1, "Enter a daily wage").max(100000),
-  contractorId: z.string().optional().or(z.literal("")),
-  notes: z.string().trim().max(500).optional().or(z.literal("")),
+export const categoryFormSchema = z.object({
+  name: z.string().trim().min(1, "Name is required").max(40),
+  color: z.string().regex(/^#[0-9a-fA-F]{6}$/, "Pick a color"),
+  dailyRateRupees: z.coerce
+    .number()
+    .min(0, "Cannot be negative")
+    .max(100000)
+    .optional()
+    .or(z.literal("").transform(() => undefined)),
 });
 
-export type LaborerFormValues = z.input<typeof laborerFormSchema>;
+export type CategoryFormValues = z.input<typeof categoryFormSchema>;
 
-export function laborerFormToInput(
-  v: z.output<typeof laborerFormSchema>,
-): CreateLaborerInput {
+export function categoryFormToInput(
+  v: z.output<typeof categoryFormSchema>,
+): CreateCategoryInput {
   return {
-    fullName: v.fullName,
-    phone: v.phone ?? null,
-    trade: v.trade,
-    dailyWagePaise: toPaise(v.dailyWageRupees),
-    contractorId: v.contractorId || null,
-    notes: v.notes || null,
+    name: v.name,
+    color: v.color,
+    dailyRatePaise: v.dailyRateRupees != null ? toPaise(v.dailyRateRupees) : null,
   };
 }
 
-export const contractorFormSchema = z.object({
-  name: z.string().trim().min(2, "Name is too short").max(80),
-  phone,
-});
-
-export type ContractorFormValues = z.input<typeof contractorFormSchema>;
-
-/** Attendance mutation payload — validated before entering the sync outbox. */
-export const attendanceMutationSchema = z.object({
+/** Labour attendance mutation payload — validated before entering the sync
+ *  outbox and again on the server (/api/sync). quantity 0 deletes the row. */
+export const labourAttendanceMutationSchema = z.object({
   projectId: z.string().uuid(),
-  laborerId: z.string().uuid(),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  status: z.enum(["PRESENT", "ABSENT", "HALF_DAY"]).nullable(),
-  otHours: z.number().min(0).max(24),
-  wageRatePaise: z.number().int().min(0),
-  wagePayablePaise: z.number().int().min(0),
+  labourCategoryId: z.string().uuid(),
+  quantityPresent: z.number().int().min(0).max(5000),
+  notes: z.string().max(300).nullable().optional(),
 });
 
-export type AttendanceMutation = z.infer<typeof attendanceMutationSchema>;
+export type LabourAttendanceMutation = z.infer<typeof labourAttendanceMutationSchema>;

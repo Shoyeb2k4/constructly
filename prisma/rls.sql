@@ -121,20 +121,20 @@ alter table public.activity_logs enable row level security;
 create policy activity_read on public.activity_logs
   for select using (company_id = public.current_company_id());
 
--- ── contractors & laborers (tenant-scoped) ─────────────────────────────
+-- ── contractors & labour categories (tenant-scoped) ────────────────────
 alter table public.contractors enable row level security;
 create policy contractors_tenant on public.contractors
   for all using (company_id = public.current_company_id())
   with check (company_id = public.current_company_id());
 
-alter table public.laborers enable row level security;
-create policy laborers_tenant on public.laborers
+alter table public.labour_categories enable row level security;
+create policy labour_categories_tenant on public.labour_categories
   for all using (company_id = public.current_company_id())
   with check (company_id = public.current_company_id());
 
--- ── attendance (tenant + PM-scoped via project access) ─────────────────
-alter table public.attendance enable row level security;
-create policy attendance_all on public.attendance
+-- ── labour_attendance (tenant + PM-scoped via project access) ──────────
+alter table public.labour_attendance enable row level security;
+create policy labour_attendance_all on public.labour_attendance
   for all using (company_id = public.current_company_id() and public.can_access_project(project_id))
   with check (company_id = public.current_company_id() and public.can_access_project(project_id));
 

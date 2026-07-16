@@ -6,78 +6,72 @@ const today = new Date().toISOString().slice(0, 10);
 
 beforeEach(() => localStorage.clear());
 
-describe("demoLaborRepository — roster", () => {
-  it("seeds the roster", async () => {
-    expect((await repo.listLaborers()).length).toBe(12);
+describe("labour categories", () => {
+  it("seeds default categories with rates", async () => {
+    const cats = await repo.listCategories();
+    expect(cats.length).toBe(8);
+    expect(cats.find((c) => c.name === "Mason")?.dailyRatePaise).toBe(85000);
   });
-  it("filters by active status", async () => {
-    expect((await repo.listLaborers({ status: "ACTIVE" })).length).toBe(11);
+  it("creates, updates, and deletes a category", async () => {
+    const c = await repo.createCategory({ name: "Scaffolder", color: "#EC4899", dailyRatePaise: 90000 });
+    expect(c.name).toBe("Scaffolder");
+    const updated = await repo.updateCategory(c.id, { dailyRatePaise: 95000 });
+    expect(updated.dailyRatePaise).toBe(95000);
+    await repo.deleteCategory(c.id);
+    expect((await repo.listCategories()).some((x) => x.id === c.id)).toBe(false);
   });
-  it("filters by trade", async () => {
-    const masons = await repo.listLaborers({ trade: "Mason" });
-    expect(masons.length).toBe(2);
-  });
-  it("filters direct labor (no contractor)", async () => {
-    const direct = await repo.listLaborers({ contractorId: "NONE" });
-    expect(direct.every((l) => l.contractorId === null)).toBe(true);
-  });
-  it("warns on duplicate name", async () => {
-    const dupes = await repo.findDuplicateLaborers("Ramesh Kumar");
-    expect(dupes.length).toBe(1);
-    expect(dupes[0].reason).toBe("name");
-  });
-  it("bulk deactivates", async () => {
-    const ids = (await repo.listLaborers({ status: "ACTIVE" })).slice(0, 3).map((l) => l.id);
-    await repo.bulkSetLaborerStatus(ids, "INACTIVE");
-    expect((await repo.listLaborers({ status: "ACTIVE" })).length).toBe(8);
+  it("rejects duplicate names", async () => {
+    await expect(repo.createCategory({ name: "mason", color: "#000000" })).rejects.toThrow("DUPLICATE_NAME");
   });
 });
 
-describe("demoLaborRepository — attendance", () => {
-  it("derives an 8-worker crew for Skyline, unmarked today", async () => {
+describe("labour attendance", () => {
+  it("returns a sheet with one row per category (today unrecorded)", async () => {
     const sheet = await repo.getSheet(SKY, today);
-    expect(sheet.summary.crew).toBe(8);
-    expect(sheet.summary.unmarked).toBe(8);
+    expect(sheet.rows.length).toBe(8);
+    expect(sheet.totalPresent).toBe(0);
   });
 
-  it("marks all present with correct total wages", async () => {
-    const sheet = await repo.markAllPresent(SKY, today);
-    expect(sheet.summary.present).toBe(8);
-    // 850+550+1100+900+800+950+550+700 = ₹6400
-    expect(sheet.summary.totalWagePaise).toBe(640000);
+  it("sets headcounts and computes totals + estimated cost", async () => {
+    const cats = await repo.listCategories();
+    const helper = cats.find((c) => c.name === "Helper")!;
+    const mason = cats.find((c) => c.name === "Mason")!;
+    await repo.setQuantity(SKY, today, helper.id, 12);
+    const sheet = await repo.setQuantity(SKY, today, mason.id, 8);
+    expect(sheet.totalPresent).toBe(20);
+    expect(sheet.estimatedCostPaise).toBe(12 * 55000 + 8 * 85000);
   });
 
-  it("updates a single worker and recomputes the total", async () => {
-    await repo.markAllPresent(SKY, today);
-    const sheet = await repo.getSheet(SKY, today);
-    const first = sheet.cells[0];
-    const after = await repo.setAttendance(SKY, first.laborerId, today, "ABSENT", 0);
-    expect(after.summary.absent).toBe(1);
-    expect(after.summary.totalWagePaise).toBe(640000 - first.dailyWagePaise);
+  it("quantity 0 deletes the record", async () => {
+    const helper = (await repo.listCategories()).find((c) => c.name === "Helper")!;
+    await repo.setQuantity(SKY, today, helper.id, 12);
+    const sheet = await repo.setQuantity(SKY, today, helper.id, 0);
+    expect(sheet.totalPresent).toBe(0);
+    const records = await repo.listAttendance({ projectId: SKY, from: today, to: today });
+    expect(records.length).toBe(0);
   });
 
-  it("snapshots the wage rate — later wage changes don't rewrite history", async () => {
-    const sheet = await repo.markAllPresent(SKY, today);
-    const cell = sheet.cells[0];
-    const snapshot = cell.wagePayablePaise;
-    await repo.updateLaborer(cell.laborerId, { dailyWagePaise: cell.dailyWagePaise + 50000 });
-    const reread = await repo.getSheet(SKY, today);
-    const same = reread.cells.find((c) => c.laborerId === cell.laborerId)!;
-    expect(same.wagePayablePaise).toBe(snapshot); // unchanged
+  it("copies the previous working day", async () => {
+    const sheet = await repo.copyPreviousDay(SKY, today);
+    expect(sheet.totalPresent).toBeGreaterThan(0); // seeded history exists
   });
 
-  it("copies yesterday into today", async () => {
-    const sheet = await repo.copyYesterday(SKY, today);
-    expect(sheet.summary.crew).toBe(8);
-    expect(sheet.summary.present + sheet.summary.half + sheet.summary.absent).toBeGreaterThan(0);
+  it("filters attendance by project and date range", async () => {
+    const all = await repo.listAttendance({ projectId: "ALL" });
+    const sky = await repo.listAttendance({ projectId: SKY });
+    expect(sky.length).toBeGreaterThan(0);
+    expect(sky.length).toBeLessThan(all.length); // Orion also seeded
+    expect(sky.every((r) => r.projectId === SKY)).toBe(true);
   });
 });
 
-describe("demoLaborRepository — rollups", () => {
-  it("rolls up cost by contractor including a direct-labor bucket", async () => {
-    await repo.markAllPresent(SKY, today);
-    const groups = await repo.laborCostByContractor({ from: "2000-01-01", to: "2100-01-01" });
-    expect(groups.some((g) => g.contractorId === null)).toBe(true); // Direct labor
-    expect(groups.reduce((s, g) => s + g.totalPaise, 0)).toBeGreaterThan(0);
+describe("labour summary", () => {
+  it("computes man-days by category, project, and a daily trend", async () => {
+    const s = await repo.summary({ projectId: "ALL" });
+    expect(s.totalManDays).toBeGreaterThan(0);
+    expect(s.byCategory.length).toBeGreaterThan(0);
+    expect(s.byProject.length).toBe(2); // Skyline + Orion seeded
+    expect(s.trend.length).toBeGreaterThan(5);
+    expect(s.estimatedCostPaise).toBeGreaterThan(0);
   });
 });

@@ -1,111 +1,83 @@
-import type { AttendanceStatus, ContractorStatus, LaborerStatus } from "../types";
-import { computeWage } from "../wage";
 import { toPaise } from "@/lib/money";
+import { DEFAULT_CATEGORIES } from "../constants";
 
-export interface ContractorRecord {
+export interface CategoryRecord {
   id: string;
   name: string;
-  phone: string | null;
-  status: ContractorStatus;
+  color: string;
+  dailyRatePaise: number | null;
 }
 
-export interface LaborerRecord {
-  id: string;
-  fullName: string;
-  phone: string | null;
-  trade: string;
-  dailyWagePaise: number;
-  contractorId: string | null;
-  status: LaborerStatus;
-  notes: string | null;
-}
-
-export interface AttendanceRecord {
+export interface LabourAttendanceRecord {
   id: string;
   projectId: string;
-  laborerId: string;
   date: string; // YYYY-MM-DD
-  status: AttendanceStatus;
-  otHours: number;
-  wageRatePaise: number;
-  wagePayablePaise: number;
-  recordedByName: string;
+  labourCategoryId: string;
+  quantityPresent: number;
+  notes: string | null;
   clientUuid: string;
   updatedAt: string;
 }
 
-const C1 = "20000000-0000-0000-0000-0000000000c1";
-const C2 = "20000000-0000-0000-0000-0000000000c2";
 const SKYLINE = "10000000-0000-0000-0000-000000000001";
+const ORION = "10000000-0000-0000-0000-000000000002";
 
-export const DEMO_CONTRACTORS: ContractorRecord[] = [
-  { id: C1, name: "Sharma & Co.", phone: "+919845098001", status: "ACTIVE" },
-  { id: C2, name: "Reliable Labour Contractors", phone: "+919845098002", status: "ACTIVE" },
-];
+export const DEMO_CATEGORIES: CategoryRecord[] = DEFAULT_CATEGORIES.map((c, i) => ({
+  id: `60000000-0000-0000-0000-0000000000${String(i + 1).padStart(2, "0")}`,
+  name: c.name,
+  color: c.color,
+  dailyRatePaise: toPaise(c.dailyRateRupees),
+}));
 
-function lab(
-  n: number,
-  fullName: string,
-  trade: string,
-  wage: number,
-  contractorId: string | null,
-  status: LaborerStatus = "ACTIVE",
-): LaborerRecord {
-  return {
-    id: `30000000-0000-0000-0000-0000000000${String(n).padStart(2, "0")}`,
-    fullName,
-    phone: null,
-    trade,
-    dailyWagePaise: toPaise(wage),
-    contractorId,
-    status,
-    notes: null,
-  };
-}
+const ymd = (offset: number) => {
+  const d = new Date(Date.now() + offset * 86_400_000);
+  return d.toISOString().slice(0, 10);
+};
+const isWeekend = (iso: string) => {
+  const dow = new Date(iso + "T00:00:00Z").getUTCDay();
+  return dow === 0 || dow === 6;
+};
 
-export const DEMO_LABORERS: LaborerRecord[] = [
-  lab(1, "Ramesh Kumar", "Mason", 850, null),
-  lab(2, "Suresh Yadav", "Helper", 550, null),
-  lab(3, "Anil Sharma", "Electrician", 1100, C1),
-  lab(4, "Prakash Patil", "Carpenter", 900, null),
-  lab(5, "Mahesh Singh", "Steel Fixer", 800, C2),
-  lab(6, "Vijay Reddy", "Plumber", 950, C1),
-  lab(7, "Ganesh Rao", "Helper", 550, C2),
-  lab(8, "Dinesh Kumar", "Painter", 700, null),
-  lab(9, "Sanjay Gupta", "Welder", 1000, C1),
-  lab(10, "Rakesh Jha", "Mason", 850, null),
-  lab(11, "Kiran Kumar", "Operator", 1200, C2),
-  lab(12, "Manoj Verma", "Supervisor", 1500, null, "INACTIVE"),
-];
+// Typical crew sizes per category on Skyline (deterministic variance).
+const SKYLINE_BASE = [12, 8, 4, 3, 2, 0, 5, 1]; // matches DEFAULT_CATEGORIES order
+const ORION_BASE = [6, 3, 0, 2, 0, 0, 4, 1];
 
-const ymd = (offset: number) =>
-  new Date(Date.now() + offset * 86_400_000).toISOString().slice(0, 10);
-
-/** Seed a crew for Skyline over the last two days (today left blank to fill). */
-export function demoAttendance(): AttendanceRecord[] {
-  const crew = DEMO_LABORERS.slice(0, 8); // 8-worker crew
-  const records: AttendanceRecord[] = [];
-  for (const offset of [-1, -2]) {
+/** Seed the last ~3 working weeks; today is left blank for the live demo. */
+export function demoLabourAttendance(): LabourAttendanceRecord[] {
+  const records: LabourAttendanceRecord[] = [];
+  for (let offset = -21; offset <= -1; offset++) {
     const date = ymd(offset);
-    crew.forEach((l, i) => {
-      // A couple of exceptions for realism.
-      const status: AttendanceStatus =
-        i === 2 && offset === -1 ? "ABSENT" : i === 6 ? "HALF_DAY" : "PRESENT";
-      const ot = i === 0 && offset === -1 ? 2 : 0;
-      const { wageRatePaise, wagePayablePaise } = computeWage(l.dailyWagePaise, status, ot);
-      records.push({
-        id: `${l.id}-${date}`,
-        projectId: SKYLINE,
-        laborerId: l.id,
-        date,
-        status,
-        otHours: ot,
-        wageRatePaise,
-        wagePayablePaise,
-        recordedByName: "Priya Nair",
-        clientUuid: `seed-${l.id}-${date}`,
-        updatedAt: new Date().toISOString(),
-      });
+    if (isWeekend(date)) continue;
+    DEMO_CATEGORIES.forEach((cat, i) => {
+      const wobble = ((offset * 7 + i * 3) % 5) - 2; // -2..+2, deterministic
+      const skyQty = Math.max(0, SKYLINE_BASE[i] + wobble);
+      if (skyQty > 0) {
+        records.push({
+          id: `sky-${cat.id}-${date}`,
+          projectId: SKYLINE,
+          date,
+          labourCategoryId: cat.id,
+          quantityPresent: skyQty,
+          notes: null,
+          clientUuid: `seed-sky-${cat.id}-${date}`,
+          updatedAt: new Date().toISOString(),
+        });
+      }
+      if (offset >= -10) {
+        const orionQty = Math.max(0, ORION_BASE[i] + (wobble % 2));
+        if (orionQty > 0) {
+          records.push({
+            id: `ori-${cat.id}-${date}`,
+            projectId: ORION,
+            date,
+            labourCategoryId: cat.id,
+            quantityPresent: orionQty,
+            notes: null,
+            clientUuid: `seed-ori-${cat.id}-${date}`,
+            updatedAt: new Date().toISOString(),
+          });
+        }
+      }
     });
   }
   return records;

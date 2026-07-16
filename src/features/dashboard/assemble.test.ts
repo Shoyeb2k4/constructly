@@ -23,8 +23,7 @@ function raw(over: Partial<RawDashboardData> = {}): RawDashboardData {
   return {
     projects: [],
     spendEntries: [],
-    todaysLaborCount: 0,
-    todaysWagesPaise: 0,
+    labourEntries: [],
     pendingPOs: [],
     activity: [],
     today,
@@ -115,5 +114,25 @@ describe("assembleDashboard", () => {
     const snap = assembleDashboard(raw({ projects: [project({ id: "1", name: "A" })] }));
     expect(snap.kpis.budgetUsedPaise).toBe(5_000_000);
     expect(snap.costSplit).toEqual({ laborPaise: 2_000_000, procurementPaise: 3_000_000 });
+  });
+
+  it("builds the labour widget from category entries", () => {
+    const snap = assembleDashboard(
+      raw({
+        labourEntries: [
+          { date: today, categoryName: "Helper", color: "#F59E0B", quantityPresent: 12, ratePaise: 55000 },
+          { date: today, categoryName: "Mason", color: "#3B82F6", quantityPresent: 8, ratePaise: 85000 },
+          { date: "2026-07-14", categoryName: "Helper", color: "#F59E0B", quantityPresent: 10, ratePaise: 55000 },
+        ],
+      }),
+    );
+    expect(snap.kpis.todaysLaborCount).toBe(20);
+    expect(snap.kpis.todaysWagesPaise).toBe(12 * 55000 + 8 * 85000);
+    expect(snap.labour.manDays30).toBe(30);
+    expect(snap.labour.todayByCategory[0]).toEqual({ name: "Helper", color: "#F59E0B", quantity: 12 });
+    expect(snap.labour.trend).toEqual([
+      { date: "2026-07-14", total: 10 },
+      { date: today, total: 20 },
+    ]);
   });
 });

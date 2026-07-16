@@ -1,34 +1,23 @@
-import type { LaborRepository, DateRange } from "../repository";
+import type { LaborRepository } from "../repository";
 import type {
-  AttendanceCell,
+  AttendanceFilters,
+  AttendanceRecordItem,
   AttendanceSheet,
-  AttendanceStatus,
-  Contractor,
-  ContractorLaborCost,
-  ContractorStatus,
-  CreateContractorInput,
-  CreateLaborerInput,
-  DuplicateWarning,
-  Laborer,
-  LaborerStatus,
-  LaborFilters,
-  ProjectLaborCost,
-  UpdateLaborerInput,
+  CreateCategoryInput,
+  LabourCategory,
+  UpdateCategoryInput,
 } from "../types";
-import { computeWage } from "../wage";
+import { sheetTotals, summarize } from "../calc";
 import {
-  DEMO_CONTRACTORS,
-  DEMO_LABORERS,
-  demoAttendance,
-  type AttendanceRecord,
-  type ContractorRecord,
-  type LaborerRecord,
+  DEMO_CATEGORIES,
+  demoLabourAttendance,
+  type CategoryRecord,
+  type LabourAttendanceRecord,
 } from "./seed";
 
 const K = {
-  contractors: "constructly.demo.contractors.v1",
-  laborers: "constructly.demo.laborers.v1",
-  attendance: "constructly.demo.attendance.v1",
+  categories: "constructly.demo.labourCategories.v1",
+  attendance: "constructly.demo.labourAttendance.v1",
   projects: "constructly.demo.projects.v1",
 };
 
@@ -45,12 +34,10 @@ function read<T>(key: string, seed: () => T[]): T[] {
   } catch {
     /* ignore */
   }
-  // Clone so we never hand out (and later mutate) the shared seed constants.
   const seeded = structuredClone(seed());
   write(key, seeded);
   return seeded;
 }
-
 function write<T>(key: string, rows: T[]): void {
   if (typeof window === "undefined") return;
   try {
@@ -60,368 +47,173 @@ function write<T>(key: string, rows: T[]): void {
   }
 }
 
-const loadContractors = () => read<ContractorRecord>(K.contractors, () => DEMO_CONTRACTORS);
-const loadLaborers = () => read<LaborerRecord>(K.laborers, () => DEMO_LABORERS);
-const loadAttendance = () => read<AttendanceRecord>(K.attendance, () => demoAttendance());
+const loadCategories = () => read<CategoryRecord>(K.categories, () => DEMO_CATEGORIES);
+const loadAttendance = () => read<LabourAttendanceRecord>(K.attendance, () => demoLabourAttendance());
 
-function projectMeta(): Map<string, { name: string; code: string }> {
-  const map = new Map<string, { name: string; code: string }>();
-  if (typeof window === "undefined") return map;
+function projectName(id: string): string {
+  if (typeof window === "undefined") return "Unknown";
   try {
-    const rows = JSON.parse(window.localStorage.getItem(K.projects) ?? "[]") as {
-      id: string;
-      name: string;
-      code: string;
-    }[];
-    rows.forEach((p) => map.set(p.id, { name: p.name, code: p.code }));
+    const rows = JSON.parse(window.localStorage.getItem(K.projects) ?? "[]") as { id: string; name: string }[];
+    return rows.find((p) => p.id === id)?.name ?? "Unknown";
   } catch {
-    /* ignore */
+    return "Unknown";
   }
-  return map;
-}
-
-function toLaborer(r: LaborerRecord, contractors: ContractorRecord[]): Laborer {
-  return {
-    ...r,
-    contractorName: r.contractorId
-      ? (contractors.find((c) => c.id === r.contractorId)?.name ?? null)
-      : null,
-  };
 }
 
 function buildSheet(
   projectId: string,
   date: string,
-  laborers: LaborerRecord[],
-  contractors: ContractorRecord[],
-  attendance: AttendanceRecord[],
+  categories: CategoryRecord[],
+  attendance: LabourAttendanceRecord[],
 ): AttendanceSheet {
-  const forProject = attendance.filter((a) => a.projectId === projectId);
-  const crewIds = new Set(forProject.map((a) => a.laborerId));
-  const todayIds = new Set(forProject.filter((a) => a.date === date).map((a) => a.laborerId));
-
-  const crew = laborers
-    .filter((l) => crewIds.has(l.id) && (l.status === "ACTIVE" || todayIds.has(l.id)))
-    .sort((a, b) => a.fullName.localeCompare(b.fullName));
-
-  const cells: AttendanceCell[] = crew.map((l) => {
-    const rec = forProject.find((a) => a.laborerId === l.id && a.date === date);
+  const todays = attendance.filter((a) => a.projectId === projectId && a.date === date);
+  const rows = categories.map((c) => {
+    const rec = todays.find((a) => a.labourCategoryId === c.id);
     return {
-      laborerId: l.id,
-      fullName: l.fullName,
-      trade: l.trade,
-      dailyWagePaise: l.dailyWagePaise,
-      contractorId: l.contractorId,
-      contractorName: l.contractorId
-        ? (contractors.find((c) => c.id === l.contractorId)?.name ?? null)
-        : null,
-      status: rec?.status ?? null,
-      otHours: rec?.otHours ?? 0,
-      wagePayablePaise: rec?.wagePayablePaise ?? 0,
-      syncState: "synced",
+      categoryId: c.id,
+      name: c.name,
+      color: c.color,
+      dailyRatePaise: c.dailyRatePaise,
+      quantity: rec?.quantityPresent ?? 0,
+      notes: rec?.notes ?? null,
     };
   });
-
-  const summary = {
-    present: cells.filter((c) => c.status === "PRESENT").length,
-    half: cells.filter((c) => c.status === "HALF_DAY").length,
-    absent: cells.filter((c) => c.status === "ABSENT").length,
-    unmarked: cells.filter((c) => c.status == null).length,
-    crew: cells.length,
-    totalWagePaise: cells.reduce((s, c) => s + c.wagePayablePaise, 0),
-  };
-
-  return { projectId, date, cells, summary };
+  return { projectId, date, rows, ...sheetTotals(rows) };
 }
 
-function upsert(
-  attendance: AttendanceRecord[],
-  laborers: LaborerRecord[],
-  projectId: string,
-  laborerId: string,
-  date: string,
-  status: AttendanceStatus,
-  otHours: number,
-): AttendanceRecord[] {
-  const laborer = laborers.find((l) => l.id === laborerId);
-  if (!laborer) return attendance;
-  const { wageRatePaise, wagePayablePaise } = computeWage(laborer.dailyWagePaise, status, otHours);
-  const next = attendance.filter(
-    (a) => !(a.projectId === projectId && a.laborerId === laborerId && a.date === date),
-  );
-  next.push({
-    id: uid(),
-    projectId,
-    laborerId,
-    date,
-    status,
-    otHours,
-    wageRatePaise,
-    wagePayablePaise,
-    recordedByName: "Aarav Mehta",
-    clientUuid: uid(),
-    updatedAt: new Date().toISOString(),
+function toItems(records: LabourAttendanceRecord[], categories: CategoryRecord[]): AttendanceRecordItem[] {
+  return records.map((r) => {
+    const c = categories.find((x) => x.id === r.labourCategoryId);
+    return {
+      id: r.id,
+      projectId: r.projectId,
+      projectName: projectName(r.projectId),
+      date: r.date,
+      categoryId: r.labourCategoryId,
+      categoryName: c?.name ?? "Unknown",
+      color: c?.color ?? "#64748B",
+      quantityPresent: r.quantityPresent,
+      notes: r.notes,
+    };
   });
-  return next;
+}
+
+function applyFilters(records: LabourAttendanceRecord[], f: AttendanceFilters): LabourAttendanceRecord[] {
+  let rows = records;
+  if (f.projectId && f.projectId !== "ALL") rows = rows.filter((r) => r.projectId === f.projectId);
+  if (f.from) rows = rows.filter((r) => r.date >= f.from!);
+  if (f.to) rows = rows.filter((r) => r.date <= f.to!);
+  return rows;
 }
 
 export const demoLaborRepository: LaborRepository = {
-  async listLaborers(filters: LaborFilters = {}) {
-    const contractors = loadContractors();
-    let rows = loadLaborers();
-    if (filters.status && filters.status !== "ALL")
-      rows = rows.filter((l) => l.status === filters.status);
-    else if (!filters.status) rows = rows; // default all
-    if (filters.trade && filters.trade !== "ALL")
-      rows = rows.filter((l) => l.trade === filters.trade);
-    if (filters.contractorId && filters.contractorId !== "ALL")
-      rows = rows.filter((l) =>
-        filters.contractorId === "NONE"
-          ? l.contractorId == null
-          : l.contractorId === filters.contractorId,
-      );
-    if (filters.search) {
-      const q = filters.search.toLowerCase();
-      rows = rows.filter(
-        (l) => l.fullName.toLowerCase().includes(q) || l.trade.toLowerCase().includes(q),
-      );
-    }
-    return rows
-      .sort((a, b) => a.fullName.localeCompare(b.fullName))
-      .map((r) => toLaborer(r, contractors));
+  async listCategories() {
+    return loadCategories().map((c) => ({ ...c })) as LabourCategory[];
   },
 
-  async createLaborer(input: CreateLaborerInput) {
-    const rows = loadLaborers();
-    const rec: LaborerRecord = {
+  async createCategory(input: CreateCategoryInput) {
+    const rows = loadCategories();
+    if (rows.some((c) => c.name.trim().toLowerCase() === input.name.trim().toLowerCase())) {
+      throw new Error("DUPLICATE_NAME");
+    }
+    const rec: CategoryRecord = {
       id: uid(),
-      fullName: input.fullName,
-      phone: input.phone ?? null,
-      trade: input.trade,
-      dailyWagePaise: input.dailyWagePaise,
-      contractorId: input.contractorId ?? null,
-      status: "ACTIVE",
-      notes: input.notes ?? null,
+      name: input.name,
+      color: input.color,
+      dailyRatePaise: input.dailyRatePaise ?? null,
     };
     rows.push(rec);
-    write(K.laborers, rows);
-    return toLaborer(rec, loadContractors());
+    write(K.categories, rows);
+    return { ...rec };
   },
 
-  async updateLaborer(id, patch: UpdateLaborerInput) {
-    const rows = loadLaborers();
-    const rec = rows.find((l) => l.id === id);
+  async updateCategory(id, patch: UpdateCategoryInput) {
+    const rows = loadCategories();
+    const rec = rows.find((c) => c.id === id);
     if (!rec) throw new Error("NOT_FOUND");
     Object.assign(rec, {
       ...patch,
-      contractorId: patch.contractorId !== undefined ? patch.contractorId || null : rec.contractorId,
+      dailyRatePaise: patch.dailyRatePaise !== undefined ? patch.dailyRatePaise : rec.dailyRatePaise,
     });
-    write(K.laborers, rows);
-    return toLaborer(rec, loadContractors());
+    write(K.categories, rows);
+    return { ...rec };
   },
 
-  async setLaborerStatus(id, status: LaborerStatus) {
-    return this.updateLaborer(id, { status });
-  },
-
-  async bulkSetLaborerStatus(ids, status) {
-    const rows = loadLaborers();
-    rows.forEach((l) => {
-      if (ids.includes(l.id)) l.status = status;
-    });
-    write(K.laborers, rows);
-  },
-
-  async findDuplicateLaborers(fullName, phone) {
-    const name = fullName.trim().toLowerCase();
-    const rows = loadLaborers();
-    return rows
-      .filter(
-        (l) =>
-          l.fullName.trim().toLowerCase() === name ||
-          (!!phone && !!l.phone && l.phone === phone),
-      )
-      .map<DuplicateWarning>((l) => ({
-        laborerId: l.id,
-        fullName: l.fullName,
-        reason: l.fullName.trim().toLowerCase() === name ? "name" : "phone",
-      }));
-  },
-
-  async listTrades() {
-    return [...new Set(loadLaborers().map((l) => l.trade))].sort();
-  },
-
-  async listContractors() {
-    const contractors = loadContractors();
-    const laborers = loadLaborers();
-    const attendance = loadAttendance();
-    return contractors.map<Contractor>((c) => {
-      const crew = laborers.filter((l) => l.contractorId === c.id);
-      const crewIds = new Set(crew.map((l) => l.id));
-      const cost = attendance
-        .filter((a) => crewIds.has(a.laborerId))
-        .reduce((s, a) => s + a.wagePayablePaise, 0);
-      return {
-        id: c.id,
-        name: c.name,
-        phone: c.phone,
-        status: c.status,
-        laborerCount: crew.length,
-        laborCostPaise: cost,
-      };
-    });
-  },
-
-  async createContractor(input: CreateContractorInput) {
-    const rows = loadContractors();
-    const rec: ContractorRecord = {
-      id: uid(),
-      name: input.name,
-      phone: input.phone ?? null,
-      status: "ACTIVE",
-    };
-    rows.push(rec);
-    write(K.contractors, rows);
-    return { ...rec, laborerCount: 0, laborCostPaise: 0 };
-  },
-
-  async setContractorStatus(id, status: ContractorStatus) {
-    const rows = loadContractors();
-    const rec = rows.find((c) => c.id === id);
-    if (!rec) throw new Error("NOT_FOUND");
-    rec.status = status;
-    write(K.contractors, rows);
-    return { ...rec, laborerCount: 0, laborCostPaise: 0 };
+  async deleteCategory(id) {
+    write(K.categories, loadCategories().filter((c) => c.id !== id));
+    write(K.attendance, loadAttendance().filter((a) => a.labourCategoryId !== id));
   },
 
   async getSheet(projectId, date) {
-    return buildSheet(projectId, date, loadLaborers(), loadContractors(), loadAttendance());
+    return buildSheet(projectId, date, loadCategories(), loadAttendance());
   },
 
-  async setAttendance(projectId, laborerId, date, status, otHours) {
-    const laborers = loadLaborers();
+  async setQuantity(projectId, date, categoryId, quantity, notes) {
+    const categories = loadCategories();
     let attendance = loadAttendance();
-    if (status == null) {
-      attendance = attendance.filter(
-        (a) => !(a.projectId === projectId && a.laborerId === laborerId && a.date === date),
-      );
+    const existing = attendance.find(
+      (a) => a.projectId === projectId && a.date === date && a.labourCategoryId === categoryId,
+    );
+    if (quantity <= 0) {
+      attendance = attendance.filter((a) => a !== existing);
+    } else if (existing) {
+      existing.quantityPresent = quantity;
+      if (notes !== undefined) existing.notes = notes;
+      existing.updatedAt = new Date().toISOString();
     } else {
-      attendance = upsert(attendance, laborers, projectId, laborerId, date, status, otHours);
+      attendance.push({
+        id: uid(),
+        projectId,
+        date,
+        labourCategoryId: categoryId,
+        quantityPresent: quantity,
+        notes: notes ?? null,
+        clientUuid: uid(),
+        updatedAt: new Date().toISOString(),
+      });
     }
     write(K.attendance, attendance);
-    return buildSheet(projectId, date, laborers, loadContractors(), attendance);
+    return buildSheet(projectId, date, categories, attendance);
   },
 
-  async markAllPresent(projectId, date) {
-    const laborers = loadLaborers();
-    let attendance = loadAttendance();
-    const sheet = buildSheet(projectId, date, laborers, loadContractors(), attendance);
-    for (const cell of sheet.cells) {
-      attendance = upsert(attendance, laborers, projectId, cell.laborerId, date, "PRESENT", cell.otHours);
-    }
-    write(K.attendance, attendance);
-    return buildSheet(projectId, date, laborers, loadContractors(), attendance);
-  },
-
-  async copyYesterday(projectId, date) {
-    const laborers = loadLaborers();
+  async copyPreviousDay(projectId, date) {
+    const categories = loadCategories();
     let attendance = loadAttendance();
     const prevDates = attendance
       .filter((a) => a.projectId === projectId && a.date < date)
       .map((a) => a.date)
       .sort();
     const prev = prevDates.at(-1);
-    if (!prev) return buildSheet(projectId, date, laborers, loadContractors(), attendance);
-    const source = attendance.filter((a) => a.projectId === projectId && a.date === prev);
-    for (const rec of source) {
-      attendance = upsert(attendance, laborers, projectId, rec.laborerId, date, rec.status, rec.otHours);
+    if (prev) {
+      const source = attendance.filter((a) => a.projectId === projectId && a.date === prev);
+      for (const rec of source) {
+        attendance = attendance.filter(
+          (a) => !(a.projectId === projectId && a.date === date && a.labourCategoryId === rec.labourCategoryId),
+        );
+        attendance.push({
+          ...rec,
+          id: uid(),
+          date,
+          clientUuid: uid(),
+          updatedAt: new Date().toISOString(),
+        });
+      }
+      write(K.attendance, attendance);
     }
-    write(K.attendance, attendance);
-    return buildSheet(projectId, date, laborers, loadContractors(), attendance);
+    return buildSheet(projectId, date, categories, attendance);
   },
 
-  async addToCrew(projectId, laborerIds, date) {
-    const laborers = loadLaborers();
-    let attendance = loadAttendance();
-    for (const id of laborerIds) {
-      attendance = upsert(attendance, laborers, projectId, id, date, "PRESENT", 0);
-    }
-    write(K.attendance, attendance);
-    return buildSheet(projectId, date, laborers, loadContractors(), attendance);
+  async listAttendance(filters: AttendanceFilters) {
+    const rows = applyFilters(loadAttendance(), filters).sort(
+      (a, b) => b.date.localeCompare(a.date),
+    );
+    return toItems(rows, loadCategories());
   },
 
-  async crossProjectPresence(laborerId, date, excludeProjectId) {
-    const meta = projectMeta();
-    return loadAttendance()
-      .filter(
-        (a) =>
-          a.laborerId === laborerId &&
-          a.date === date &&
-          a.projectId !== excludeProjectId &&
-          (a.status === "PRESENT" || a.status === "HALF_DAY"),
-      )
-      .map((a) => meta.get(a.projectId)?.name ?? "another project");
-  },
-
-  async laborCostByProject(range: DateRange) {
-    const meta = projectMeta();
-    const inRange = loadAttendance().filter((a) => a.date >= range.from && a.date <= range.to);
-    const groups = new Map<string, ProjectLaborCost>();
-    for (const a of inRange) {
-      const m = meta.get(a.projectId);
-      const g = groups.get(a.projectId) ?? {
-        projectId: a.projectId,
-        projectName: m?.name ?? "Unknown",
-        code: m?.code ?? "",
-        totalPaise: 0,
-        workerCount: 0,
-        manDays: 0,
-      };
-      g.totalPaise += a.wagePayablePaise;
-      if (a.status !== "ABSENT") g.manDays += a.status === "HALF_DAY" ? 0.5 : 1;
-      groups.set(a.projectId, g);
-    }
-    // distinct workers per project
-    for (const [pid, g] of groups) {
-      g.workerCount = new Set(
-        inRange.filter((a) => a.projectId === pid).map((a) => a.laborerId),
-      ).size;
-    }
-    return [...groups.values()].sort((a, b) => b.totalPaise - a.totalPaise);
-  },
-
-  async laborCostByContractor(range: DateRange) {
-    const laborers = loadLaborers();
-    const contractors = loadContractors();
-    const inRange = loadAttendance().filter((a) => a.date >= range.from && a.date <= range.to);
-    const groups = new Map<string, ContractorLaborCost>();
-    for (const a of inRange) {
-      const laborer = laborers.find((l) => l.id === a.laborerId);
-      const cid = laborer?.contractorId ?? "DIRECT";
-      const name =
-        cid === "DIRECT"
-          ? "Direct labor"
-          : (contractors.find((c) => c.id === cid)?.name ?? "Unknown");
-      const g = groups.get(cid) ?? {
-        contractorId: cid === "DIRECT" ? null : cid,
-        name,
-        totalPaise: 0,
-        workerCount: 0,
-      };
-      g.totalPaise += a.wagePayablePaise;
-      groups.set(cid, g);
-    }
-    for (const [cid, g] of groups) {
-      g.workerCount = new Set(
-        inRange
-          .filter((a) => {
-            const l = laborers.find((x) => x.id === a.laborerId);
-            return (l?.contractorId ?? "DIRECT") === cid;
-          })
-          .map((a) => a.laborerId),
-      ).size;
-    }
-    return [...groups.values()].sort((a, b) => b.totalPaise - a.totalPaise);
+  async summary(filters: AttendanceFilters) {
+    const categories = loadCategories();
+    const rateOf = (id: string) => categories.find((c) => c.id === id)?.dailyRatePaise ?? null;
+    const items = toItems(applyFilters(loadAttendance(), filters), categories);
+    return summarize(items, rateOf);
   },
 };

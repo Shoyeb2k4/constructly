@@ -34,11 +34,19 @@ export interface DashActivity {
   kind: ActivityKind;
 }
 
+/** One category-attendance record in scope (category-based labour redesign). */
+export interface RawLabourEntry {
+  date: string; // YYYY-MM-DD
+  categoryName: string;
+  color: string;
+  quantityPresent: number;
+  ratePaise: number | null;
+}
+
 export interface RawDashboardData {
   projects: RawProject[];
   spendEntries: RawSpendEntry[];
-  todaysLaborCount: number;
-  todaysWagesPaise: number;
+  labourEntries: RawLabourEntry[];
   pendingPOs: PurchaseOrderListItem[];
   activity: DashActivity[];
   today: string; // YYYY-MM-DD (IST)
@@ -89,11 +97,18 @@ export interface StaleProject {
   daysSinceActivity: number;
 }
 
+export interface LabourWidget {
+  todayByCategory: { name: string; color: string; quantity: number }[];
+  manDays30: number;
+  trend: { date: string; total: number }[];
+}
+
 export interface DashboardSnapshot {
   isEmpty: boolean;
   kpis: DashboardKpis;
   spendTrend: SpendWeek[];
   costSplit: { laborPaise: number; procurementPaise: number };
+  labour: LabourWidget;
   budgetHealth: BudgetHealthItem[];
   attention: {
     overdueProjects: { projectId: string; name: string; daysOverdue: number }[];
