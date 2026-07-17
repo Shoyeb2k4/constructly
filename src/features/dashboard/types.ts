@@ -34,11 +34,12 @@ export interface DashActivity {
   kind: ActivityKind;
 }
 
-/** One category-attendance record in scope. Cost is the stored snapshot
- *  estimate (rate-at-record-time × headcount, ADR-0022). */
+/** One subcategory-attendance record in scope (Category → Subcategory,
+ *  ADR-0023). Cost is the stored snapshot estimate (ADR-0022). */
 export interface RawLabourEntry {
   date: string; // YYYY-MM-DD
   categoryName: string;
+  subcategoryName: string;
   color: string;
   quantityPresent: number;
   estimatedCostPaise: number;
@@ -99,7 +100,13 @@ export interface StaleProject {
 }
 
 export interface LabourWidget {
-  todayByCategory: { name: string; color: string; quantity: number }[];
+  todayByCategory: {
+    name: string;
+    color: string;
+    quantity: number;
+    subcategories: { name: string; quantity: number }[];
+  }[];
+  todayCostPaise: number;
   manDays30: number;
   trend: { date: string; total: number }[];
 }

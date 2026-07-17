@@ -1,10 +1,20 @@
 import { z } from "zod";
 import { toPaise } from "@/lib/money";
-import type { CreateCategoryInput } from "./types";
+import type { CreateSubcategoryInput } from "./types";
 
 export const categoryFormSchema = z.object({
   name: z.string().trim().min(1, "Name is required").max(40),
-  color: z.string().regex(/^#[0-9a-fA-F]{6}$/, "Pick a color"),
+  color: z
+    .string()
+    .regex(/^#[0-9a-fA-F]{6}$/)
+    .optional()
+    .or(z.literal("").transform(() => undefined)),
+});
+export type CategoryFormValues = z.input<typeof categoryFormSchema>;
+
+export const subcategoryFormSchema = z.object({
+  categoryId: z.string().min(1, "Pick a category"),
+  name: z.string().trim().min(1, "Name is required").max(60),
   dailyRateRupees: z.coerce
     .number()
     .min(0, "Cannot be negative")
@@ -12,15 +22,14 @@ export const categoryFormSchema = z.object({
     .optional()
     .or(z.literal("").transform(() => undefined)),
 });
+export type SubcategoryFormValues = z.input<typeof subcategoryFormSchema>;
 
-export type CategoryFormValues = z.input<typeof categoryFormSchema>;
-
-export function categoryFormToInput(
-  v: z.output<typeof categoryFormSchema>,
-): CreateCategoryInput {
+export function subcategoryFormToInput(
+  v: z.output<typeof subcategoryFormSchema>,
+): CreateSubcategoryInput {
   return {
+    categoryId: v.categoryId,
     name: v.name,
-    color: v.color,
     dailyRatePaise: v.dailyRateRupees != null ? toPaise(v.dailyRateRupees) : null,
   };
 }
@@ -30,9 +39,8 @@ export function categoryFormToInput(
 export const labourAttendanceMutationSchema = z.object({
   projectId: z.string().uuid(),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  labourCategoryId: z.string().uuid(),
+  labourSubcategoryId: z.string().uuid(),
   quantityPresent: z.number().int().min(0).max(5000),
   notes: z.string().max(300).nullable().optional(),
 });
-
 export type LabourAttendanceMutation = z.infer<typeof labourAttendanceMutationSchema>;

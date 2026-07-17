@@ -134,18 +134,35 @@ export function assembleDashboard(raw: RawDashboardData): DashboardSnapshot {
     procurementPaise: active.reduce((s, p) => s + p.procurementPaise, 0),
   };
 
-  // Labour widget (category-based): today's headcounts, 30-day man-days, trend.
+  // Labour widget (Category → Subcategory): today's headcounts grouped by
+  // category with subcategory breakdown, cost, 30-day man-days, daily trend.
   const todays = raw.labourEntries.filter((e) => e.date === today);
-  const byCat = new Map<string, { name: string; color: string; quantity: number }>();
+  const byCat = new Map<
+    string,
+    { name: string; color: string; quantity: number; subcategories: { name: string; quantity: number }[] }
+  >();
   todays.forEach((e) => {
-    const c = byCat.get(e.categoryName) ?? { name: e.categoryName, color: e.color, quantity: 0 };
+    const c = byCat.get(e.categoryName) ?? {
+      name: e.categoryName,
+      color: e.color,
+      quantity: 0,
+      subcategories: [],
+    };
     c.quantity += e.quantityPresent;
+    let sub = c.subcategories.find((s) => s.name === e.subcategoryName);
+    if (!sub) {
+      sub = { name: e.subcategoryName, quantity: 0 };
+      c.subcategories.push(sub);
+    }
+    sub.quantity += e.quantityPresent;
     byCat.set(e.categoryName, c);
   });
+  byCat.forEach((c) => c.subcategories.sort((a, b) => b.quantity - a.quantity));
   const byDay = new Map<string, number>();
   raw.labourEntries.forEach((e) => byDay.set(e.date, (byDay.get(e.date) ?? 0) + e.quantityPresent));
   const labour = {
     todayByCategory: [...byCat.values()].sort((a, b) => b.quantity - a.quantity),
+    todayCostPaise: todays.reduce((s, e) => s + e.estimatedCostPaise, 0),
     manDays30: raw.labourEntries
       .filter((e) => daysBetween(today, e.date) <= 30)
       .reduce((s, e) => s + e.quantityPresent, 0),

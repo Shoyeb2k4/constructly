@@ -3,22 +3,30 @@ import type {
   AttendanceFilters,
   AttendanceRecordItem,
   AttendanceSheet,
+  CategoryWithSubs,
   CreateCategoryInput,
-  LabourCategory,
+  CreateSubcategoryInput,
   UpdateCategoryInput,
+  UpdateSubcategoryInput,
 } from "../types";
-import { sheetTotals, summarize } from "../calc";
+import { rowTotals, sheetTotals, summarize } from "../calc";
 import {
   DEMO_CATEGORIES,
+  DEMO_SUBCATEGORIES,
   demoLabourAttendance,
   type CategoryRecord,
+  type SubcategoryRecord,
   type LabourAttendanceRecord,
 } from "./seed";
 
 const K = {
-  categories: "constructly.demo.labourCategories.v1",
-  attendance: "constructly.demo.labourAttendance.v1",
+  categories: "constructly.demo.labourCategories.v2",
+  subcategories: "constructly.demo.labourSubcategories.v2",
+  attendance: "constructly.demo.labourAttendance.v2",
   projects: "constructly.demo.projects.v1",
+  // Legacy flat-model stores (migrated on first load — ADR-0023).
+  v1Categories: "constructly.demo.labourCategories.v1",
+  v1Attendance: "constructly.demo.labourAttendance.v1",
 };
 
 const uid = () =>
@@ -26,17 +34,14 @@ const uid = () =>
     ? crypto.randomUUID()
     : Math.random().toString(36).slice(2);
 
-function read<T>(key: string, seed: () => T[]): T[] {
-  if (typeof window === "undefined") return seed();
+function readRaw<T>(key: string): T[] | null {
+  if (typeof window === "undefined") return null;
   try {
     const raw = window.localStorage.getItem(key);
-    if (raw) return JSON.parse(raw) as T[];
+    return raw ? (JSON.parse(raw) as T[]) : null;
   } catch {
-    /* ignore */
+    return null;
   }
-  const seeded = structuredClone(seed());
-  write(key, seeded);
-  return seeded;
 }
 function write<T>(key: string, rows: T[]): void {
   if (typeof window === "undefined") return;
@@ -47,52 +52,114 @@ function write<T>(key: string, rows: T[]): void {
   }
 }
 
-const loadCategories = () => read<CategoryRecord>(K.categories, () => DEMO_CATEGORIES);
-const loadAttendance = () => read<LabourAttendanceRecord>(K.attendance, () => demoLabourAttendance());
+interface V1Category { id: string; name: string; color: string; dailyRatePaise: number | null }
+interface V1Attendance extends Omit<LabourAttendanceRecord, "labourSubcategoryId"> { labourCategoryId: string }
+
+/**
+ * Ensure the v2 hierarchy stores exist. Migrates legacy flat categories:
+ * each old category becomes Category → Default Subcategory (same name + rate),
+ * and attendance is repointed — no data loss (mirrors migration-labour-hierarchy.sql).
+ */
+function ensureStores(): void {
+  if (typeof window === "undefined") return;
+  if (readRaw<CategoryRecord>(K.categories)) return;
+
+  const v1Cats = readRaw<V1Category>(K.v1Categories);
+  if (v1Cats && v1Cats.length > 0) {
+    const categories: CategoryRecord[] = [];
+    const subcategories: SubcategoryRecord[] = [];
+    v1Cats.forEach((c, i) => {
+      const categoryId = uid();
+      categories.push({ id: categoryId, name: c.name, color: c.color ?? null, displayOrder: i });
+      // The default subcategory KEEPS the old category id so existing
+      // attendance repoints with a field rename only.
+      subcategories.push({
+        id: c.id,
+        categoryId,
+        name: c.name,
+        dailyRatePaise: c.dailyRatePaise ?? null,
+        displayOrder: 0,
+      });
+    });
+    const v1Att = readRaw<V1Attendance>(K.v1Attendance) ?? [];
+    const attendance: LabourAttendanceRecord[] = v1Att.map(({ labourCategoryId, ...rest }) => ({
+      ...rest,
+      labourSubcategoryId: labourCategoryId,
+    }));
+    write(K.categories, categories);
+    write(K.subcategories, subcategories);
+    write(K.attendance, attendance);
+    return;
+  }
+
+  write(K.categories, structuredClone(DEMO_CATEGORIES));
+  write(K.subcategories, structuredClone(DEMO_SUBCATEGORIES));
+  write(K.attendance, structuredClone(demoLabourAttendance()));
+}
+
+function loadCategories(): CategoryRecord[] {
+  ensureStores();
+  return readRaw<CategoryRecord>(K.categories) ?? structuredClone(DEMO_CATEGORIES);
+}
+function loadSubcategories(): SubcategoryRecord[] {
+  ensureStores();
+  return readRaw<SubcategoryRecord>(K.subcategories) ?? structuredClone(DEMO_SUBCATEGORIES);
+}
+function loadAttendance(): LabourAttendanceRecord[] {
+  ensureStores();
+  return readRaw<LabourAttendanceRecord>(K.attendance) ?? structuredClone(demoLabourAttendance());
+}
 
 function projectName(id: string): string {
-  if (typeof window === "undefined") return "Unknown";
-  try {
-    const rows = JSON.parse(window.localStorage.getItem(K.projects) ?? "[]") as { id: string; name: string }[];
-    return rows.find((p) => p.id === id)?.name ?? "Unknown";
-  } catch {
-    return "Unknown";
-  }
+  const rows = readRaw<{ id: string; name: string }>(K.projects) ?? [];
+  return rows.find((p) => p.id === id)?.name ?? "Unknown";
 }
+
+const byOrder = <T extends { displayOrder: number }>(a: T, b: T) => a.displayOrder - b.displayOrder;
 
 function buildSheet(
   projectId: string,
   date: string,
   categories: CategoryRecord[],
+  subcategories: SubcategoryRecord[],
   attendance: LabourAttendanceRecord[],
 ): AttendanceSheet {
   const todays = attendance.filter((a) => a.projectId === projectId && a.date === date);
-  const rows = categories.map((c) => {
-    const rec = todays.find((a) => a.labourCategoryId === c.id);
-    return {
-      categoryId: c.id,
-      name: c.name,
-      color: c.color,
-      // Effective rate: the record's snapshot when recorded, else current.
-      dailyRatePaise: rec ? rec.dailyRatePaiseSnapshot : c.dailyRatePaise,
-      quantity: rec?.quantityPresent ?? 0,
-      notes: rec?.notes ?? null,
-    };
+  const groups = [...categories].sort(byOrder).map((c) => {
+    const rows = subcategories
+      .filter((s) => s.categoryId === c.id)
+      .sort(byOrder)
+      .map((s) => {
+        const rec = todays.find((a) => a.labourSubcategoryId === s.id);
+        return {
+          subcategoryId: s.id,
+          name: s.name,
+          dailyRatePaise: rec ? rec.dailyRatePaiseSnapshot : s.dailyRatePaise,
+          quantity: rec?.quantityPresent ?? 0,
+          notes: rec?.notes ?? null,
+        };
+      });
+    return { categoryId: c.id, name: c.name, color: c.color, rows, ...rowTotals(rows) };
   });
-  return { projectId, date, rows, ...sheetTotals(rows) };
+  return { projectId, date, groups, ...sheetTotals(groups) };
 }
 
-function toItems(records: LabourAttendanceRecord[], categories: CategoryRecord[]): AttendanceRecordItem[] {
+function toItems(records: LabourAttendanceRecord[]): AttendanceRecordItem[] {
+  const categories = loadCategories();
+  const subcategories = loadSubcategories();
   return records.map((r) => {
-    const c = categories.find((x) => x.id === r.labourCategoryId);
+    const sub = subcategories.find((s) => s.id === r.labourSubcategoryId);
+    const cat = sub ? categories.find((c) => c.id === sub.categoryId) : undefined;
     return {
       id: r.id,
       projectId: r.projectId,
       projectName: projectName(r.projectId),
       date: r.date,
-      categoryId: r.labourCategoryId,
-      categoryName: c?.name ?? "Unknown",
-      color: c?.color ?? "#64748B",
+      categoryId: cat?.id ?? "unknown",
+      categoryName: cat?.name ?? "Unknown",
+      color: cat?.color ?? null,
+      subcategoryId: r.labourSubcategoryId,
+      subcategoryName: sub?.name ?? "Unknown",
       quantityPresent: r.quantityPresent,
       dailyRatePaiseSnapshot: r.dailyRatePaiseSnapshot,
       estimatedCostPaise: r.estimatedCostPaise,
@@ -110,8 +177,12 @@ function applyFilters(records: LabourAttendanceRecord[], f: AttendanceFilters): 
 }
 
 export const demoLaborRepository: LaborRepository = {
-  async listCategories() {
-    return loadCategories().map((c) => ({ ...c })) as LabourCategory[];
+  async listCategories(): Promise<CategoryWithSubs[]> {
+    const subs = loadSubcategories();
+    return [...loadCategories()].sort(byOrder).map((c) => ({
+      ...c,
+      subcategories: subs.filter((s) => s.categoryId === c.id).sort(byOrder),
+    }));
   },
 
   async createCategory(input: CreateCategoryInput) {
@@ -122,8 +193,8 @@ export const demoLaborRepository: LaborRepository = {
     const rec: CategoryRecord = {
       id: uid(),
       name: input.name,
-      color: input.color,
-      dailyRatePaise: input.dailyRatePaise ?? null,
+      color: input.color ?? null,
+      displayOrder: rows.length,
     };
     rows.push(rec);
     write(K.categories, rows);
@@ -134,45 +205,106 @@ export const demoLaborRepository: LaborRepository = {
     const rows = loadCategories();
     const rec = rows.find((c) => c.id === id);
     if (!rec) throw new Error("NOT_FOUND");
-    Object.assign(rec, {
-      ...patch,
-      dailyRatePaise: patch.dailyRatePaise !== undefined ? patch.dailyRatePaise : rec.dailyRatePaise,
-    });
+    if (patch.name !== undefined) rec.name = patch.name;
+    if (patch.color !== undefined) rec.color = patch.color ?? null;
     write(K.categories, rows);
     return { ...rec };
   },
 
   async deleteCategory(id) {
+    const subIds = new Set(loadSubcategories().filter((s) => s.categoryId === id).map((s) => s.id));
     write(K.categories, loadCategories().filter((c) => c.id !== id));
-    write(K.attendance, loadAttendance().filter((a) => a.labourCategoryId !== id));
+    write(K.subcategories, loadSubcategories().filter((s) => s.categoryId !== id));
+    write(K.attendance, loadAttendance().filter((a) => !subIds.has(a.labourSubcategoryId)));
+  },
+
+  async reorderCategories(orderedIds) {
+    const rows = loadCategories();
+    rows.forEach((c) => {
+      const i = orderedIds.indexOf(c.id);
+      if (i >= 0) c.displayOrder = i;
+    });
+    write(K.categories, rows);
+  },
+
+  async createSubcategory(input: CreateSubcategoryInput) {
+    const rows = loadSubcategories();
+    if (
+      rows.some(
+        (s) =>
+          s.categoryId === input.categoryId &&
+          s.name.trim().toLowerCase() === input.name.trim().toLowerCase(),
+      )
+    ) {
+      throw new Error("DUPLICATE_NAME");
+    }
+    const rec: SubcategoryRecord = {
+      id: uid(),
+      categoryId: input.categoryId,
+      name: input.name,
+      dailyRatePaise: input.dailyRatePaise ?? null,
+      displayOrder: rows.filter((s) => s.categoryId === input.categoryId).length,
+    };
+    rows.push(rec);
+    write(K.subcategories, rows);
+    return { ...rec };
+  },
+
+  async updateSubcategory(id, patch: UpdateSubcategoryInput) {
+    const rows = loadSubcategories();
+    const rec = rows.find((s) => s.id === id);
+    if (!rec) throw new Error("NOT_FOUND");
+    if (patch.name !== undefined) rec.name = patch.name;
+    if (patch.dailyRatePaise !== undefined) rec.dailyRatePaise = patch.dailyRatePaise ?? null;
+    if (patch.categoryId !== undefined && patch.categoryId !== rec.categoryId) {
+      rec.categoryId = patch.categoryId!;
+      rec.displayOrder = rows.filter((s) => s.categoryId === patch.categoryId).length;
+    }
+    write(K.subcategories, rows);
+    return { ...rec };
+  },
+
+  async deleteSubcategory(id) {
+    write(K.subcategories, loadSubcategories().filter((s) => s.id !== id));
+    write(K.attendance, loadAttendance().filter((a) => a.labourSubcategoryId !== id));
+  },
+
+  async reorderSubcategories(categoryId, orderedIds) {
+    const rows = loadSubcategories();
+    rows.forEach((s) => {
+      if (s.categoryId !== categoryId) return;
+      const i = orderedIds.indexOf(s.id);
+      if (i >= 0) s.displayOrder = i;
+    });
+    write(K.subcategories, rows);
   },
 
   async getSheet(projectId, date) {
-    return buildSheet(projectId, date, loadCategories(), loadAttendance());
+    return buildSheet(projectId, date, loadCategories(), loadSubcategories(), loadAttendance());
   },
 
-  async setQuantity(projectId, date, categoryId, quantity, notes) {
+  async setQuantity(projectId, date, subcategoryId, quantity, notes) {
     const categories = loadCategories();
+    const subcategories = loadSubcategories();
     let attendance = loadAttendance();
     const existing = attendance.find(
-      (a) => a.projectId === projectId && a.date === date && a.labourCategoryId === categoryId,
+      (a) => a.projectId === projectId && a.date === date && a.labourSubcategoryId === subcategoryId,
     );
     if (quantity <= 0) {
       attendance = attendance.filter((a) => a !== existing);
     } else if (existing) {
-      // Keep the original rate snapshot — editing a headcount never adopts a
-      // newer rate; history stays immutable (ADR-0022).
+      // Keep the original rate snapshot — history stays immutable (ADR-0022).
       existing.quantityPresent = quantity;
       existing.estimatedCostPaise = (existing.dailyRatePaiseSnapshot ?? 0) * quantity;
       if (notes !== undefined) existing.notes = notes;
       existing.updatedAt = new Date().toISOString();
     } else {
-      const rate = categories.find((c) => c.id === categoryId)?.dailyRatePaise ?? null;
+      const rate = subcategories.find((s) => s.id === subcategoryId)?.dailyRatePaise ?? null;
       attendance.push({
         id: uid(),
         projectId,
         date,
-        labourCategoryId: categoryId,
+        labourSubcategoryId: subcategoryId,
         quantityPresent: quantity,
         dailyRatePaiseSnapshot: rate,
         estimatedCostPaise: (rate ?? 0) * quantity,
@@ -182,25 +314,26 @@ export const demoLaborRepository: LaborRepository = {
       });
     }
     write(K.attendance, attendance);
-    return buildSheet(projectId, date, categories, attendance);
+    return buildSheet(projectId, date, categories, subcategories, attendance);
   },
 
   async copyPreviousDay(projectId, date) {
     const categories = loadCategories();
+    const subcategories = loadSubcategories();
     let attendance = loadAttendance();
-    const prevDates = attendance
+    const prev = attendance
       .filter((a) => a.projectId === projectId && a.date < date)
       .map((a) => a.date)
-      .sort();
-    const prev = prevDates.at(-1);
+      .sort()
+      .at(-1);
     if (prev) {
       const source = attendance.filter((a) => a.projectId === projectId && a.date === prev);
       for (const rec of source) {
         attendance = attendance.filter(
-          (a) => !(a.projectId === projectId && a.date === date && a.labourCategoryId === rec.labourCategoryId),
+          (a) => !(a.projectId === projectId && a.date === date && a.labourSubcategoryId === rec.labourSubcategoryId),
         );
         // Copying into a new day is a NEW recording → snapshot today's rate.
-        const rate = categories.find((c) => c.id === rec.labourCategoryId)?.dailyRatePaise ?? null;
+        const rate = subcategories.find((s) => s.id === rec.labourSubcategoryId)?.dailyRatePaise ?? null;
         attendance.push({
           ...rec,
           id: uid(),
@@ -213,18 +346,15 @@ export const demoLaborRepository: LaborRepository = {
       }
       write(K.attendance, attendance);
     }
-    return buildSheet(projectId, date, categories, attendance);
+    return buildSheet(projectId, date, categories, subcategories, attendance);
   },
 
   async listAttendance(filters: AttendanceFilters) {
-    const rows = applyFilters(loadAttendance(), filters).sort(
-      (a, b) => b.date.localeCompare(a.date),
-    );
-    return toItems(rows, loadCategories());
+    const rows = applyFilters(loadAttendance(), filters).sort((a, b) => b.date.localeCompare(a.date));
+    return toItems(rows);
   },
 
   async summary(filters: AttendanceFilters) {
-    const items = toItems(applyFilters(loadAttendance(), filters), loadCategories());
-    return summarize(items);
+    return summarize(toItems(applyFilters(loadAttendance(), filters)));
   },
 };

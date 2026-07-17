@@ -11,8 +11,9 @@ import type { PurchaseOrderListItem } from "@/features/procurement/types";
 
 const K = {
   projects: "constructly.demo.projects.v1",
-  labourAttendance: "constructly.demo.labourAttendance.v1",
-  labourCategories: "constructly.demo.labourCategories.v1",
+  labourAttendance: "constructly.demo.labourAttendance.v2",
+  labourCategories: "constructly.demo.labourCategories.v2",
+  labourSubcategories: "constructly.demo.labourSubcategories.v2",
   pos: "constructly.demo.pos.v1",
   vendors: "constructly.demo.vendors.v1",
 };
@@ -33,8 +34,9 @@ interface StoredProject {
   deadlines: { id: string; title: string; dueDate: string; completedAt: string | null }[];
   activity: { id: string; summary: string; actorName?: string; createdAt: string }[];
 }
-interface StoredLabour { projectId: string; date: string; labourCategoryId: string; quantityPresent: number; estimatedCostPaise: number }
-interface StoredCategory { id: string; name: string; color: string; dailyRatePaise: number | null }
+interface StoredLabour { projectId: string; date: string; labourSubcategoryId: string; quantityPresent: number; estimatedCostPaise: number }
+interface StoredCategory { id: string; name: string; color: string | null }
+interface StoredSubcategory { id: string; categoryId: string; name: string }
 interface StoredPO { id: string; poNumber: string; vendorId: string; projectId: string; status: string; purchaseDate: string; totalPaise: number; invoiceNumber: string | null; createdByName: string; createdAt: string; approvedByName: string | null; approvedAt: string | null }
 interface StoredVendor { id: string; businessName: string }
 
@@ -49,6 +51,7 @@ export function gatherDemoDashboard(opts: { userId: string; isOwner: boolean }):
 
   const categories = read<StoredCategory>(K.labourCategories);
   const catById = new Map(categories.map((c) => [c.id, c]));
+  const subById = new Map(read<StoredSubcategory>(K.labourSubcategories).map((s) => [s.id, s]));
   const labour = read<StoredLabour>(K.labourAttendance).filter((a) => projectIds.has(a.projectId));
   const pos = read<StoredPO>(K.pos).filter((p) => projectIds.has(p.projectId));
   const vendors = read<StoredVendor>(K.vendors);
@@ -79,10 +82,12 @@ export function gatherDemoDashboard(opts: { userId: string; isOwner: boolean }):
   }));
 
   const labourEntries: RawLabourEntry[] = labour.map((a) => {
-    const c = catById.get(a.labourCategoryId);
+    const sub = subById.get(a.labourSubcategoryId);
+    const c = sub ? catById.get(sub.categoryId) : undefined;
     return {
       date: a.date,
       categoryName: c?.name ?? "Unknown",
+      subcategoryName: sub?.name ?? "Unknown",
       color: c?.color ?? "#64748B",
       quantityPresent: a.quantityPresent,
       estimatedCostPaise: a.estimatedCostPaise ?? 0,

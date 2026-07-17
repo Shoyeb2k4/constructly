@@ -132,6 +132,11 @@ create policy labour_categories_tenant on public.labour_categories
   for all using (company_id = public.current_company_id())
   with check (company_id = public.current_company_id());
 
+alter table public.labour_subcategories enable row level security;
+create policy labour_subcategories_tenant on public.labour_subcategories
+  for all using (company_id = public.current_company_id())
+  with check (company_id = public.current_company_id());
+
 -- ── labour_attendance (tenant + PM-scoped via project access) ──────────
 alter table public.labour_attendance enable row level security;
 create policy labour_attendance_all on public.labour_attendance

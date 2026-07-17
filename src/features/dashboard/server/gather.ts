@@ -21,7 +21,7 @@ export async function gatherServerDashboard(): Promise<RawDashboardData> {
     prisma.company.findUnique({ where: { id: companyId }, select: { settings: true } }),
     prisma.labourAttendance.findMany({
       where: { companyId, date: { gte: windowStart }, ...(isOwner ? {} : { project: { pmId: user.id } }) },
-      include: { category: { select: { name: true, color: true } } },
+      include: { subcategory: { include: { category: { select: { name: true, color: true } } } } },
     }),
     prisma.purchaseOrder.findMany({
       where: { companyId, ...(isOwner ? {} : { project: { pmId: user.id } }) },
@@ -60,8 +60,9 @@ export async function gatherServerDashboard(): Promise<RawDashboardData> {
 
   const labourEntries: RawLabourEntry[] = labour.map((a) => ({
     date: a.date.toISOString().slice(0, 10),
-    categoryName: a.category.name,
-    color: a.category.color,
+    categoryName: a.subcategory.category.name,
+    subcategoryName: a.subcategory.name,
+    color: a.subcategory.category.color ?? "#64748B",
     quantityPresent: a.quantityPresent,
     estimatedCostPaise: a.estimatedCostPaise,
   }));

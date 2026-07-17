@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { estimateCostPaise, sheetTotals, summarize } from "./calc";
+import { estimateCostPaise, rowTotals, summarize } from "./calc";
 import type { AttendanceRecordItem } from "./types";
 
 const rec = (over: Partial<AttendanceRecordItem>): AttendanceRecordItem => {
@@ -8,11 +8,13 @@ const rec = (over: Partial<AttendanceRecordItem>): AttendanceRecordItem => {
     projectId: "p1",
     projectName: "Skyline",
     date: "2026-07-14",
-    categoryId: "helper",
-    categoryName: "Helper",
-    color: "#F59E0B",
+    categoryId: "carp",
+    categoryName: "Carpenter",
+    color: "#8B5CF6",
+    subcategoryId: "main-carp",
+    subcategoryName: "Main Carpenter",
     quantityPresent: 10,
-    dailyRatePaiseSnapshot: 55000 as number | null,
+    dailyRatePaiseSnapshot: 90000 as number | null,
     notes: null,
     ...over,
   };
@@ -25,45 +27,53 @@ const rec = (over: Partial<AttendanceRecordItem>): AttendanceRecordItem => {
 
 describe("estimateCostPaise", () => {
   it("multiplies rate by headcount", () => {
-    expect(estimateCostPaise(55000, 12)).toBe(660000); // 12 helpers @ ₹550
+    expect(estimateCostPaise(90000, 12)).toBe(1_080_000);
   });
   it("treats a missing rate as zero", () => {
     expect(estimateCostPaise(null, 12)).toBe(0);
   });
 });
 
-describe("sheetTotals", () => {
-  it("totals headcount and estimated cost", () => {
-    const t = sheetTotals([
-      { categoryId: "h", name: "Helper", color: "#000", dailyRatePaise: 55000, quantity: 12, notes: null },
-      { categoryId: "m", name: "Mason", color: "#000", dailyRatePaise: 85000, quantity: 8, notes: null },
-      { categoryId: "e", name: "Electrician", color: "#000", dailyRatePaise: null, quantity: 3, notes: null },
+describe("rowTotals", () => {
+  it("totals headcount and estimated cost across rows", () => {
+    const t = rowTotals([
+      { subcategoryId: "a", name: "Main Carpenter", dailyRatePaise: 90000, quantity: 12, notes: null },
+      { subcategoryId: "b", name: "Carpenter Helper", dailyRatePaise: 55000, quantity: 8, notes: null },
+      { subcategoryId: "c", name: "No-rate", dailyRatePaise: null, quantity: 3, notes: null },
     ]);
     expect(t.totalPresent).toBe(23);
-    expect(t.estimatedCostPaise).toBe(12 * 55000 + 8 * 85000);
+    expect(t.estimatedCostPaise).toBe(12 * 90000 + 8 * 55000);
   });
 });
 
-describe("summarize", () => {
-  it("computes man-days by category, project, and daily trend from snapshot costs", () => {
+describe("summarize (hierarchy)", () => {
+  it("groups man-days by category with subcategory breakdown + totals", () => {
     const s = summarize([
-      rec({ quantityPresent: 12 }),
+      rec({ quantityPresent: 12 }), // Carpenter / Main Carpenter
+      rec({ subcategoryId: "carp-help", subcategoryName: "Carpenter Helper", quantityPresent: 8, dailyRatePaiseSnapshot: 55000 }),
+      rec({ categoryId: "elec", categoryName: "Electrician", subcategoryId: "main-elec", subcategoryName: "Main Electrician", quantityPresent: 4, dailyRatePaiseSnapshot: 110000 }),
       rec({ date: "2026-07-15", quantityPresent: 10 }),
-      rec({ categoryId: "mason", categoryName: "Mason", quantityPresent: 8, dailyRatePaiseSnapshot: 85000 }),
       rec({ projectId: "p2", projectName: "Orion", quantityPresent: 5 }),
     ]);
-    expect(s.totalManDays).toBe(35);
-    expect(s.byCategory.find((c) => c.categoryId === "helper")?.manDays).toBe(27);
+    expect(s.totalManDays).toBe(39);
+
+    const carpenter = s.byCategory.find((c) => c.categoryId === "carp")!;
+    expect(carpenter.manDays).toBe(35); // 12 + 8 + 10 + 5
+    expect(carpenter.subcategories.find((x) => x.subcategoryId === "main-carp")?.manDays).toBe(27);
+    expect(carpenter.subcategories.find((x) => x.subcategoryId === "carp-help")?.manDays).toBe(8);
+
+    const electrician = s.byCategory.find((c) => c.categoryId === "elec")!;
+    expect(electrician.manDays).toBe(4);
+
     expect(s.byProject.find((p) => p.projectId === "p2")?.manDays).toBe(5);
     expect(s.trend).toEqual([
-      { date: "2026-07-14", total: 25 },
+      { date: "2026-07-14", total: 29 },
       { date: "2026-07-15", total: 10 },
     ]);
-    expect(s.estimatedCostPaise).toBe(27 * 55000 + 8 * 85000);
+    expect(s.estimatedCostPaise).toBe(27 * 90000 + 8 * 55000 + 4 * 110000);
   });
 
   it("uses each record's stored snapshot, not a current rate", () => {
-    // Two records for the same category recorded under different rates.
     const s = summarize([
       rec({ quantityPresent: 10, dailyRatePaiseSnapshot: 70000 }), // recorded @ ₹700
       rec({ date: "2026-07-15", quantityPresent: 10, dailyRatePaiseSnapshot: 80000 }), // later @ ₹800

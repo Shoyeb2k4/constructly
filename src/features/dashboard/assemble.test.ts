@@ -116,23 +116,33 @@ describe("assembleDashboard", () => {
     expect(snap.costSplit).toEqual({ laborPaise: 2_000_000, procurementPaise: 3_000_000 });
   });
 
-  it("builds the labour widget from category entries", () => {
+  it("builds the labour widget from subcategory entries grouped by category", () => {
     const snap = assembleDashboard(
       raw({
         labourEntries: [
-          { date: today, categoryName: "Helper", color: "#F59E0B", quantityPresent: 12, estimatedCostPaise: 12 * 55000 },
-          { date: today, categoryName: "Mason", color: "#3B82F6", quantityPresent: 8, estimatedCostPaise: 8 * 85000 },
-          { date: "2026-07-14", categoryName: "Helper", color: "#F59E0B", quantityPresent: 10, estimatedCostPaise: 10 * 55000 },
+          { date: today, categoryName: "Carpenter", subcategoryName: "Main Carpenter", color: "#8B5CF6", quantityPresent: 12, estimatedCostPaise: 12 * 90000 },
+          { date: today, categoryName: "Carpenter", subcategoryName: "Carpenter Helper", color: "#8B5CF6", quantityPresent: 8, estimatedCostPaise: 8 * 55000 },
+          { date: today, categoryName: "Mason", subcategoryName: "Mason", color: "#3B82F6", quantityPresent: 9, estimatedCostPaise: 9 * 85000 },
+          { date: "2026-07-14", categoryName: "Carpenter", subcategoryName: "Main Carpenter", color: "#8B5CF6", quantityPresent: 10, estimatedCostPaise: 10 * 90000 },
         ],
       }),
     );
-    expect(snap.kpis.todaysLaborCount).toBe(20);
-    expect(snap.kpis.todaysWagesPaise).toBe(12 * 55000 + 8 * 85000);
-    expect(snap.labour.manDays30).toBe(30);
-    expect(snap.labour.todayByCategory[0]).toEqual({ name: "Helper", color: "#F59E0B", quantity: 12 });
+    expect(snap.kpis.todaysLaborCount).toBe(29);
+    expect(snap.kpis.todaysWagesPaise).toBe(12 * 90000 + 8 * 55000 + 9 * 85000);
+    expect(snap.labour.todayCostPaise).toBe(snap.kpis.todaysWagesPaise);
+    expect(snap.labour.manDays30).toBe(39);
+    expect(snap.labour.todayByCategory[0]).toEqual({
+      name: "Carpenter",
+      color: "#8B5CF6",
+      quantity: 20,
+      subcategories: [
+        { name: "Main Carpenter", quantity: 12 },
+        { name: "Carpenter Helper", quantity: 8 },
+      ],
+    });
     expect(snap.labour.trend).toEqual([
       { date: "2026-07-14", total: 10 },
-      { date: today, total: 20 },
+      { date: today, total: 29 },
     ]);
   });
 });

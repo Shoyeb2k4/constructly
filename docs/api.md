@@ -57,21 +57,24 @@ client repository (`demo/demo-repository.ts`) behind the same `ProjectsRepositor
 Money crosses this boundary as integer **paise** (`number`); Prisma stores BigInt and
 converts in the mapper.
 
-## Module 2 — Labour & Attendance (category-based · ADR-0021)
+## Module 2 — Labour & Attendance (Category → Subcategory · ADR-0023)
 `src/features/labor/server/actions.ts` behind `LaborRepository` (demo mirror). Attendance is a
 registered sync entity (`labour_attendance`); `/api/sync` upserts idempotently on the
-`(project, date, category)` key (quantity 0 deletes).
+`(project, date, subcategory)` key (quantity 0 deletes) with ADR-0022 rate snapshots.
 
 | Action | Who | Notes |
 |---|---|---|
-| `listCategories` / `createCategory` / `updateCategory` / `deleteCategory` | all | color + optional day rate; delete cascades attendance |
-| `getSheet(projectId, date)` | Owner, PM(assigned) | one row per category with headcount + notes |
-| `setQuantity(projectId, date, categoryId, quantity, notes?)` | Owner, PM(assigned) | upsert; 0 deletes |
-| `copyPreviousDay(projectId, date)` | Owner, PM(assigned) | fast-entry helper |
-| `listAttendance(filters)` | all (PM scoped) | project / date / range filters — feeds exports |
-| `summary(filters)` | all (PM scoped) | man-days by category/project, daily trend, cost estimate |
+| `listCategories()` | all | nested `CategoryWithSubs[]`, ordered by `displayOrder` |
+| `createCategory` / `updateCategory` / `deleteCategory` / `reorderCategories(ids)` | all | delete cascades subs + attendance |
+| `createSubcategory` / `updateSubcategory` / `deleteSubcategory` / `reorderSubcategories(catId, ids)` | all | patch `categoryId` moves it; optional day rate |
+| `getSheet(projectId, date)` | Owner, PM(assigned) | groups per category, one row per subcategory |
+| `setQuantity(projectId, date, subcategoryId, quantity, notes?)` | Owner, PM(assigned) | upsert; 0 deletes; snapshots rate on first record |
+| `copyPreviousDay(projectId, date)` | Owner, PM(assigned) | re-snapshots at today's rates |
+| `listAttendance(filters)` | all (PM scoped) | flat records incl. category + subcategory — feeds exports |
+| `summary(filters)` | all (PM scoped) | man-days by category → subcategory, by project, daily trend, cost |
 
-PDF/Excel export is client-side (`src/features/labor/exports.ts`, jsPDF + SheetJS).
+PDF/Excel export is client-side (`src/features/labor/exports.ts`, jsPDF + SheetJS), grouped with
+category totals and a grand total.
 
 ## Module 3 — Vendors & Procurement (server actions)
 `src/features/procurement/server/actions.ts` behind `ProcurementRepository` (demo mirror).

@@ -79,6 +79,13 @@ Status legend: `Accepted` · `Superseded` · `Proposed`
 **Decision:** A `CONSTRUCTLY_DEMO` flag (auto-on when Supabase env is absent) serves a seeded demo identity ("Meridian Build Co.", owner Aarav Mehta) with no real auth. All env branching lives in `src/lib/env.ts`; `getCurrentUser()` returns the demo user in this mode. Playwright runs against demo mode.
 **Consequences:** `npm run dev` renders the full app immediately. Real auth activates automatically once Supabase env vars are set.
 
+## ADR-0023 — Labour hierarchy: Category → Subcategory (extends ADR-0021)
+**Status:** Accepted · 2026-07-16 (client change request)
+**Context:** Sites organize labour as trade groups with roles inside them (Carpenter → Main Carpenter / Carpenter Helper). Still strictly headcounts — no individuals, IDs, check-in/out, or payroll.
+**Decision:** `LabourCategory` (name, optional color, `displayOrder`) contains unlimited `LabourSubcategory` rows (name, **optional `dailyRatePaise`** — the rate moved down to the subcategory, `displayOrder`). `LabourAttendance` now references `labourSubcategoryId` (unique per project + date + subcategory) and keeps the ADR-0022 snapshots (`dailyRatePaiseSnapshot`, `estimatedCostPaise` = qty × snapshot — history never rewrites). Attendance UI groups collapsible categories with a stepper per subcategory; hierarchy management supports create/edit/delete/move plus **drag-and-drop reordering** persisted via `displayOrder`. Reports, exports, and the dashboard aggregate per category **with subcategory breakdown** (category totals + grand total). Sync entity payload carries `labourSubcategoryId`.
+**Migration:** every existing flat category becomes Category → Default Subcategory (same name + rate) and attendance is repointed — `prisma/migration-labour-hierarchy.sql` for Postgres; the demo store migrates v1 → v2 automatically on load (verified live: 9 categories, 105 records, zero loss).
+**Consequences:** Unlimited categories/subcategories; entry stays sub-1-minute; all rollups gain a second level; budget math unchanged (sums stored snapshot costs).
+
 ## ADR-0021 — Labour redesigned to category-based attendance (supersedes ADR-0017)
 **Status:** Accepted · 2026-07-15 (client change request)
 **Context:** Client feedback: the MVP must not track individual laborers, wages, per-worker attendance, or payroll. Attendance is a **headcount per labour category per project per date**.

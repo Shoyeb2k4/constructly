@@ -5,6 +5,7 @@ import * as React from "react";
 import Link from "next/link";
 import {
   CalendarCheck,
+  ChevronDown,
   CopyPlus,
   Minus,
   Plus,
@@ -30,10 +31,11 @@ import { useProjects } from "@/features/projects/hooks";
 import { useAttendanceSheet, useSetQuantity, useCopyPreviousDay } from "../../hooks";
 import { getLastProject, setLastProject, todayISO } from "../../last-project";
 import { exportSheetPdf, exportSheetExcel } from "../../exports";
-import type { SheetRow } from "../../types";
+import { FALLBACK_COLOR } from "../../constants";
+import type { SheetGroup, SheetRow } from "../../types";
 import { SyncChip } from "./sync-chip";
 
-function CategoryRow({
+function SubcategoryRow({
   row,
   onCommit,
 }: {
@@ -44,10 +46,8 @@ function CategoryRow({
   const [showNote, setShowNote] = React.useState(false);
   const [note, setNote] = React.useState(row.notes ?? "");
 
-  // Sync visible inputs when the row changes externally (steppers commit
-  // optimistically, copy-yesterday replaces the sheet) — the React-sanctioned
-  // adjust-state-during-render pattern. Discrete taps are separate browser
-  // tasks, so React re-renders between them and row.quantity is always fresh.
+  // Sync visible inputs when the row changes externally (copy-yesterday, sync)
+  // — the React-sanctioned adjust-state-during-render pattern.
   const [prevQty, setPrevQty] = React.useState(row.quantity);
   if (prevQty !== row.quantity) {
     setPrevQty(row.quantity);
@@ -71,9 +71,8 @@ function CategoryRow({
   }
 
   return (
-    <div className="border-b border-border px-3 py-2.5 last:border-0">
+    <div className="border-b border-border py-2 pl-8 pr-3 last:border-0">
       <div className="flex items-center gap-3">
-        <span className="size-2.5 shrink-0 rounded-full" style={{ background: row.color }} />
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium">{row.name}</p>
           {row.dailyRatePaise != null && (
@@ -85,7 +84,7 @@ function CategoryRow({
 
         <button
           onClick={() => setShowNote((v) => !v)}
-          aria-label="Add note"
+          aria-label={`Note for ${row.name}`}
           className={cn(
             "flex size-8 items-center justify-center rounded-md text-foreground-subtle transition-colors hover:bg-surface-muted",
             (showNote || row.notes) && "text-primary",
@@ -127,16 +126,57 @@ function CategoryRow({
       </div>
 
       {showNote && (
-        <div className="mt-2 pl-6">
+        <div className="mt-2">
           <Input
             value={note}
             onChange={(e) => setNote(e.target.value)}
             onBlur={() => onCommit(row.quantity, note.trim() || null)}
-            placeholder="Note for this category…"
+            placeholder="Note for this subcategory…"
             className="h-8 text-sm"
           />
         </div>
       )}
+    </div>
+  );
+}
+
+function CategoryGroup({
+  group,
+  collapsed,
+  onToggle,
+  onCommit,
+}: {
+  group: SheetGroup;
+  collapsed: boolean;
+  onToggle: () => void;
+  onCommit: (subcategoryId: string, quantity: number, notes?: string | null) => void;
+}) {
+  return (
+    <div className="border-b border-border last:border-0">
+      <button
+        onClick={onToggle}
+        aria-expanded={!collapsed}
+        className="flex w-full items-center gap-3 px-3 py-3 text-left transition-colors hover:bg-surface-muted/40"
+      >
+        <ChevronDown
+          className={cn("size-4 shrink-0 text-foreground-subtle transition-transform", collapsed && "-rotate-90")}
+        />
+        <span className="size-2.5 shrink-0 rounded-full" style={{ background: group.color ?? FALLBACK_COLOR }} />
+        <span className="min-w-0 flex-1 truncate text-sm font-semibold">{group.name}</span>
+        {group.totalPresent > 0 && (
+          <span className="rounded-full bg-surface-muted px-2 py-0.5 font-mono text-xs font-medium tabular-nums">
+            {group.totalPresent}
+          </span>
+        )}
+      </button>
+      {!collapsed &&
+        group.rows.map((row) => (
+          <SubcategoryRow
+            key={row.subcategoryId}
+            row={row}
+            onCommit={(qty, notes) => onCommit(row.subcategoryId, qty, notes)}
+          />
+        ))}
     </div>
   );
 }
@@ -150,6 +190,7 @@ export function AttendanceView() {
 
   const [selectedId, setSelectedId] = React.useState<string | null>(() => getLastProject());
   const [date, setDate] = React.useState(() => todayISO());
+  const [collapsed, setCollapsed] = React.useState<Set<string>>(new Set());
 
   const projectId =
     selectedId && active.some((p) => p.id === selectedId) ? selectedId : (active[0]?.id ?? null);
@@ -163,6 +204,14 @@ export function AttendanceView() {
   function selectProject(id: string) {
     setSelectedId(id);
     setLastProject(id);
+  }
+  function toggleGroup(id: string) {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   }
 
   if (active.length === 0) {
@@ -226,11 +275,11 @@ export function AttendanceView() {
 
       {isLoading ? (
         <RowsSkeleton rows={6} />
-      ) : !sheet || sheet.rows.length === 0 ? (
+      ) : !sheet || sheet.groups.length === 0 ? (
         <EmptyState
           icon={Tags}
           title="No labour categories"
-          description="Set up categories like Helper, Mason, and Electrician first."
+          description="Set up categories like Carpenter and Mason, each with its subcategories."
           action={
             <Button asChild variant="primary" size="sm">
               <Link href="/labor/categories">Manage categories</Link>
@@ -239,12 +288,14 @@ export function AttendanceView() {
         />
       ) : (
         <div className="overflow-hidden rounded-xl border border-border bg-surface">
-          {sheet.rows.map((row) => (
-            <CategoryRow
-              key={row.categoryId}
-              row={row}
-              onCommit={(quantity, notes) =>
-                setQuantity.mutate({ categoryId: row.categoryId, quantity, notes })
+          {sheet.groups.map((group) => (
+            <CategoryGroup
+              key={group.categoryId}
+              group={group}
+              collapsed={collapsed.has(group.categoryId)}
+              onToggle={() => toggleGroup(group.categoryId)}
+              onCommit={(subcategoryId, quantity, notes) =>
+                setQuantity.mutate({ subcategoryId, quantity, notes })
               }
             />
           ))}

@@ -104,13 +104,22 @@ USING (company_id = (select company_id from users where id = auth.uid()))
 -- PROJECT_MANAGER additionally scoped to assigned projects on project-linked tables
 ```
 
-## Module 2 — Labour (category-based · redesigned per client change request, ADR-0021)
-`LabourCategory` (name, color, **optional `daily_rate_paise`** for cost estimates; unique name per
-company) and `LabourAttendance` (project, `date`, category, `quantity_present`, notes; unique
-`(project_id, date, labour_category_id)`; `client_uuid` unique + `client_seq` for offline sync).
-No individual laborers, wages, or payroll. Labor cost = estimate (rate × headcount), derived —
-never stored. `Contractor` remains (lean, dormant) for future payments/ledger. RLS scopes
-attendance via `can_access_project`; categories are tenant-scoped.
+## Module 2 — Labour (Category → Subcategory hierarchy · ADR-0021/0022/0023)
+```
+LabourCategory (name, color?, display_order)
+  └─< LabourSubcategory (name, daily_rate_paise?, display_order)
+        └─< LabourAttendance (project, date, quantity_present,
+              daily_rate_paise_snapshot, estimated_cost_paise, notes,
+              client_uuid unique + client_seq for offline sync)
+```
+Unique keys: category name per company, subcategory name per category, and
+`(project_id, date, labour_subcategory_id)` per attendance row. No individual laborers,
+wages, or payroll. Labour cost is a stored **snapshot** (`estimated_cost_paise` =
+quantity × rate-at-record-time) — later rate edits never rewrite history; budget sums it
+directly. Ordering via `display_order` (drag-and-drop). Migration from the flat model:
+`prisma/migration-labour-hierarchy.sql` (each category → default subcategory, attendance
+repointed). `Contractor` remains (lean, dormant) for future payments/ledger. RLS scopes
+attendance via `can_access_project`; categories + subcategories are tenant-scoped.
 
 ## Module 3 — Vendors & Procurement (implemented)
 `Vendor` (lean; future payments/invoices/advances/ledger/GST attach as new tables — no redesign),

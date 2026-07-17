@@ -6,7 +6,7 @@ import { poCountsForBudget, type ProjectSpend } from "./calc";
  * server-actions.ts. Both feed the same deriveBudget().
  */
 
-const LABOUR_ATT = "constructly.demo.labourAttendance.v1";
+const LABOUR_ATT = "constructly.demo.labourAttendance.v2";
 const POS = "constructly.demo.pos.v1";
 const SETTINGS = "constructly.demo.settings.v1";
 

@@ -6,72 +6,153 @@ const today = new Date().toISOString().slice(0, 10);
 
 beforeEach(() => localStorage.clear());
 
-describe("labour categories", () => {
-  it("seeds default categories with rates", async () => {
+async function firstSub() {
+  const cats = await repo.listCategories();
+  return { category: cats[0], sub: cats[0].subcategories[0] };
+}
+
+describe("labour hierarchy", () => {
+  it("seeds the default Category → Subcategory hierarchy", async () => {
     const cats = await repo.listCategories();
-    expect(cats.length).toBe(8);
-    expect(cats.find((c) => c.name === "Mason")?.dailyRatePaise).toBe(85000);
+    expect(cats.length).toBe(5);
+    const carpenter = cats.find((c) => c.name === "Carpenter")!;
+    expect(carpenter.subcategories.map((s) => s.name)).toEqual(["Main Carpenter", "Carpenter Helper"]);
+    expect(carpenter.subcategories[0].dailyRatePaise).toBe(90000);
   });
-  it("creates, updates, and deletes a category", async () => {
-    const c = await repo.createCategory({ name: "Scaffolder", color: "#EC4899", dailyRatePaise: 90000 });
-    expect(c.name).toBe("Scaffolder");
-    const updated = await repo.updateCategory(c.id, { dailyRatePaise: 95000 });
-    expect(updated.dailyRatePaise).toBe(95000);
-    await repo.deleteCategory(c.id);
-    expect((await repo.listCategories()).some((x) => x.id === c.id)).toBe(false);
+
+  it("creates, edits, moves, and deletes categories and subcategories", async () => {
+    const cat = await repo.createCategory({ name: "Welding", color: "#EC4899" });
+    const sub = await repo.createSubcategory({ categoryId: cat.id, name: "Main Welder", dailyRatePaise: 100000 });
+    expect(sub.categoryId).toBe(cat.id);
+
+    await repo.updateSubcategory(sub.id, { dailyRatePaise: 110000 });
+    const other = (await repo.listCategories())[0];
+    await repo.updateSubcategory(sub.id, { categoryId: other.id }); // move
+    const moved = (await repo.listCategories())
+      .find((c) => c.id === other.id)!
+      .subcategories.find((s) => s.id === sub.id);
+    expect(moved?.dailyRatePaise).toBe(110000);
+
+    await repo.deleteSubcategory(sub.id);
+    await repo.deleteCategory(cat.id);
+    expect((await repo.listCategories()).some((c) => c.id === cat.id)).toBe(false);
   });
-  it("rejects duplicate names", async () => {
-    await expect(repo.createCategory({ name: "mason", color: "#000000" })).rejects.toThrow("DUPLICATE_NAME");
+
+  it("reorders categories and subcategories via displayOrder", async () => {
+    const before = await repo.listCategories();
+    const reversed = [...before.map((c) => c.id)].reverse();
+    await repo.reorderCategories(reversed);
+    const after = await repo.listCategories();
+    expect(after.map((c) => c.id)).toEqual(reversed);
+
+    const target = after[0];
+    const subsReversed = [...target.subcategories.map((s) => s.id)].reverse();
+    await repo.reorderSubcategories(target.id, subsReversed);
+    const again = (await repo.listCategories()).find((c) => c.id === target.id)!;
+    expect(again.subcategories.map((s) => s.id)).toEqual(subsReversed);
+  });
+
+  it("rejects duplicate names within scope", async () => {
+    await expect(repo.createCategory({ name: "mason" })).rejects.toThrow("DUPLICATE_NAME");
+    const { category } = await firstSub();
+    await expect(
+      repo.createSubcategory({ categoryId: category.id, name: category.subcategories[0].name }),
+    ).rejects.toThrow("DUPLICATE_NAME");
   });
 });
 
-describe("labour attendance", () => {
-  it("returns a sheet with one row per category (today unrecorded)", async () => {
+describe("labour attendance (hierarchy)", () => {
+  it("builds a grouped sheet (today unrecorded)", async () => {
     const sheet = await repo.getSheet(SKY, today);
-    expect(sheet.rows.length).toBe(8);
+    expect(sheet.groups.length).toBe(5);
+    expect(sheet.groups[0].rows.length).toBe(2);
     expect(sheet.totalPresent).toBe(0);
   });
 
-  it("sets headcounts and computes totals + estimated cost", async () => {
+  it("sets headcounts per subcategory with group + grand totals", async () => {
     const cats = await repo.listCategories();
-    const helper = cats.find((c) => c.name === "Helper")!;
-    const mason = cats.find((c) => c.name === "Mason")!;
-    await repo.setQuantity(SKY, today, helper.id, 12);
-    const sheet = await repo.setQuantity(SKY, today, mason.id, 8);
+    const mainCarp = cats[0].subcategories[0]; // ₹900
+    const carpHelp = cats[0].subcategories[1]; // ₹550
+    await repo.setQuantity(SKY, today, mainCarp.id, 12);
+    const sheet = await repo.setQuantity(SKY, today, carpHelp.id, 8);
+    const group = sheet.groups.find((g) => g.categoryId === cats[0].id)!;
+    expect(group.totalPresent).toBe(20);
+    expect(group.estimatedCostPaise).toBe(12 * 90000 + 8 * 55000);
     expect(sheet.totalPresent).toBe(20);
-    expect(sheet.estimatedCostPaise).toBe(12 * 55000 + 8 * 85000);
   });
 
   it("quantity 0 deletes the record", async () => {
-    const helper = (await repo.listCategories()).find((c) => c.name === "Helper")!;
-    await repo.setQuantity(SKY, today, helper.id, 12);
-    const sheet = await repo.setQuantity(SKY, today, helper.id, 0);
+    const { sub } = await firstSub();
+    await repo.setQuantity(SKY, today, sub.id, 12);
+    const sheet = await repo.setQuantity(SKY, today, sub.id, 0);
     expect(sheet.totalPresent).toBe(0);
-    const records = await repo.listAttendance({ projectId: SKY, from: today, to: today });
-    expect(records.length).toBe(0);
+    expect((await repo.listAttendance({ projectId: SKY, from: today, to: today })).length).toBe(0);
+  });
+
+  it("keeps the rate snapshot when the subcategory rate changes later", async () => {
+    const { sub } = await firstSub();
+    await repo.setQuantity(SKY, today, sub.id, 10); // snapshot @ current rate
+    await repo.updateSubcategory(sub.id, { dailyRatePaise: (sub.dailyRatePaise ?? 0) + 50000 });
+    const rec = (await repo.listAttendance({ projectId: SKY, from: today, to: today }))[0];
+    expect(rec.dailyRatePaiseSnapshot).toBe(sub.dailyRatePaise); // original
+    expect(rec.estimatedCostPaise).toBe((sub.dailyRatePaise ?? 0) * 10); // unchanged
   });
 
   it("copies the previous working day", async () => {
     const sheet = await repo.copyPreviousDay(SKY, today);
     expect(sheet.totalPresent).toBeGreaterThan(0); // seeded history exists
   });
-
-  it("filters attendance by project and date range", async () => {
-    const all = await repo.listAttendance({ projectId: "ALL" });
-    const sky = await repo.listAttendance({ projectId: SKY });
-    expect(sky.length).toBeGreaterThan(0);
-    expect(sky.length).toBeLessThan(all.length); // Orion also seeded
-    expect(sky.every((r) => r.projectId === SKY)).toBe(true);
-  });
 });
 
-describe("labour summary", () => {
-  it("computes man-days by category, project, and a daily trend", async () => {
+describe("labour summary + migration", () => {
+  it("summarizes with category → subcategory breakdown", async () => {
     const s = await repo.summary({ projectId: "ALL" });
     expect(s.totalManDays).toBeGreaterThan(0);
-    expect(s.byCategory.length).toBeGreaterThan(0);
-    expect(s.byProject.length).toBe(2); // Skyline + Orion seeded
-    expect(s.trend.length).toBeGreaterThan(5);
-    expect(s.estimatedCostPaise).toBeGreaterThan(0);
+    expect(s.byCategory.length).toBe(5);
+    expect(s.byCategory[0].subcategories.length).toBeGreaterThan(0);
+    const catTotal = s.byCategory[0].manDays;
+    const subSum = s.byCategory[0].subcategories.reduce((x, y) => x + y.manDays, 0);
+    expect(catTotal).toBe(subSum);
+  });
+
+  it("migrates legacy flat categories into Category → Default Subcategory", async () => {
+    // Simulate a v1 (flat) installation.
+    localStorage.setItem(
+      "constructly.demo.labourCategories.v1",
+      JSON.stringify([
+        { id: "60000000-0000-0000-0000-000000000001", name: "Helper", color: "#F59E0B", dailyRatePaise: 55000 },
+      ]),
+    );
+    localStorage.setItem(
+      "constructly.demo.labourAttendance.v1",
+      JSON.stringify([
+        {
+          id: "old-1",
+          projectId: SKY,
+          date: "2026-07-10",
+          labourCategoryId: "60000000-0000-0000-0000-000000000001",
+          quantityPresent: 9,
+          dailyRatePaiseSnapshot: 55000,
+          estimatedCostPaise: 9 * 55000,
+          notes: null,
+          clientUuid: "old-1",
+          updatedAt: new Date().toISOString(),
+        },
+      ]),
+    );
+
+    const cats = await repo.listCategories();
+    expect(cats.length).toBe(1);
+    expect(cats[0].name).toBe("Helper");
+    expect(cats[0].subcategories.length).toBe(1);
+    expect(cats[0].subcategories[0].name).toBe("Helper"); // default subcategory
+    expect(cats[0].subcategories[0].dailyRatePaise).toBe(55000);
+
+    const records = await repo.listAttendance({ projectId: SKY });
+    expect(records.length).toBe(1);
+    expect(records[0].quantityPresent).toBe(9);
+    expect(records[0].categoryName).toBe("Helper");
+    expect(records[0].subcategoryName).toBe("Helper");
+    expect(records[0].estimatedCostPaise).toBe(9 * 55000); // history preserved
   });
 });

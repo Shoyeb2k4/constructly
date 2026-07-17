@@ -97,29 +97,45 @@ export function LaborSummaryView() {
           </div>
 
           <div className="grid gap-6 lg:grid-cols-2">
-            {/* Man-days by category */}
+            {/* Man-days by category → subcategory */}
             <Card>
               <CardHeader><CardTitle>Man-days by category</CardTitle></CardHeader>
-              <CardContent className="space-y-3">
+              <CardContent className="space-y-4">
                 {summary.byCategory.map((c) => (
-                  <div key={c.categoryId} className="space-y-1">
-                    <div className="flex items-center justify-between text-sm">
+                  <div key={c.categoryId} className="space-y-1.5">
+                    <div className="flex items-center justify-between text-sm font-semibold">
                       <span className="flex items-center gap-2">
-                        <span className="size-2.5 rounded-full" style={{ background: c.color }} />
+                        <span className="size-2.5 rounded-full" style={{ background: c.color ?? "#64748B" }} />
                         {c.name}
                       </span>
-                      <span className="font-mono text-xs text-foreground-muted">
+                      <span className="font-mono text-xs">
                         {c.manDays} · <MoneyText paise={c.estimatedCostPaise} compact />
                       </span>
                     </div>
                     <div className="h-1.5 overflow-hidden rounded-full bg-surface-muted">
                       <div
                         className="h-full rounded-full"
-                        style={{ width: `${Math.max(2, (c.manDays / maxCat) * 100)}%`, background: c.color }}
+                        style={{ width: `${Math.max(2, (c.manDays / maxCat) * 100)}%`, background: c.color ?? "#64748B" }}
                       />
+                    </div>
+                    <div className="space-y-0.5 pl-4">
+                      {c.subcategories.map((s) => (
+                        <div key={s.subcategoryId} className="flex items-center justify-between text-xs text-foreground-muted">
+                          <span className="truncate">{s.name}</span>
+                          <span className="font-mono">
+                            {s.manDays} · <MoneyText paise={s.estimatedCostPaise} compact />
+                          </span>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 ))}
+                <div className="flex items-center justify-between border-t border-border pt-2 text-sm font-semibold">
+                  <span>Grand total</span>
+                  <span className="font-mono">
+                    {summary.totalManDays} · <MoneyText paise={summary.estimatedCostPaise} compact />
+                  </span>
+                </div>
               </CardContent>
             </Card>
 

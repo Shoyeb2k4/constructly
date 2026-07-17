@@ -4,6 +4,17 @@ _Human-readable log of what changed and when. Newest first. Keep entries short; 
 
 ## [Unreleased]
 
+### 2026-07-16 — Labour hierarchy: Category → Subcategory (client change request)
+Attendance is now recorded per subcategory inside collapsible category groups (ADR-0023). Still headcounts only — no individual tracking.
+- **Schema:** `LabourCategory` (optional color, `displayOrder`) ⊃ `LabourSubcategory` (optional `dailyRatePaise`, `displayOrder`); `LabourAttendance` → `labourSubcategoryId`, keeping rate snapshots + stored `estimatedCostPaise` (ADR-0022). Unlimited depth on both levels.
+- **Attendance screen:** collapsible category groups (▼ Carpenter → Main Carpenter [12] / Carpenter Helper [8]) with per-subcategory steppers, direct input, notes, group + grand totals — still sub-1-minute entry. Copy-yesterday, offline-first, optimistic, sync chip, and daily PDF/Excel all preserved.
+- **Hierarchy management:** create/edit/delete categories and subcategories, move a subcategory between categories, and **drag-and-drop reordering** (dnd-kit) persisted via `displayOrder`.
+- **Reports & exports:** summaries and PDF/Excel now render Category → Subcategory with category totals and a grand total; by-project and daily trend unchanged.
+- **Dashboard:** labour widget shows today by category with subcategory breakdown, estimated cost today, 30-day man-days, and the daily trend — same shared assembler.
+- **Migration:** flat v1 categories auto-migrate to Category → Default Subcategory with all attendance preserved (`prisma/migration-labour-hierarchy.sql` for Postgres; automatic in demo). Verified live: 9 categories → 9+9, 105 records, zero loss.
+- Snapshot groundwork committed separately (`a1e11aa`): rates are frozen per record at first recording; later rate edits never rewrite history.
+- **Tests:** 71 passing (hierarchy CRUD/reorder, grouped sheets, snapshot immutability, v1→v2 migration, hierarchical dashboard widget). Build/typecheck/lint clean; verified in-browser.
+
 ### 2026-07-15 — Labour redesigned: category-based attendance (client change request)
 Individual labor tracking removed from the MVP; attendance is now a headcount per category.
 - **Removed:** Laborer/Attendance models, workers roster, per-worker rows, wages, contractor-per-laborer, payroll surface. Contractor model stays dormant in the schema.

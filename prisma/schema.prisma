@@ -64,14 +64,15 @@ model Company {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  users             User[]
-  projects          Project[]
-  activity          ActivityLog[]
-  contractors       Contractor[]
-  labourCategories  LabourCategory[]
-  labourAttendance  LabourAttendance[]
-  vendors           Vendor[]
-  purchaseOrders    PurchaseOrder[]
+  users               User[]
+  projects            Project[]
+  activity            ActivityLog[]
+  contractors         Contractor[]
+  labourCategories    LabourCategory[]
+  labourSubcategories LabourSubcategory[]
+  labourAttendance    LabourAttendance[]
+  vendors             Vendor[]
+  purchaseOrders      PurchaseOrder[]
 
   @@map("companies")
 }
@@ -249,22 +250,45 @@ model Contractor {
   @@map("contractors")
 }
 
-/// A labour category (trade), e.g. Helper, Mason, Electrician.
-/// dailyRatePaise is an OPTIONAL category-level day rate used to estimate
-/// labor cost (rate × headcount) — not per-worker tracking.
+/// A labour category (trade group), e.g. Carpenter, Electrician, Mason.
+/// Categories contain subcategories; attendance is recorded per subcategory.
 model LabourCategory {
-  id             String   @id @default(uuid()) @db.Uuid
-  companyId      String   @map("company_id") @db.Uuid
-  name           String
-  color          String
-  dailyRatePaise Int?     @map("daily_rate_paise")
-  createdAt      DateTime @default(now()) @map("created_at")
+  id           String   @id @default(uuid()) @db.Uuid
+  companyId    String   @map("company_id") @db.Uuid
+  name         String
+  color        String?
+  displayOrder Int      @default(0) @map("display_order")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
 
-  company    Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  attendance LabourAttendance[]
+  company       Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  subcategories LabourSubcategory[]
 
   @@unique([companyId, name])
+  @@index([companyId, displayOrder])
   @@map("labour_categories")
+}
+
+/// A labour subcategory, e.g. "Main Carpenter" / "Carpenter Helper" under
+/// Carpenter. dailyRatePaise is an OPTIONAL day rate used only for estimated
+/// labour cost (rate × headcount) — not per-worker tracking.
+model LabourSubcategory {
+  id             String   @id @default(uuid()) @db.Uuid
+  companyId      String   @map("company_id") @db.Uuid
+  categoryId     String   @map("category_id") @db.Uuid
+  name           String
+  dailyRatePaise Int?     @map("daily_rate_paise")
+  displayOrder   Int      @default(0) @map("display_order")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  company    Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  category   LabourCategory     @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  attendance LabourAttendance[]
+
+  @@unique([categoryId, name])
+  @@index([companyId, categoryId, displayOrder])
+  @@map("labour_subcategories")
 }
 
 /// Category-based daily attendance: the number of workers present for a
@@ -273,27 +297,27 @@ model LabourCategory {
 /// The category's day rate is SNAPSHOTTED at record time — editing a
 /// category's rate later never rewrites historical cost (ADR-0022).
 model LabourAttendance {
-  id                      String   @id @default(uuid()) @db.Uuid
-  companyId               String   @map("company_id") @db.Uuid
-  projectId               String   @map("project_id") @db.Uuid
-  date                    DateTime @db.Date
-  labourCategoryId        String   @map("labour_category_id") @db.Uuid
-  quantityPresent         Int      @map("quantity_present")
-  /// Rate snapshot at first recording (null if the category had no rate).
-  dailyRatePaiseSnapshot  Int?     @map("daily_rate_paise_snapshot")
+  id                     String   @id @default(uuid()) @db.Uuid
+  companyId              String   @map("company_id") @db.Uuid
+  projectId              String   @map("project_id") @db.Uuid
+  date                   DateTime @db.Date
+  labourSubcategoryId    String   @map("labour_subcategory_id") @db.Uuid
+  quantityPresent        Int      @map("quantity_present")
+  /// Rate snapshot at first recording (null if the subcategory had no rate).
+  dailyRatePaiseSnapshot Int?     @map("daily_rate_paise_snapshot")
   /// quantityPresent × dailyRatePaiseSnapshot, stored for immutable history.
-  estimatedCostPaise      Int      @default(0) @map("estimated_cost_paise")
-  notes                   String?
-  clientUuid              String   @unique @map("client_uuid")
-  clientSeq               BigInt   @map("client_seq")
-  createdAt               DateTime @default(now()) @map("created_at")
-  updatedAt               DateTime @updatedAt @map("updated_at")
+  estimatedCostPaise     Int      @default(0) @map("estimated_cost_paise")
+  notes                  String?
+  clientUuid             String   @unique @map("client_uuid")
+  clientSeq              BigInt   @map("client_seq")
+  createdAt              DateTime @default(now()) @map("created_at")
+  updatedAt              DateTime @updatedAt @map("updated_at")
 
-  company  Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  project  Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  category LabourCategory @relation(fields: [labourCategoryId], references: [id], onDelete: Cascade)
+  company     Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  project     Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  subcategory LabourSubcategory @relation(fields: [labourSubcategoryId], references: [id], onDelete: Cascade)
 
-  @@unique([projectId, date, labourCategoryId])
+  @@unique([projectId, date, labourSubcategoryId])
   @@index([companyId, projectId, date])
   @@index([companyId, date])
   @@map("labour_attendance")

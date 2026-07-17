@@ -1,18 +1,26 @@
 import { toPaise } from "@/lib/money";
-import { DEFAULT_CATEGORIES } from "../constants";
+import { DEFAULT_HIERARCHY } from "../constants";
 
 export interface CategoryRecord {
   id: string;
   name: string;
-  color: string;
+  color: string | null;
+  displayOrder: number;
+}
+
+export interface SubcategoryRecord {
+  id: string;
+  categoryId: string;
+  name: string;
   dailyRatePaise: number | null;
+  displayOrder: number;
 }
 
 export interface LabourAttendanceRecord {
   id: string;
   projectId: string;
   date: string; // YYYY-MM-DD
-  labourCategoryId: string;
+  labourSubcategoryId: string;
   quantityPresent: number;
   /** Rate snapshot at record time — immutable history (ADR-0022). */
   dailyRatePaiseSnapshot: number | null;
@@ -25,25 +33,32 @@ export interface LabourAttendanceRecord {
 const SKYLINE = "10000000-0000-0000-0000-000000000001";
 const ORION = "10000000-0000-0000-0000-000000000002";
 
-export const DEMO_CATEGORIES: CategoryRecord[] = DEFAULT_CATEGORIES.map((c, i) => ({
-  id: `60000000-0000-0000-0000-0000000000${String(i + 1).padStart(2, "0")}`,
+export const DEMO_CATEGORIES: CategoryRecord[] = DEFAULT_HIERARCHY.map((c, i) => ({
+  id: `6c000000-0000-0000-0000-0000000000${String(i + 1).padStart(2, "0")}`,
   name: c.name,
   color: c.color,
-  dailyRatePaise: toPaise(c.dailyRateRupees),
+  displayOrder: i,
 }));
 
-const ymd = (offset: number) => {
-  const d = new Date(Date.now() + offset * 86_400_000);
-  return d.toISOString().slice(0, 10);
-};
+export const DEMO_SUBCATEGORIES: SubcategoryRecord[] = DEFAULT_HIERARCHY.flatMap((c, ci) =>
+  c.subcategories.map((s, si) => ({
+    id: `65000000-0000-0000-0000-0000000000${String(ci * 2 + si + 1).padStart(2, "0")}`,
+    categoryId: DEMO_CATEGORIES[ci].id,
+    name: s.name,
+    dailyRatePaise: toPaise(s.dailyRateRupees),
+    displayOrder: si,
+  })),
+);
+
+const ymd = (offset: number) => new Date(Date.now() + offset * 86_400_000).toISOString().slice(0, 10);
 const isWeekend = (iso: string) => {
   const dow = new Date(iso + "T00:00:00Z").getUTCDay();
   return dow === 0 || dow === 6;
 };
 
-// Typical crew sizes per category on Skyline (deterministic variance).
-const SKYLINE_BASE = [12, 8, 4, 3, 2, 0, 5, 1]; // matches DEFAULT_CATEGORIES order
-const ORION_BASE = [6, 3, 0, 2, 0, 0, 4, 1];
+// Typical crew sizes per subcategory (index-aligned with DEMO_SUBCATEGORIES).
+const SKYLINE_BASE = [4, 6, 3, 3, 8, 5, 2, 3, 2, 2];
+const ORION_BASE = [2, 3, 1, 2, 4, 3, 0, 0, 1, 1];
 
 /** Seed the last ~3 working weeks; today is left blank for the live demo. */
 export function demoLabourAttendance(): LabourAttendanceRecord[] {
@@ -51,41 +66,26 @@ export function demoLabourAttendance(): LabourAttendanceRecord[] {
   for (let offset = -21; offset <= -1; offset++) {
     const date = ymd(offset);
     if (isWeekend(date)) continue;
-    DEMO_CATEGORIES.forEach((cat, i) => {
-      const wobble = ((offset * 7 + i * 3) % 5) - 2; // -2..+2, deterministic
-      const rate = cat.dailyRatePaise;
-      const skyQty = Math.max(0, SKYLINE_BASE[i] + wobble);
-      if (skyQty > 0) {
+    DEMO_SUBCATEGORIES.forEach((sub, i) => {
+      const wobble = ((offset * 7 + i * 3) % 3) - 1; // -1..+1, deterministic
+      const push = (projectId: string, base: number, tag: string) => {
+        const qty = Math.max(0, base + wobble);
+        if (qty <= 0) return;
         records.push({
-          id: `sky-${cat.id}-${date}`,
-          projectId: SKYLINE,
+          id: `${tag}-${sub.id}-${date}`,
+          projectId,
           date,
-          labourCategoryId: cat.id,
-          quantityPresent: skyQty,
-          dailyRatePaiseSnapshot: rate,
-          estimatedCostPaise: (rate ?? 0) * skyQty,
+          labourSubcategoryId: sub.id,
+          quantityPresent: qty,
+          dailyRatePaiseSnapshot: sub.dailyRatePaise,
+          estimatedCostPaise: (sub.dailyRatePaise ?? 0) * qty,
           notes: null,
-          clientUuid: `seed-sky-${cat.id}-${date}`,
+          clientUuid: `seed-${tag}-${sub.id}-${date}`,
           updatedAt: new Date().toISOString(),
         });
-      }
-      if (offset >= -10) {
-        const orionQty = Math.max(0, ORION_BASE[i] + (wobble % 2));
-        if (orionQty > 0) {
-          records.push({
-            id: `ori-${cat.id}-${date}`,
-            projectId: ORION,
-            date,
-            labourCategoryId: cat.id,
-            quantityPresent: orionQty,
-            dailyRatePaiseSnapshot: rate,
-            estimatedCostPaise: (rate ?? 0) * orionQty,
-            notes: null,
-            clientUuid: `seed-ori-${cat.id}-${date}`,
-            updatedAt: new Date().toISOString(),
-          });
-        }
-      }
+      };
+      push(SKYLINE, SKYLINE_BASE[i], "sky");
+      if (offset >= -10) push(ORION, ORION_BASE[i], "ori");
     });
   }
   return records;

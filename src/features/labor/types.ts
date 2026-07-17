@@ -1,45 +1,74 @@
-/** Category-based labour domain (client change request). An attendance record
- *  is a headcount per labour category per project per date — no individual
- *  worker tracking. Money is integer paise. */
+/** Category → Subcategory labour domain (ADR-0023). Attendance is a headcount
+ *  per SUBCATEGORY per project per date — no individual worker tracking.
+ *  Money is integer paise; costs are stored rate snapshots (ADR-0022). */
 
 export interface LabourCategory {
   id: string;
   name: string;
-  color: string; // hex
-  /** Optional category-level day rate for labor-cost ESTIMATES (rate × headcount). */
+  color: string | null;
+  displayOrder: number;
+}
+
+export interface LabourSubcategory {
+  id: string;
+  categoryId: string;
+  name: string;
+  /** Optional day rate used only for labour-cost ESTIMATES (rate × headcount). */
   dailyRatePaise: number | null;
+  displayOrder: number;
+}
+
+export interface CategoryWithSubs extends LabourCategory {
+  subcategories: LabourSubcategory[];
 }
 
 export interface CreateCategoryInput {
   name: string;
-  color: string;
-  dailyRatePaise?: number | null;
+  color?: string | null;
 }
-
 export type UpdateCategoryInput = Partial<CreateCategoryInput>;
 
-/** One category row on the daily sheet. quantity 0 = not recorded.
- *  dailyRatePaise is the EFFECTIVE rate: the record's snapshot when recorded,
- *  else the category's current rate (used for new entries). */
-export interface SheetRow {
+export interface CreateSubcategoryInput {
   categoryId: string;
   name: string;
-  color: string;
+  dailyRatePaise?: number | null;
+}
+/** categoryId in the patch moves the subcategory to another category. */
+export type UpdateSubcategoryInput = Partial<CreateSubcategoryInput>;
+
+/* ── Attendance sheet (grouped by category) ──────────────────────────── */
+
+/** One subcategory row. quantity 0 = not recorded. dailyRatePaise is the
+ *  EFFECTIVE rate: the record's snapshot when recorded, else current. */
+export interface SheetRow {
+  subcategoryId: string;
+  name: string;
   dailyRatePaise: number | null;
   quantity: number;
   notes: string | null;
 }
 
-export interface AttendanceSheet {
-  projectId: string;
-  date: string; // YYYY-MM-DD
+export interface SheetGroup {
+  categoryId: string;
+  name: string;
+  color: string | null;
   rows: SheetRow[];
   totalPresent: number;
   estimatedCostPaise: number;
 }
 
+export interface AttendanceSheet {
+  projectId: string;
+  date: string; // YYYY-MM-DD
+  groups: SheetGroup[];
+  totalPresent: number;
+  estimatedCostPaise: number;
+}
+
+/* ── Records, filters, summaries ─────────────────────────────────────── */
+
 /** Flat record for range views and exports. Cost is the stored snapshot-based
- *  value (quantity × rate-at-record-time) — immutable history (ADR-0022). */
+ *  value (quantity × rate-at-record-time) — immutable history. */
 export interface AttendanceRecordItem {
   id: string;
   projectId: string;
@@ -47,7 +76,9 @@ export interface AttendanceRecordItem {
   date: string;
   categoryId: string;
   categoryName: string;
-  color: string;
+  color: string | null;
+  subcategoryId: string;
+  subcategoryName: string;
   quantityPresent: number;
   dailyRatePaiseSnapshot: number | null;
   estimatedCostPaise: number;
@@ -60,12 +91,20 @@ export interface AttendanceFilters {
   to?: string;
 }
 
+export interface SubcategoryManDays {
+  subcategoryId: string;
+  name: string;
+  manDays: number;
+  estimatedCostPaise: number;
+}
+
 export interface CategoryManDays {
   categoryId: string;
   name: string;
-  color: string;
+  color: string | null;
   manDays: number;
   estimatedCostPaise: number;
+  subcategories: SubcategoryManDays[];
 }
 
 export interface LabourTrendPoint {

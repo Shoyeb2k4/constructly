@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { HardHat, ArrowUpRight } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { MoneyText } from "@/components/patterns/money-text";
 import type { LabourWidget } from "../types";
 
 export function LabourCard({ labour }: { labour: LabourWidget }) {
@@ -22,6 +23,12 @@ export function LabourCard({ labour }: { labour: LabourWidget }) {
             <p className="text-2xl font-semibold leading-none">{todayTotal}</p>
           </div>
           <div className="text-right">
+            <p className="text-xs text-foreground-subtle">Est. cost today</p>
+            <p className="text-lg font-medium leading-none">
+              <MoneyText paise={labour.todayCostPaise} compact />
+            </p>
+          </div>
+          <div className="text-right">
             <p className="text-xs text-foreground-subtle">Man-days · 30d</p>
             <p className="text-lg font-medium leading-none">{labour.manDays30}</p>
           </div>
@@ -29,13 +36,23 @@ export function LabourCard({ labour }: { labour: LabourWidget }) {
 
         {labour.todayByCategory.length > 0 ? (
           <div className="space-y-1.5">
-            {labour.todayByCategory.slice(0, 5).map((c) => (
-              <div key={c.name} className="flex items-center justify-between text-sm">
-                <span className="flex items-center gap-2">
-                  <span className="size-2.5 rounded-full" style={{ background: c.color }} />
-                  {c.name}
-                </span>
-                <span className="font-mono tabular-nums text-foreground-muted">{c.quantity}</span>
+            {labour.todayByCategory.slice(0, 4).map((c) => (
+              <div key={c.name}>
+                <div className="flex items-center justify-between text-sm font-medium">
+                  <span className="flex items-center gap-2">
+                    <span className="size-2.5 rounded-full" style={{ background: c.color }} />
+                    {c.name}
+                  </span>
+                  <span className="font-mono tabular-nums text-foreground-muted">{c.quantity}</span>
+                </div>
+                <div className="space-y-0.5 pl-4">
+                  {c.subcategories.slice(0, 3).map((s) => (
+                    <div key={s.name} className="flex items-center justify-between text-xs text-foreground-subtle">
+                      <span className="truncate">{s.name}</span>
+                      <span className="font-mono tabular-nums">{s.quantity}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
             ))}
           </div>
