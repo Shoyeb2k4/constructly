@@ -18,6 +18,7 @@ function base(
   return {
     budgetPaise: 0,
     contractValuePaise: 0,
+    procurementBudgetPaise: null,
     usedPaise: 0,
     startDate: dateOnly(-120),
     expectedCompletionDate: dateOnly(90),
@@ -52,6 +53,7 @@ export function demoSeed(): ProjectDetail[] {
       stage: "CONSTRUCTION",
       budgetPaise: toPaise(1_20_00_000),
       contractValuePaise: toPaise(1_35_00_000),
+      procurementBudgetPaise: toPaise(70_00_000),
       usedPaise: toPaise(92_40_000),
       expectedCompletionDate: dateOnly(64),
       tags: ["high-rise", "priority"],
@@ -86,6 +88,7 @@ export function demoSeed(): ProjectDetail[] {
       stage: "PROCUREMENT",
       budgetPaise: toPaise(2_10_00_000),
       contractValuePaise: toPaise(2_30_00_000),
+      procurementBudgetPaise: toPaise(1_30_00_000),
       usedPaise: toPaise(31_00_000),
       expectedCompletionDate: dateOnly(128),
       tags: ["phase-1"],

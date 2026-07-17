@@ -44,6 +44,8 @@ export const projectFormSchema = z
     gpsLng: z.coerce.number().min(-180).max(180).optional(),
     budgetRupees: z.coerce.number().min(0, "Cannot be negative").default(0),
     contractValueRupees: z.coerce.number().min(0).default(0),
+    /** Optional dedicated procurement budget (blank = not set). */
+    procurementBudgetRupees: z.coerce.number().min(0, "Cannot be negative").optional(),
     startDate: z.string().optional().or(z.literal("")),
     expectedCompletionDate: z.string().optional().or(z.literal("")),
     pmId: z.string().optional().or(z.literal("")),
@@ -81,6 +83,7 @@ export function formToInput(v: z.output<typeof projectFormSchema>): CreateProjec
     gpsLng: v.gpsLng ?? null,
     budgetPaise: toPaise(v.budgetRupees ?? 0),
     contractValuePaise: toPaise(v.contractValueRupees ?? 0),
+    procurementBudgetPaise: v.procurementBudgetRupees != null ? toPaise(v.procurementBudgetRupees) : null,
     startDate: v.startDate || null,
     expectedCompletionDate: v.expectedCompletionDate || null,
     pmId: v.pmId || null,

@@ -4,7 +4,16 @@ import { prisma } from "@/lib/db/prisma";
 import { requireUser } from "@/lib/auth/current-user";
 import { spendByProject } from "@/features/budget/server-actions";
 import { poCountsForBudget } from "@/features/budget/calc";
-import type { DashActivity, RawDashboardData, RawLabourEntry, RawSpendEntry } from "../types";
+import { poPaymentStatus } from "@/features/procurement/calc";
+import type {
+  DashActivity,
+  RawDashboardData,
+  RawLabourEntry,
+  RawProcurementPayment,
+  RawProcurementPO,
+  RawSpendEntry,
+} from "../types";
+import type { PurchaseOrderListItem } from "@/features/procurement/types";
 
 export async function gatherServerDashboard(): Promise<RawDashboardData> {
   const user = await requireUser();
@@ -15,7 +24,7 @@ export async function gatherServerDashboard(): Promise<RawDashboardData> {
 
   const projectWhere = { companyId, deletedAt: null, ...(isOwner ? {} : { pmId: user.id }) };
 
-  const [projects, spend, company, labour, pos, logs] = await Promise.all([
+  const [projects, spend, company, labour, pos, payments, logs] = await Promise.all([
     prisma.project.findMany({ where: projectWhere, include: { deadlines: true } }),
     spendByProject(),
     prisma.company.findUnique({ where: { id: companyId }, select: { settings: true } }),
@@ -25,7 +34,11 @@ export async function gatherServerDashboard(): Promise<RawDashboardData> {
     }),
     prisma.purchaseOrder.findMany({
       where: { companyId, ...(isOwner ? {} : { project: { pmId: user.id } }) },
-      include: { vendor: { select: { businessName: true } } },
+      include: { vendor: { select: { businessName: true } }, project: { select: { name: true, code: true } } },
+    }),
+    prisma.vendorPayment.findMany({
+      where: { companyId, ...(isOwner ? {} : { project: { pmId: user.id } }) },
+      select: { vendorId: true, purchaseOrderId: true, amountPaise: true },
     }),
     prisma.activityLog.findMany({
       where: { companyId },
@@ -78,19 +91,52 @@ export async function gatherServerDashboard(): Promise<RawDashboardData> {
       .map((p) => ({ date: p.purchaseDate.toISOString().slice(0, 10), laborPaise: 0, procurementPaise: Number(p.totalPaise) })),
   ];
 
-  const pendingPOs = pos
-    .filter((p) => p.status === "SUBMITTED")
-    .map((p) => ({
+  const paidByPO = new Map<string, number>();
+  payments.forEach((p) => {
+    if (p.purchaseOrderId) paidByPO.set(p.purchaseOrderId, (paidByPO.get(p.purchaseOrderId) ?? 0) + Number(p.amountPaise));
+  });
+
+  const toListItem = (p: (typeof pos)[number]): PurchaseOrderListItem => {
+    const total = Number(p.totalPaise);
+    const paid = paidByPO.get(p.id) ?? 0;
+    return {
       id: p.id,
       poNumber: p.poNumber,
-      status: "SUBMITTED" as const,
+      status: p.status,
       purchaseDate: p.purchaseDate.toISOString().slice(0, 10),
-      totalPaise: Number(p.totalPaise),
+      expectedDelivery: p.expectedDelivery ? p.expectedDelivery.toISOString().slice(0, 10) : null,
+      subtotalPaise: Number(p.subtotalPaise),
+      gstPaise: Number(p.gstPaise),
+      totalPaise: total,
+      paidPaise: paid,
+      paymentStatus: poPaymentStatus(total, paid),
       invoiceNumber: p.invoiceNumber,
       vendor: { id: p.vendorId, name: p.vendor.businessName },
-      project: { id: p.projectId, name: "", code: "" },
+      project: { id: p.projectId, name: p.project.name, code: p.project.code },
       createdAt: p.createdAt.toISOString(),
-    }));
+    };
+  };
+
+  const pendingPOs = pos.filter((p) => p.status === "SUBMITTED").map(toListItem);
+
+  const procurementPOs: RawProcurementPO[] = pos.map((p) => ({
+    id: p.id,
+    poNumber: p.poNumber,
+    vendorId: p.vendorId,
+    vendorName: p.vendor.businessName,
+    projectId: p.projectId,
+    projectName: p.project.name,
+    projectCode: p.project.code,
+    status: p.status,
+    purchaseDate: p.purchaseDate.toISOString().slice(0, 10),
+    totalPaise: Number(p.totalPaise),
+    paidPaise: paidByPO.get(p.id) ?? 0,
+    createdAt: p.createdAt.toISOString(),
+  }));
+  const procurementPayments: RawProcurementPayment[] = payments.map((p) => ({
+    vendorId: p.vendorId,
+    amountPaise: Number(p.amountPaise),
+  }));
 
   const activity: DashActivity[] = logs.map((l) => ({
     id: l.id,
@@ -101,5 +147,15 @@ export async function gatherServerDashboard(): Promise<RawDashboardData> {
     kind: "project",
   }));
 
-  return { projects: rawProjects, spendEntries, labourEntries, pendingPOs, activity, today };
+  return {
+    projects: rawProjects,
+    spendEntries,
+    labourEntries,
+    pendingPOs,
+    procurementPOs,
+    procurementPayments,
+    approvalRequired: approval,
+    activity,
+    today,
+  };
 }

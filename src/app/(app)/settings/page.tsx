@@ -4,6 +4,7 @@ import { PageHeader } from "@/components/patterns/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { SettingsPreferences } from "./settings-form";
+import { MaterialCategoriesCard } from "@/features/procurement/components/material-categories-card";
 
 export const metadata: Metadata = { title: "Settings" };
 
@@ -49,6 +50,7 @@ export default async function SettingsPage() {
         </Card>
 
         <SettingsPreferences />
+        <MaterialCategoriesCard />
       </div>
     </div>
   );

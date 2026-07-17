@@ -121,13 +121,37 @@ directly. Ordering via `display_order` (drag-and-drop). Migration from the flat 
 repointed). `Contractor` remains (lean, dormant) for future payments/ledger. RLS scopes
 attendance via `can_access_project`; categories + subcategories are tenant-scoped.
 
-## Module 3 — Vendors & Procurement (implemented)
-`Vendor` (lean; future payments/invoices/advances/ledger/GST attach as new tables — no redesign),
-`VendorFavorite` (per-user), `PurchaseOrder` (`status` DRAFT/SUBMITTED/APPROVED, `total_paise` BigInt,
-`revised_from_id` self-relation for the Revise workflow, unique `(company_id, po_number)`), and
-`POLineItem` (`quantity` Decimal, `rate_paise` Int, `amount_paise` BigInt, `sort_order` for future
-drag-reorder). RLS: vendors tenant-scoped; POs + line items PM-scoped via `can_access_project`.
-Budget is derived (labor + counted POs), not stored — see ADR-0018.
+## Module 3 — Vendors & Procurement v2 (ADR-0024)
+Many-to-many `Vendor ↔ Project` through purchase orders. Budget/outstanding are **derived, not stored**.
+```
+Vendor (…, pan?)
+  ├─< PurchaseOrder (project, status DRAFT|SUBMITTED|APPROVED,
+  │     expected_delivery?, subtotal_paise, gst_paise, total_paise = subtotal + GST,
+  │     revised_from_id self-relation)
+  │      └─< POLineItem (material, category?, quantity Decimal, unit,
+  │            rate_paise, gst_rate_bps, gst_paise, amount_paise, sort_order)
+  ├─< VendorPayment (project, purchase_order_id? OPTIONAL, amount_paise,
+  │     payment_mode enum, reference_number?, date, remarks, created_by)
+  ├─< VendorDocument (category, storage_path, filename, size_bytes, …)
+  └─< GoodsReceipt ─< GoodsReceiptItem   (schema-ready; UI deferred)
+```
+- **Money:** `POLineItem.amount_paise` = taxable (qty × rate, ex-GST); `gst_paise` rounded **per line**
+  (`round(qty × rate × gst_rate_bps / 10000)`); PO `total_paise` (grand, incl. GST) feeds budget + outstanding.
+- **GST rate** stored as integer **basis points** (`gst_rate_bps`, 1800 = 18%) — no float tax math.
+- **Rate snapshot:** `rate_paise` is frozen at entry; approved POs are immutable (Revise clones to a linked
+  draft via `revised_from_id`; Duplicate clones to an unlinked draft dated today).
+- **Outstanding (derived, ADR-0024):** `Σ counted PO grand totals − Σ payments`, scoped by vendor/project;
+  payment status (UNPAID/PARTIAL/PAID) and aging (0–30/31–60/60+, advances applied FIFO) come from pure calc.
+- **VendorPayment** is always project-aware; the PO link is optional (advances / on-account / settlements).
+  DELETE is owner-only + audited.
+- **Material categories** live in `Company.settings.materialCategories` (seeded presets; Settings-managed).
+- **Project.procurement_budget_paise?** — dedicated procurement budget, independent of `budget_paise`.
+- **RLS:** vendors + vendor_documents tenant-scoped; purchase_orders / po_line_items / vendor_payments /
+  goods_receipts PM-scoped via `can_access_project`; vendor_payments UPDATE/DELETE additionally owner-only.
+- **Migration:** `prisma/migration-procurement-v2.sql` (backfill `subtotal = total, gst = 0`; seed categories);
+  demo v1 → v2 auto-migration. `PaymentMode`: CASH | UPI | BANK_TRANSFER | CHEQUE | CARD | OTHER.
+- Online-only (financial integrity); labour attendance is the sole offline entity.
 
 ## Deferred (post-MVP, schema-ready)
-Contractor payouts · payroll · inventory · multi-currency · PO receipts/GRN · client portal.
+Contractor payouts · payroll · inventory · multi-currency · client portal.
+`GoodsReceipt`/`GoodsReceiptItem` tables + RLS ship now (ADR-0024) with repository stubs; receiving UI is deferred.

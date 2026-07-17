@@ -147,6 +147,10 @@ export function CreateProjectSheet({
               </Field>
             </div>
 
+            <Field label="Procurement budget (₹, optional)" error={errors.procurementBudgetRupees?.message}>
+              <Input type="number" min={0} step={1000} placeholder="Dedicated materials budget" {...register("procurementBudgetRupees")} />
+            </Field>
+
             <div className="grid grid-cols-2 gap-4">
               <Field label="Start date" error={errors.startDate?.message}>
                 <Input type="date" {...register("startDate")} />

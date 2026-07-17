@@ -83,9 +83,14 @@ export function AddVendorSheet({ open, onOpenChange }: { open: boolean; onOpenCh
                 <Input placeholder="29AAACL1234M1Z5" className="font-mono" {...register("gstin")} />
               </Field>
             </div>
-            <Field label="Address" error={errors.address?.message}>
-              <Input placeholder="Peenya, Bengaluru" {...register("address")} />
-            </Field>
+            <div className="grid grid-cols-2 gap-4">
+              <Field label="PAN" error={errors.pan?.message}>
+                <Input placeholder="AAACL1234M" className="font-mono uppercase" {...register("pan")} />
+              </Field>
+              <Field label="Address" error={errors.address?.message}>
+                <Input placeholder="Peenya, Bengaluru" {...register("address")} />
+              </Field>
+            </div>
             <Field label="Materials supplied">
               <div className="flex flex-wrap items-center gap-1.5 rounded-[var(--radius)] border border-border-strong bg-surface px-2 py-1.5">
                 {materials.map((m) => (

@@ -1,11 +1,15 @@
-import { deriveBudget } from "@/features/budget/calc";
+import { deriveBudget, poCountsForBudget } from "@/features/budget/calc";
+import { poPaymentStatus } from "@/features/procurement/calc";
+import type { PurchaseOrderListItem } from "@/features/procurement/types";
 import type {
   BudgetHealthItem,
   DashboardSnapshot,
   DeadlineItem,
+  ProcurementWidget,
   RawDashboardData,
   RawProject,
   SpendWeek,
+  VendorRollupRow,
 } from "./types";
 
 const DAY = 86_400_000;
@@ -70,6 +74,84 @@ function healthOf(p: RawProject): BudgetHealthItem {
     utilizationPct: b.utilizationPct,
     overBudget: b.overBudget,
   };
+}
+
+/** Month key (YYYY-MM) of a YYYY-MM-DD date. */
+function monthKey(dateISO: string): string {
+  return dateISO.slice(0, 7);
+}
+
+/** Procurement widgets: spend, outstanding + top vendors, recent POs, trend. */
+function assembleProcurement(raw: RawDashboardData): ProcurementWidget {
+  const counted = raw.procurementPOs.filter((p) => poCountsForBudget(p.status, raw.approvalRequired));
+  const spendPaise = counted.reduce((s, p) => s + p.totalPaise, 0);
+
+  // Outstanding per vendor = counted purchases − all payments to that vendor.
+  const byVendor = new Map<string, { name: string; purchased: number; paid: number }>();
+  const bump = (id: string, name: string) => {
+    let v = byVendor.get(id);
+    if (!v) byVendor.set(id, (v = { name, purchased: 0, paid: 0 }));
+    return v;
+  };
+  counted.forEach((p) => (bump(p.vendorId, p.vendorName).purchased += p.totalPaise));
+  raw.procurementPayments.forEach((p) => {
+    const v = byVendor.get(p.vendorId);
+    if (v) v.paid += p.amountPaise;
+  });
+
+  const topVendors: VendorRollupRow[] = [...byVendor.entries()]
+    .map(([vendorId, v]) => ({ vendorId, name: v.name, amountPaise: v.purchased }))
+    .filter((v) => v.amountPaise > 0)
+    .sort((a, b) => b.amountPaise - a.amountPaise)
+    .slice(0, 5);
+
+  const outstandingVendors: VendorRollupRow[] = [...byVendor.entries()]
+    .map(([vendorId, v]) => ({ vendorId, name: v.name, amountPaise: v.purchased - v.paid }))
+    .filter((v) => v.amountPaise > 0)
+    .sort((a, b) => b.amountPaise - a.amountPaise)
+    .slice(0, 5);
+
+  const outstandingPaise = [...byVendor.values()].reduce(
+    (s, v) => s + Math.max(0, v.purchased - v.paid),
+    0,
+  );
+
+  const paidByPO = new Map(raw.procurementPOs.map((p) => [p.id, p.paidPaise]));
+  const recentPOs: PurchaseOrderListItem[] = [...raw.procurementPOs]
+    .sort((a, b) => b.purchaseDate.localeCompare(a.purchaseDate))
+    .slice(0, 6)
+    .map((p) => ({
+      id: p.id,
+      poNumber: p.poNumber,
+      status: p.status,
+      purchaseDate: p.purchaseDate,
+      expectedDelivery: null,
+      subtotalPaise: p.totalPaise,
+      gstPaise: 0,
+      totalPaise: p.totalPaise,
+      paidPaise: paidByPO.get(p.id) ?? 0,
+      paymentStatus: poPaymentStatus(p.totalPaise, paidByPO.get(p.id) ?? 0),
+      invoiceNumber: null,
+      vendor: { id: p.vendorId, name: p.vendorName },
+      project: { id: p.projectId, name: p.projectName, code: p.projectCode },
+      createdAt: p.createdAt,
+    }));
+
+  // Monthly procurement trend — last 6 months ending at `today`.
+  const months: string[] = [];
+  const base = new Date(raw.today + "T00:00:00Z");
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth() - i, 1));
+    months.push(d.toISOString().slice(0, 7));
+  }
+  const monthIndex = new Map(months.map((m) => [m, 0]));
+  counted.forEach((p) => {
+    const m = monthKey(p.purchaseDate);
+    if (monthIndex.has(m)) monthIndex.set(m, monthIndex.get(m)! + p.totalPaise);
+  });
+  const monthlyTrend = months.map((m) => ({ month: m, procurementPaise: monthIndex.get(m) ?? 0 }));
+
+  return { spendPaise, outstandingPaise, outstandingVendors, topVendors, recentPOs, monthlyTrend };
 }
 
 /**
@@ -187,6 +269,7 @@ export function assembleDashboard(raw: RawDashboardData): DashboardSnapshot {
     spendTrend: bucketSpendByWeek(raw.spendEntries, today),
     costSplit,
     labour,
+    procurement: assembleProcurement(raw),
     budgetHealth,
     attention: {
       overdueProjects,

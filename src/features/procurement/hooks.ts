@@ -4,8 +4,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { procurementApi, procurementKeys } from "./data";
 import type {
+  CreatePaymentInput,
   CreatePOInput,
   CreateVendorInput,
+  PaymentFilters,
   POFilters,
   UpdateVendorInput,
   VendorFilters,
@@ -31,6 +33,28 @@ export function usePurchaseOrder(id: string) {
 }
 export function usePendingApprovalCount() {
   return useQuery({ queryKey: procurementKeys.pendingApprovals, queryFn: () => procurementApi.pendingApprovalCount() });
+}
+export function useMaterialCategories() {
+  return useQuery({
+    queryKey: procurementKeys.materialCategories,
+    queryFn: () => procurementApi.listMaterialCategories(),
+    staleTime: 5 * 60_000,
+  });
+}
+export function usePayments(filters: PaymentFilters = {}) {
+  return useQuery({ queryKey: procurementKeys.payments(filters), queryFn: () => procurementApi.listPayments(filters) });
+}
+export function useProjectProcurement(projectId: string) {
+  return useQuery({
+    queryKey: procurementKeys.projectProcurement(projectId),
+    queryFn: () => procurementApi.getProjectProcurement(projectId),
+  });
+}
+export function useVendorAging(vendorId: string, projectId?: string) {
+  return useQuery({
+    queryKey: procurementKeys.vendorAging(vendorId, projectId),
+    queryFn: () => procurementApi.vendorAging(vendorId, projectId),
+  });
 }
 
 /* ── Vendor mutations ────────────────────────────────────────────────── */
@@ -61,8 +85,24 @@ export function useVendorMutations() {
     mutationFn: (id: string) => procurementApi.toggleVendorFavorite(id),
     onSuccess: invalidate,
   });
+  const addDocument = useMutation({
+    mutationFn: (v: { vendorId: string; doc: { filename: string; sizeBytes: number; mimeType: string } }) =>
+      procurementApi.addVendorDocument(v.vendorId, v.doc),
+    onSuccess: (detail) => {
+      qc.setQueryData(procurementKeys.vendor(detail.id), detail);
+      toast.success("Document added");
+    },
+  });
+  const removeDocument = useMutation({
+    mutationFn: (v: { vendorId: string; docId: string }) =>
+      procurementApi.removeVendorDocument(v.vendorId, v.docId),
+    onSuccess: (detail) => {
+      qc.setQueryData(procurementKeys.vendor(detail.id), detail);
+      toast.success("Document removed");
+    },
+  });
 
-  return { create, update, setStatus, toggleFavorite };
+  return { create, update, setStatus, toggleFavorite, addDocument, removeDocument };
 }
 
 /* ── PO mutations (also invalidate budget + projects) ────────────────── */
@@ -73,6 +113,7 @@ export function usePOMutations() {
     qc.invalidateQueries({ queryKey: procurementKeys.all });
     qc.invalidateQueries({ queryKey: ["budget"] });
     qc.invalidateQueries({ queryKey: ["projects"] });
+    qc.invalidateQueries({ queryKey: ["dashboard"] });
   };
 
   const create = useMutation({
@@ -112,6 +153,13 @@ export function usePOMutations() {
       toast.success("Revision created as a new draft");
     },
   });
+  const duplicate = useMutation({
+    mutationFn: (id: string) => procurementApi.duplicatePurchaseOrder(id),
+    onSuccess: (po) => {
+      invalidateAll();
+      toast.success(`Duplicated as ${po.poNumber} (draft)`);
+    },
+  });
   const remove = useMutation({
     mutationFn: (id: string) => procurementApi.deletePurchaseOrder(id),
     onSuccess: () => {
@@ -120,5 +168,48 @@ export function usePOMutations() {
     },
   });
 
-  return { create, update, submit, approve, revise, remove };
+  return { create, update, submit, approve, revise, duplicate, remove };
+}
+
+/* ── Payment mutations (invalidate procurement + budget + dashboard) ─── */
+
+export function usePaymentMutations() {
+  const qc = useQueryClient();
+  const invalidateAll = () => {
+    qc.invalidateQueries({ queryKey: procurementKeys.all });
+    qc.invalidateQueries({ queryKey: ["budget"] });
+    qc.invalidateQueries({ queryKey: ["dashboard"] });
+  };
+
+  const create = useMutation({
+    mutationFn: (input: CreatePaymentInput) => procurementApi.createPayment(input),
+    onSuccess: () => {
+      invalidateAll();
+      toast.success("Payment recorded");
+    },
+    onError: () => toast.error("Couldn't record the payment"),
+  });
+  const remove = useMutation({
+    mutationFn: (id: string) => procurementApi.deletePayment(id),
+    onSuccess: () => {
+      invalidateAll();
+      toast.success("Payment deleted");
+    },
+  });
+
+  return { create, remove };
+}
+
+/* ── Material category mutations ─────────────────────────────────────── */
+
+export function useMaterialCategoryMutations() {
+  const qc = useQueryClient();
+  const save = useMutation({
+    mutationFn: (categories: string[]) => procurementApi.setMaterialCategories(categories),
+    onSuccess: (next) => {
+      qc.setQueryData(procurementKeys.materialCategories, next);
+      toast.success("Material categories saved");
+    },
+  });
+  return { save };
 }

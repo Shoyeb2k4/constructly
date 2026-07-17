@@ -29,6 +29,7 @@ Contractors, laborers, **offline-first attendance capture** (present/absent/half
 
 ### Module 3 — Vendors & Procurement
 Vendor CRM, POs + line items, **configurable approval flow**, budget used/remaining + soft overrun warning, quick-PO offline.
+**v2 (2026-07-17, ADR-0024):** GST line tax, vendor payments + derived outstanding/aging, dedicated procurement budget, project Procurement tab, vendor profile redesign, material categories, goods-receipt schema.
 
 ### Module 4 — Executive Dashboard
 Real-data overview: active projects, deadlines, overdue, today's labor, purchases, procurement/budget summary, recent activity, quick actions.
@@ -45,7 +46,7 @@ Performance, a11y audit, full empty/loading/error pass, seed/demo data, security
 | 0 Foundation | ✅ Shipped 2026-07-14 — tagged v0.1.0-foundation |
 | 1 Project Management | ✅ Shipped 2026-07-14 — tagged v0.2.0-projects |
 | 2 Labor & Attendance | ✅ Shipped 2026-07-14 — tagged v0.3.0-labor |
-| 3 Vendors & Procurement | ✅ Shipped 2026-07-14 — tagged v0.4.0-procurement |
-| 4 Executive Dashboard | ✅ Shipped 2026-07-14 — real KPIs, charts, attention, activity, 75 tests |
-| 5 Reports & Analytics | Next — spec pending approval |
+| 3 Vendors & Procurement | ✅ Shipped 2026-07-14 — tagged v0.4.0-procurement · **v2 2026-07-17 (GST, payments, outstanding) — tagged v0.6.0-procurement-v2** |
+| 4 Executive Dashboard | ✅ Shipped 2026-07-14 — real KPIs, charts, attention, activity; procurement widget added in v2 |
+| 5 Reports & Analytics | Next — approved, paused for Procurement v2; resumes now |
 | 6 Hardening | Planned |

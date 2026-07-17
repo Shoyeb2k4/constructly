@@ -76,13 +76,33 @@ registered sync entity (`labour_attendance`); `/api/sync` upserts idempotently o
 PDF/Excel export is client-side (`src/features/labor/exports.ts`, jsPDF + SheetJS), grouped with
 category totals and a grand total.
 
-## Module 3 — Vendors & Procurement (server actions)
-`src/features/procurement/server/actions.ts` behind `ProcurementRepository` (demo mirror).
-Vendors: `listVendors` / `getVendor` (+ history) / `createVendor` (Owner) / `updateVendor` (Owner) /
-`setVendorStatus` (Owner) / `toggleVendorFavorite` / `listMaterials`.
-POs: `listPurchaseOrders` / `getPurchaseOrder` / `createPurchaseOrder` / `updatePurchaseOrder`
-(DRAFT only) / `submitPurchaseOrder` / `approvePurchaseOrder` (Owner) / `revisePurchaseOrder` /
-`deletePurchaseOrder` (Owner) / `pendingApprovalCount`. PO writes invalidate budget + projects.
+## Module 3 — Vendors & Procurement v2 (server actions · ADR-0024)
+`src/features/procurement/server/actions.ts` behind `ProcurementRepository` (demo mirror). All money
+is integer paise; GST rates are integer basis points. Online-only. Pure `calc.ts` (GST per-line
+rounding, outstanding, payment status, aging, rollups, project summary) is the single math source for
+demo, server, dashboard, and UI.
+
+| Action | Who | Notes |
+|---|---|---|
+| `listVendors` / `getVendor` | all | vendor incl. `pan`, derived `outstandingPaise`, `projectsServed`; detail adds payments, project rollups, documents |
+| `createVendor` / `updateVendor` / `setVendorStatus` | Owner | |
+| `toggleVendorFavorite` / `listMaterials` | all | |
+| `listMaterialCategories` / `setMaterialCategories` | all | company-wide presets in `Company.settings` |
+| `addVendorDocument` / `removeVendorDocument` | all | Supabase Storage path recorded |
+| `listPurchaseOrders(filters)` | all (PM scoped) | filters: status, project, vendor, material, category, date range, payment status |
+| `getPurchaseOrder` | all | detail incl. GST split + linked payments + payment status |
+| `createPurchaseOrder` / `updatePurchaseOrder` (DRAFT only) | PM(assigned)+ | GST-aware; totals from `poTotals` |
+| `submitPurchaseOrder` / `approvePurchaseOrder` (Owner) | | approved POs immutable |
+| `revisePurchaseOrder` | PM(assigned)+ | clones to a **linked** draft (audit) |
+| `duplicatePurchaseOrder` | PM(assigned)+ | clones to an **unlinked** draft dated today |
+| `deletePurchaseOrder` / `pendingApprovalCount` | Owner / all | |
+| `listPayments` / `createPayment` | PM(assigned)+ | payment project-aware; PO link optional; create logs activity |
+| `deletePayment` | **Owner only** | financial record — audited via `ActivityLog` |
+| `getProjectProcurement(projectId)` | PM(assigned)+ | summary (6 cards) + vendors-involved + scoped POs/payments |
+| `vendorAging(vendorId, projectId?)` | all | 0–30 / 31–60 / 60+ buckets, advances FIFO |
+
+PO + payment writes invalidate budget + projects + dashboard. `GoodsReceipt` methods are interface stubs
+(UI deferred). Demo stores are v2 keys with automatic v1 → v2 migration.
 
 ## Module 3 — Budget (shared source · ADR-0018)
 `src/features/budget`: `deriveBudget()` (pure) + `projectSpend` / `spendByProject` (demo + server).
@@ -92,7 +112,9 @@ Consumed by the project Overview budget card and projects list; the dashboard us
 `src/features/dashboard`: `getDashboard({ userId, isOwner })` = `assembleDashboard(raw)` where `raw`
 comes from `gatherDemoDashboard` (localStorage) or `gatherServerDashboard` (Prisma, one batched
 `Promise.all`). Pure `assembleDashboard` is the single business-logic source (ADR-0020). Role-aware;
-cached via TanStack Query with background refetch.
+cached via TanStack Query with background refetch. The snapshot now includes a **procurement widget**
+(spend, outstanding total + top/outstanding vendors, recent POs, 6-month trend — ADR-0024) and the
+project detail exposes **Procurement** and **Labour** tabs.
 
 ## Later modules
 Report export endpoints (PDF/Excel) are documented here as Module 5 is built.

@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ChevronRight, Lock, Send, Check, GitBranch, Trash2, ShoppingCart } from "lucide-react";
+import { ChevronRight, Lock, Send, Check, GitBranch, Trash2, ShoppingCart, CopyPlus, IndianRupee } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -19,12 +19,15 @@ import {
 } from "@/components/ui/dialog";
 import { formatDate, relativeTime } from "@/features/projects/format";
 import { usePurchaseOrder, usePOMutations } from "../hooks";
+import { CopyableRef, PaymentModeChip, PaymentStatusBadge } from "./payment-bits";
+import { RecordPaymentDialog } from "./record-payment-dialog";
 
 export function PODetailView({ id, isOwner }: { id: string; isOwner: boolean }) {
   const router = useRouter();
   const { data: po, isLoading } = usePurchaseOrder(id);
-  const { submit, approve, revise, remove } = usePOMutations();
+  const { submit, approve, revise, duplicate, remove } = usePOMutations();
   const [confirmDelete, setConfirmDelete] = React.useState(false);
+  const [payOpen, setPayOpen] = React.useState(false);
 
   if (isLoading) {
     return (
@@ -94,6 +97,21 @@ export function PODetailView({ id, isOwner }: { id: string; isOwner: boolean }) 
               Revise
             </Button>
           )}
+          {approved && (
+            <Button variant="primary" onClick={() => setPayOpen(true)}>
+              <IndianRupee />
+              Record payment
+            </Button>
+          )}
+          <Button
+            variant="ghost"
+            onClick={() => duplicate.mutate(po.id, { onSuccess: (p) => router.push(`/procurement/${p.id}`) })}
+            disabled={duplicate.isPending}
+            title="Clone as a new draft dated today"
+          >
+            <CopyPlus />
+            Duplicate
+          </Button>
         </div>
       </div>
 
@@ -109,35 +127,93 @@ export function PODetailView({ id, isOwner }: { id: string; isOwner: boolean }) 
         <Card className="lg:col-span-2">
           <CardHeader><CardTitle>Line items</CardTitle></CardHeader>
           <CardContent className="p-0">
-            <div className="grid grid-cols-[1fr_70px_90px_100px] gap-2 border-b border-border px-5 py-2 text-xs text-foreground-subtle">
-              <span>Material</span><span>Qty</span><span>Rate</span><span className="text-right">Amount</span>
+            <div className="grid grid-cols-[1fr_70px_90px_64px_100px] gap-2 border-b border-border px-5 py-2 text-xs text-foreground-subtle">
+              <span>Material</span><span>Qty</span><span>Rate</span><span>GST</span><span className="text-right">Amount</span>
             </div>
             {po.lineItems.map((l) => (
-              <div key={l.id} className="grid grid-cols-[1fr_70px_90px_100px] gap-2 border-b border-border px-5 py-3 text-sm last:border-0">
-                <span className="truncate font-medium">{l.material}</span>
+              <div key={l.id} className="grid grid-cols-[1fr_70px_90px_64px_100px] gap-2 border-b border-border px-5 py-3 text-sm last:border-0">
+                <span className="min-w-0">
+                  <span className="block truncate font-medium">{l.material}</span>
+                  {l.category && <span className="block truncate text-xs text-foreground-subtle">{l.category}</span>}
+                </span>
                 <span className="text-foreground-muted">{l.quantity} {l.unit}</span>
                 <span className="font-mono text-foreground-muted"><MoneyText paise={l.ratePaise} whole /></span>
+                <span className="text-foreground-muted">{l.gstRateBps / 100}%</span>
                 <span className="text-right font-mono"><MoneyText paise={l.amountPaise} whole /></span>
               </div>
             ))}
-            <div className="flex items-center justify-between px-5 py-3">
-              <span className="text-sm font-medium">Total</span>
-              <span className="text-lg font-semibold"><MoneyText paise={po.totalPaise} /></span>
+            <div className="space-y-1 px-5 py-3">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-foreground-muted">Subtotal</span>
+                <span className="font-mono tabular-nums"><MoneyText paise={po.subtotalPaise} /></span>
+              </div>
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-foreground-muted">GST</span>
+                <span className="font-mono tabular-nums"><MoneyText paise={po.gstPaise} /></span>
+              </div>
+              <div className="flex items-center justify-between pt-1">
+                <span className="text-sm font-medium">Grand total</span>
+                <span className="text-lg font-semibold"><MoneyText paise={po.totalPaise} /></span>
+              </div>
             </div>
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader><CardTitle>Details</CardTitle></CardHeader>
-          <CardContent className="divide-y divide-border py-0 text-sm">
-            <Row label="Vendor" value={<Link href={`/vendors/${po.vendor.id}`} className="text-primary hover:underline">{po.vendor.name}</Link>} />
-            <Row label="Project" value={<Link href={`/projects/${po.project.id}`} className="text-primary hover:underline">{po.project.name}</Link>} />
-            <Row label="Date" value={formatDate(po.purchaseDate)} />
-            <Row label="Invoice #" value={po.invoiceNumber ?? "—"} />
-            <Row label="Created by" value={po.createdByName} />
-          </CardContent>
-        </Card>
+        <div className="space-y-6">
+          <Card>
+            <CardHeader><CardTitle>Details</CardTitle></CardHeader>
+            <CardContent className="divide-y divide-border py-0 text-sm">
+              <Row label="Vendor" value={<Link href={`/vendors/${po.vendor.id}`} className="text-primary hover:underline">{po.vendor.name}</Link>} />
+              <Row label="Project" value={<Link href={`/projects/${po.project.id}`} className="text-primary hover:underline">{po.project.name}</Link>} />
+              <Row label="Date" value={formatDate(po.purchaseDate)} />
+              <Row label="Expected delivery" value={po.expectedDelivery ? formatDate(po.expectedDelivery) : "—"} />
+              <Row label="Invoice #" value={po.invoiceNumber ?? "—"} />
+              <Row label="Created by" value={po.createdByName} />
+              <Row label="Payment" value={<PaymentStatusBadge status={po.paymentStatus} />} />
+              {po.paidPaise > 0 && (
+                <Row label="Paid" value={<MoneyText paise={po.paidPaise} />} />
+              )}
+              {approved && po.totalPaise - po.paidPaise > 0 && (
+                <Row label="Outstanding" value={<MoneyText paise={po.totalPaise - po.paidPaise} />} />
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader><CardTitle>Payments</CardTitle></CardHeader>
+            <CardContent className="py-0">
+              {po.payments.length === 0 ? (
+                <p className="py-4 text-sm text-foreground-subtle">
+                  No payments linked to this PO yet.
+                </p>
+              ) : (
+                <div className="divide-y divide-border">
+                  {po.payments.map((p) => (
+                    <div key={p.id} className="flex items-center justify-between gap-2 py-2.5 text-sm">
+                      <div className="min-w-0">
+                        <div className="font-mono font-medium"><MoneyText paise={p.amountPaise} /></div>
+                        <div className="mt-0.5 flex items-center gap-2">
+                          <PaymentModeChip mode={p.paymentMode} />
+                          <CopyableRef value={p.referenceNumber} />
+                        </div>
+                      </div>
+                      <span className="shrink-0 text-xs text-foreground-subtle">{formatDate(p.date)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
       </div>
+
+      <RecordPaymentDialog
+        open={payOpen}
+        onOpenChange={setPayOpen}
+        defaultVendorId={po.vendor.id}
+        defaultProjectId={po.project.id}
+        defaultPurchaseOrderId={po.id}
+      />
 
       <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
         <DialogContent>

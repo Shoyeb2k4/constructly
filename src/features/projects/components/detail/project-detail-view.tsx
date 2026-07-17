@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { ChevronRight, Star } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -19,6 +20,8 @@ import { DeadlinesTab } from "./deadlines-tab";
 import { DocumentsTab } from "./documents-tab";
 import { NotesTab } from "./notes-tab";
 import { ActivityTab } from "./activity-tab";
+import { ProjectProcurementTab } from "@/features/procurement/components/project-procurement-tab";
+import { ProjectLabourTab } from "@/features/labor/components/project-labour-tab";
 
 export function ProjectDetailView({
   id,
@@ -32,6 +35,13 @@ export function ProjectDetailView({
   const { data: project, isLoading } = useProject(id);
   const favorite = useToggleFavorite();
   const { changeStage } = useProjectDetailActions(id);
+  const searchParams = useSearchParams();
+  const initialTab = (() => {
+    const t = searchParams.get("tab");
+    const valid = ["overview", "procurement", "labour", "deadlines", "documents", "notes", "activity"];
+    return t && valid.includes(t) ? t : "overview";
+  })();
+  const [tab, setTab] = React.useState(initialTab);
 
   React.useEffect(() => {
     if (project) pushRecent({ id: project.id, name: project.name, code: project.code });
@@ -100,9 +110,11 @@ export function ProjectDetailView({
         />
       </div>
 
-      <Tabs defaultValue="overview">
-        <TabsList>
+      <Tabs value={tab} onValueChange={setTab}>
+        <TabsList className="w-full justify-start overflow-x-auto">
           <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="procurement">Procurement</TabsTrigger>
+          <TabsTrigger value="labour">Labour</TabsTrigger>
           <TabsTrigger value="deadlines">
             Deadlines{project.deadlines.length ? ` (${project.deadlines.length})` : ""}
           </TabsTrigger>
@@ -117,6 +129,12 @@ export function ProjectDetailView({
 
         <TabsContent value="overview">
           <OverviewTab project={project} />
+        </TabsContent>
+        <TabsContent value="procurement">
+          <ProjectProcurementTab projectId={project.id} />
+        </TabsContent>
+        <TabsContent value="labour">
+          <ProjectLabourTab projectId={project.id} />
         </TabsContent>
         <TabsContent value="deadlines">
           <DeadlinesTab project={project} canEdit={canEdit} />

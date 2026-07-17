@@ -4,6 +4,19 @@ _Human-readable log of what changed and when. Newest first. Keep entries short; 
 
 ## [Unreleased]
 
+### 2026-07-17 — Procurement & Vendor Management v2 (roadmap re-prioritized ahead of Reports)
+The purchasing backbone — GST, vendor payments with derived outstanding, project-wise purchasing, and richer dashboards (ADR-0024). Extends Module 3; all existing data survives.
+- **Schema (additive):** `Project.procurementBudgetPaise?` (dedicated, independent budget); `Vendor.pan?`; `VendorDocument`; PO gains `expectedDelivery?` + `subtotalPaise`/`gstPaise` (grand `totalPaise` = subtotal + GST); `POLineItem` gains `category?`, `gstRateBps` (basis points), `gstPaise` (rounded per line); new `VendorPayment` (project-aware, **optional** PO link, `PaymentMode` enum); `GoodsReceipt`/`GoodsReceiptItem` (schema + RLS + repository stubs, UI deferred).
+- **GST:** per-line rate (0/5/12/18/28 presets + free entry), rounded per line so totals equal visible sums; PO editor + detail show Subtotal / GST / Grand Total.
+- **Payments:** record-payment dialog (vendor → project → optional PO → amount/mode/reference/date/remarks), mode icons + one-click reference copy, soft over-outstanding warning. **Outstanding is derived** (`Σ counted POs − Σ payments`), never stored — payment status (UNPAID/PARTIAL/PAID) and aging (0–30/31–60/60+, advances FIFO) all from one pure `calc.ts`. Payment delete is owner-only + audited.
+- **Vendor profile redesign:** 4 stat cards + tabs Overview / Projects / Purchase Orders / Payments / Documents / Outstanding (aging), with a project-filter pill that scopes the whole profile. GSTIN + PAN.
+- **Project detail:** new tab order Overview · **Procurement** · **Labour** · Deadlines · Documents · Notes · Activity. Procurement tab = purchasing center (6 summary cards, vendors-involved table with per-vendor drill-in, scoped POs + payments). Labour tab = project-scoped attendance summary. URL-synced (`?tab=procurement`).
+- **Dashboard:** company procurement card (spend, outstanding + outstanding/top vendors, recent POs with payment badges, 6-month trend) via the same pure assembler.
+- **Settings:** material category presets (seeded Cement, Steel, Sand & Aggregate, Electrical, Plumbing, Paint, Hardware, Other) powering PO line categories + filters.
+- **Duplicate PO** (clone to a fresh unlinked draft) alongside Revise (linked). Online-only for financial integrity; labour attendance stays the sole offline module.
+- **Migration:** `prisma/migration-procurement-v2.sql` (backfill `subtotal = total, gst = 0`; seed categories) + demo v1 → v2 auto-migration. Verified live: pre-GST PO migrated (subtotal = total, gst = 0, category null, legacy keys removed); dashboard/vendor/project math exact (Skyline spent ₹1.15Cr vs ₹70L → −₹45.1L, Sanghvi outstanding ₹27L, aging buckets correct).
+- **Tests:** 91 passing (GST per-line rounding, outstanding + scoping, payment status, aging FIFO, rollups, project summary, payments CRUD, duplicate PO, v1→v2 migration, procurement dashboard widget). Build/typecheck/lint clean; verified in-browser.
+
 ### 2026-07-16 — Labour hierarchy: Category → Subcategory (client change request)
 Attendance is now recorded per subcategory inside collapsible category groups (ADR-0023). Still headcounts only — no individual tracking.
 - **Schema:** `LabourCategory` (optional color, `displayOrder`) ⊃ `LabourSubcategory` (optional `dailyRatePaise`, `displayOrder`); `LabourAttendance` → `labourSubcategoryId`, keeping rate snapshots + stored `estimatedCostPaise` (ADR-0022). Unlimited depth on both levels.

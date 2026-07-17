@@ -4,18 +4,38 @@ import { prisma } from "@/lib/db/prisma";
 import { requireUser } from "@/lib/auth/current-user";
 import type { SessionUser } from "@/lib/auth/types";
 import { Prisma } from "@/generated/prisma";
+import {
+  agingBuckets,
+  lineAmountPaise,
+  lineGstPaise,
+  poPaymentStatus,
+  poTotals,
+  projectProcurementSummary,
+  projectVendorRollups,
+  vendorProjectRollups,
+  outstandingPaise,
+  poCounted,
+  type PaymentForRollup,
+  type POForRollup,
+} from "../calc";
+import { DEFAULT_MATERIAL_CATEGORIES } from "../constants";
 import type {
+  CreatePaymentInput,
   CreatePOInput,
   CreateVendorInput,
+  PaymentFilters,
   POFilters,
+  ProjectProcurement,
   PurchaseOrderDetail,
   PurchaseOrderListItem,
   UpdateVendorInput,
   Vendor,
   VendorDetail,
   VendorFilters,
+  VendorPaymentItem,
   VendorStatus,
 } from "../types";
+import type { AgingBuckets } from "../calc";
 
 function assertOwner(user: SessionUser) {
   if (user.role !== "OWNER") throw new Error("FORBIDDEN");
@@ -37,79 +57,198 @@ async function approvalRequired(companyId: string): Promise<boolean> {
   return (c?.settings as { poApprovalRequired?: boolean } | null)?.poApprovalRequired ?? false;
 }
 
+/* ── Rollup source fetches (small-firm scale: one query each) ────────── */
+
+async function fetchRollupPOs(companyId: string): Promise<POForRollup[]> {
+  const rows = await prisma.purchaseOrder.findMany({
+    where: { companyId },
+    select: {
+      id: true,
+      vendorId: true,
+      projectId: true,
+      status: true,
+      totalPaise: true,
+      purchaseDate: true,
+      lineItems: { select: { material: true } },
+    },
+  });
+  return rows.map((p) => ({
+    id: p.id,
+    vendorId: p.vendorId,
+    projectId: p.projectId,
+    status: p.status,
+    totalPaise: Number(p.totalPaise),
+    purchaseDate: p.purchaseDate.toISOString().slice(0, 10),
+    materials: [...new Set(p.lineItems.map((l) => l.material))],
+  }));
+}
+
+async function fetchRollupPayments(companyId: string): Promise<PaymentForRollup[]> {
+  const rows = await prisma.vendorPayment.findMany({
+    where: { companyId },
+    select: { vendorId: true, projectId: true, purchaseOrderId: true, amountPaise: true, date: true },
+  });
+  return rows.map((p) => ({
+    vendorId: p.vendorId,
+    projectId: p.projectId,
+    purchaseOrderId: p.purchaseOrderId,
+    amountPaise: Number(p.amountPaise),
+    date: p.date.toISOString().slice(0, 10),
+  }));
+}
+
+function paidByPO(payments: PaymentForRollup[]): Map<string, number> {
+  const m = new Map<string, number>();
+  for (const p of payments) {
+    if (p.purchaseOrderId) m.set(p.purchaseOrderId, (m.get(p.purchaseOrderId) ?? 0) + p.amountPaise);
+  }
+  return m;
+}
+
 /* ── Vendors ─────────────────────────────────────────────────────────── */
 
-async function vendorRollup(user: SessionUser, v: { id: string } & Record<string, unknown>): Promise<Vendor> {
-  const agg = await prisma.purchaseOrder.aggregate({
-    where: { companyId: user.company.id, vendorId: v.id, status: { not: "DRAFT" } },
-    _sum: { totalPaise: true },
-    _count: true,
-  });
-  const fav = await prisma.vendorFavorite.findUnique({
-    where: { userId_vendorId: { userId: user.id, vendorId: v.id } },
-  });
+type VendorRow = Prisma.VendorGetPayload<Record<string, never>>;
+
+function toVendor(
+  v: VendorRow,
+  pos: POForRollup[],
+  payments: PaymentForRollup[],
+  favoriteIds: Set<string>,
+  approval: boolean,
+): Vendor {
+  const counted = pos.filter((p) => p.vendorId === v.id && poCounted(p.status, approval));
   return {
     id: v.id,
-    businessName: v.businessName as string,
-    contactPerson: (v.contactPerson as string) ?? null,
-    phone: (v.phone as string) ?? null,
-    email: (v.email as string) ?? null,
-    gstin: (v.gstin as string) ?? null,
-    address: (v.address as string) ?? null,
-    materialsSupplied: (v.materialsSupplied as string[]) ?? [],
-    paymentTerms: (v.paymentTerms as string) ?? null,
-    status: v.status as VendorStatus,
-    notes: (v.notes as string) ?? null,
-    isFavorite: !!fav,
-    totalPurchasedPaise: Number(agg._sum.totalPaise ?? 0),
-    poCount: agg._count,
+    businessName: v.businessName,
+    contactPerson: v.contactPerson,
+    phone: v.phone,
+    email: v.email,
+    gstin: v.gstin,
+    pan: v.pan,
+    address: v.address,
+    materialsSupplied: v.materialsSupplied,
+    paymentTerms: v.paymentTerms,
+    status: v.status,
+    notes: v.notes,
+    isFavorite: favoriteIds.has(v.id),
+    totalPurchasedPaise: counted.reduce((s, p) => s + p.totalPaise, 0),
+    outstandingPaise: outstandingPaise(pos, payments, { vendorId: v.id }, approval),
+    poCount: counted.length,
+    projectsServed: new Set(counted.map((p) => p.projectId)).size,
   };
+}
+
+async function vendorContext(user: SessionUser) {
+  const [pos, payments, favorites, approval] = await Promise.all([
+    fetchRollupPOs(user.company.id),
+    fetchRollupPayments(user.company.id),
+    prisma.vendorFavorite.findMany({ where: { userId: user.id }, select: { vendorId: true } }),
+    approvalRequired(user.company.id),
+  ]);
+  return { pos, payments, favoriteIds: new Set(favorites.map((f) => f.vendorId)), approval };
 }
 
 export async function listVendors(filters: VendorFilters = {}): Promise<Vendor[]> {
   const user = await requireUser();
-  const rows = await prisma.vendor.findMany({
-    where: {
-      companyId: user.company.id,
-      ...(filters.status && filters.status !== "ALL" ? { status: filters.status } : {}),
-      ...(filters.material && filters.material !== "ALL" ? { materialsSupplied: { has: filters.material } } : {}),
-      ...(filters.favoritesOnly ? { favorites: { some: { userId: user.id } } } : {}),
-      ...(filters.search
-        ? {
-            OR: [
-              { businessName: { contains: filters.search, mode: "insensitive" } },
-              { contactPerson: { contains: filters.search, mode: "insensitive" } },
-              { materialsSupplied: { has: filters.search } },
-            ],
-          }
-        : {}),
-    },
-    orderBy: { businessName: "asc" },
-  });
-  return Promise.all(rows.map((v) => vendorRollup(user, v)));
+  const [rows, ctx] = await Promise.all([
+    prisma.vendor.findMany({
+      where: {
+        companyId: user.company.id,
+        ...(filters.status && filters.status !== "ALL" ? { status: filters.status } : {}),
+        ...(filters.material && filters.material !== "ALL" ? { materialsSupplied: { has: filters.material } } : {}),
+        ...(filters.favoritesOnly ? { favorites: { some: { userId: user.id } } } : {}),
+        ...(filters.search
+          ? {
+              OR: [
+                { businessName: { contains: filters.search, mode: "insensitive" } },
+                { contactPerson: { contains: filters.search, mode: "insensitive" } },
+                { materialsSupplied: { has: filters.search } },
+              ],
+            }
+          : {}),
+      },
+      orderBy: { businessName: "asc" },
+    }),
+    vendorContext(user),
+  ]);
+  return rows.map((v) => toVendor(v, ctx.pos, ctx.payments, ctx.favoriteIds, ctx.approval));
 }
 
 export async function getVendor(id: string): Promise<VendorDetail | null> {
   const user = await requireUser();
   const v = await prisma.vendor.findFirst({ where: { id, companyId: user.company.id } });
   if (!v) return null;
-  const pos = await prisma.purchaseOrder.findMany({
-    where: { companyId: user.company.id, vendorId: id },
-    orderBy: { purchaseDate: "desc" },
-    include: { project: { select: { name: true, code: true } } },
-  });
+  const ctx = await vendorContext(user);
+  const paid = paidByPO(ctx.payments);
+  const [history, paymentRows, docs, projectNames] = await Promise.all([
+    prisma.purchaseOrder.findMany({
+      where: { companyId: user.company.id, vendorId: id },
+      orderBy: { purchaseDate: "desc" },
+      include: { project: { select: { name: true, code: true } } },
+    }),
+    prisma.vendorPayment.findMany({
+      where: { companyId: user.company.id, vendorId: id },
+      orderBy: { date: "desc" },
+      include: {
+        project: { select: { name: true, code: true } },
+        purchaseOrder: { select: { id: true, poNumber: true } },
+        createdBy: { select: { fullName: true } },
+      },
+    }),
+    prisma.vendorDocument.findMany({
+      where: { companyId: user.company.id, vendorId: id },
+      orderBy: { createdAt: "desc" },
+    }),
+    prisma.project.findMany({ where: { companyId: user.company.id }, select: { id: true, name: true, code: true } }),
+  ]);
+  const nameById = new Map(projectNames.map((p) => [p.id, p]));
   return {
-    ...(await vendorRollup(user, v)),
-    purchaseHistory: pos.map((p) => ({
+    ...toVendor(v, ctx.pos, ctx.payments, ctx.favoriteIds, ctx.approval),
+    purchaseHistory: history.map((p) => ({
       id: p.id,
       poNumber: p.poNumber,
       status: p.status,
       purchaseDate: p.purchaseDate.toISOString().slice(0, 10),
+      expectedDelivery: p.expectedDelivery ? p.expectedDelivery.toISOString().slice(0, 10) : null,
+      subtotalPaise: Number(p.subtotalPaise),
+      gstPaise: Number(p.gstPaise),
       totalPaise: Number(p.totalPaise),
+      paidPaise: paid.get(p.id) ?? 0,
+      paymentStatus: poPaymentStatus(Number(p.totalPaise), paid.get(p.id) ?? 0),
       invoiceNumber: p.invoiceNumber,
       vendor: { id, name: v.businessName },
       project: { id: p.projectId, name: p.project.name, code: p.project.code },
       createdAt: p.createdAt.toISOString(),
+    })),
+    payments: paymentRows.map((p) => ({
+      id: p.id,
+      vendor: { id, name: v.businessName },
+      project: { id: p.projectId, name: p.project.name, code: p.project.code },
+      purchaseOrder: p.purchaseOrder ? { id: p.purchaseOrder.id, poNumber: p.purchaseOrder.poNumber } : null,
+      amountPaise: Number(p.amountPaise),
+      paymentMode: p.paymentMode,
+      referenceNumber: p.referenceNumber,
+      date: p.date.toISOString().slice(0, 10),
+      remarks: p.remarks,
+      createdByName: p.createdBy.fullName,
+      createdAt: p.createdAt.toISOString(),
+    })),
+    projects: vendorProjectRollups(ctx.pos, ctx.payments, id, ctx.approval).map((r) => ({
+      ...r,
+      project: {
+        id: r.id,
+        name: nameById.get(r.id)?.name ?? "Unknown",
+        code: nameById.get(r.id)?.code ?? "",
+      },
+    })),
+    documents: docs.map((d) => ({
+      id: d.id,
+      category: d.category,
+      filename: d.filename,
+      sizeBytes: d.sizeBytes,
+      mimeType: d.mimeType,
+      storagePath: d.storagePath,
+      createdAt: d.createdAt.toISOString(),
     })),
   };
 }
@@ -125,20 +264,23 @@ export async function createVendor(input: CreateVendorInput): Promise<Vendor> {
       phone: input.phone ?? null,
       email: input.email ?? null,
       gstin: input.gstin ?? null,
+      pan: input.pan ?? null,
       address: input.address ?? null,
       materialsSupplied: input.materialsSupplied ?? [],
       paymentTerms: input.paymentTerms ?? null,
       notes: input.notes ?? null,
     },
   });
-  return vendorRollup(user, v);
+  const ctx = await vendorContext(user);
+  return toVendor(v, ctx.pos, ctx.payments, ctx.favoriteIds, ctx.approval);
 }
 
 export async function updateVendor(id: string, patch: UpdateVendorInput): Promise<Vendor> {
   const user = await requireUser();
   assertOwner(user);
   const v = await prisma.vendor.update({ where: { id, companyId: user.company.id }, data: patch });
-  return vendorRollup(user, v);
+  const ctx = await vendorContext(user);
+  return toVendor(v, ctx.pos, ctx.payments, ctx.favoriteIds, ctx.approval);
 }
 
 export async function setVendorStatus(id: string, status: VendorStatus): Promise<Vendor> {
@@ -164,6 +306,58 @@ export async function listMaterials(): Promise<string[]> {
   return [...new Set(rows.flatMap((r) => r.materialsSupplied))].sort();
 }
 
+export async function addVendorDocument(
+  vendorId: string,
+  doc: { filename: string; sizeBytes: number; mimeType: string },
+): Promise<VendorDetail> {
+  const user = await requireUser();
+  const category = doc.mimeType.startsWith("image/")
+    ? "PHOTO"
+    : doc.mimeType === "application/pdf"
+      ? "PDF"
+      : "OTHER";
+  await prisma.vendorDocument.create({
+    data: {
+      companyId: user.company.id,
+      vendorId,
+      category,
+      storagePath: `${user.company.id}/vendors/${vendorId}/${doc.filename}`,
+      filename: doc.filename,
+      sizeBytes: doc.sizeBytes,
+      mimeType: doc.mimeType,
+      uploadedById: user.id,
+    },
+  });
+  return (await getVendor(vendorId))!;
+}
+
+export async function removeVendorDocument(vendorId: string, docId: string): Promise<VendorDetail> {
+  const user = await requireUser();
+  await prisma.vendorDocument.delete({ where: { id: docId, companyId: user.company.id } });
+  return (await getVendor(vendorId))!;
+}
+
+/* ── Material category presets (Company.settings) ────────────────────── */
+
+export async function listMaterialCategories(): Promise<string[]> {
+  const user = await requireUser();
+  const c = await prisma.company.findUnique({ where: { id: user.company.id }, select: { settings: true } });
+  const stored = (c?.settings as { materialCategories?: string[] } | null)?.materialCategories;
+  if (Array.isArray(stored) && stored.length) return stored;
+  return setMaterialCategories([...DEFAULT_MATERIAL_CATEGORIES]);
+}
+
+export async function setMaterialCategories(categories: string[]): Promise<string[]> {
+  const user = await requireUser();
+  const clean = [...new Set(categories.map((c) => c.trim()).filter(Boolean))];
+  const c = await prisma.company.findUniqueOrThrow({ where: { id: user.company.id }, select: { settings: true } });
+  await prisma.company.update({
+    where: { id: user.company.id },
+    data: { settings: { ...(c.settings as object), materialCategories: clean } },
+  });
+  return clean;
+}
+
 /* ── Purchase orders ─────────────────────────────────────────────────── */
 
 const poInclude = {
@@ -177,17 +371,26 @@ const poInclude = {
 
 type PORow = Prisma.PurchaseOrderGetPayload<{ include: typeof poInclude }>;
 
-function toListItem(p: {
+type POListRow = {
   id: string; poNumber: string; status: "DRAFT" | "SUBMITTED" | "APPROVED"; purchaseDate: Date;
-  totalPaise: bigint; invoiceNumber: string | null; vendorId: string; projectId: string; createdAt: Date;
+  expectedDelivery: Date | null; subtotalPaise: bigint; gstPaise: bigint; totalPaise: bigint;
+  invoiceNumber: string | null; vendorId: string; projectId: string; createdAt: Date;
   vendor: { businessName: string }; project: { name: string; code: string };
-}): PurchaseOrderListItem {
+};
+
+function toListItem(p: POListRow, paid: Map<string, number>): PurchaseOrderListItem {
+  const paidPaise = paid.get(p.id) ?? 0;
   return {
     id: p.id,
     poNumber: p.poNumber,
     status: p.status,
     purchaseDate: p.purchaseDate.toISOString().slice(0, 10),
+    expectedDelivery: p.expectedDelivery ? p.expectedDelivery.toISOString().slice(0, 10) : null,
+    subtotalPaise: Number(p.subtotalPaise),
+    gstPaise: Number(p.gstPaise),
     totalPaise: Number(p.totalPaise),
+    paidPaise,
+    paymentStatus: poPaymentStatus(Number(p.totalPaise), paidPaise),
     invoiceNumber: p.invoiceNumber,
     vendor: { id: p.vendorId, name: p.vendor.businessName },
     project: { id: p.projectId, name: p.project.name, code: p.project.code },
@@ -195,19 +398,54 @@ function toListItem(p: {
   };
 }
 
-function toDetail(p: PORow): PurchaseOrderDetail {
+const paymentInclude = {
+  vendor: { select: { businessName: true } },
+  project: { select: { name: true, code: true } },
+  purchaseOrder: { select: { id: true, poNumber: true } },
+  createdBy: { select: { fullName: true } },
+} satisfies Prisma.VendorPaymentInclude;
+
+type PaymentRow = Prisma.VendorPaymentGetPayload<{ include: typeof paymentInclude }>;
+
+function toPaymentItem(p: PaymentRow): VendorPaymentItem {
   return {
-    ...toListItem(p),
+    id: p.id,
+    vendor: { id: p.vendorId, name: p.vendor.businessName },
+    project: { id: p.projectId, name: p.project.name, code: p.project.code },
+    purchaseOrder: p.purchaseOrder ? { id: p.purchaseOrder.id, poNumber: p.purchaseOrder.poNumber } : null,
+    amountPaise: Number(p.amountPaise),
+    paymentMode: p.paymentMode,
+    referenceNumber: p.referenceNumber,
+    date: p.date.toISOString().slice(0, 10),
+    remarks: p.remarks,
+    createdByName: p.createdBy.fullName,
+    createdAt: p.createdAt.toISOString(),
+  };
+}
+
+async function toDetail(p: PORow, companyId: string): Promise<PurchaseOrderDetail> {
+  const paymentRows = await prisma.vendorPayment.findMany({
+    where: { companyId, purchaseOrderId: p.id },
+    orderBy: { date: "desc" },
+    include: paymentInclude,
+  });
+  const paidPaise = paymentRows.reduce((s, x) => s + Number(x.amountPaise), 0);
+  return {
+    ...toListItem(p, new Map([[p.id, paidPaise]])),
     notes: p.notes,
     lineItems: p.lineItems.map((l) => ({
       id: l.id,
       material: l.material,
+      category: l.category,
       quantity: Number(l.quantity),
       unit: l.unit,
       ratePaise: l.ratePaise,
+      gstRateBps: l.gstRateBps,
+      gstPaise: Number(l.gstPaise),
       amountPaise: Number(l.amountPaise),
       sortOrder: l.sortOrder,
     })),
+    payments: paymentRows.map(toPaymentItem),
     createdByName: p.createdBy.fullName,
     approvedByName: p.approvedBy?.fullName ?? null,
     approvedAt: p.approvedAt ? p.approvedAt.toISOString() : null,
@@ -225,11 +463,18 @@ export async function listPurchaseOrders(filters: POFilters = {}): Promise<Purch
       ...(filters.status && filters.status !== "ALL" ? { status: filters.status } : {}),
       ...(filters.projectId && filters.projectId !== "ALL" ? { projectId: filters.projectId } : {}),
       ...(filters.vendorId && filters.vendorId !== "ALL" ? { vendorId: filters.vendorId } : {}),
+      ...(filters.material && filters.material !== "ALL" ? { lineItems: { some: { material: filters.material } } } : {}),
+      ...(filters.category && filters.category !== "ALL" ? { lineItems: { some: { category: filters.category } } } : {}),
+      ...(filters.dateFrom ? { purchaseDate: { gte: new Date(filters.dateFrom) } } : {}),
+      ...(filters.dateTo
+        ? { AND: [{ purchaseDate: { lte: new Date(filters.dateTo) } }] }
+        : {}),
       ...(filters.search
         ? {
             OR: [
               { poNumber: { contains: filters.search, mode: "insensitive" } },
               { vendor: { businessName: { contains: filters.search, mode: "insensitive" } } },
+              { lineItems: { some: { material: { contains: filters.search, mode: "insensitive" } } } },
             ],
           }
         : {}),
@@ -237,7 +482,11 @@ export async function listPurchaseOrders(filters: POFilters = {}): Promise<Purch
     include: { vendor: { select: { businessName: true } }, project: { select: { name: true, code: true } } },
     orderBy: { purchaseDate: "desc" },
   });
-  return rows.map(toListItem);
+  const paid = paidByPO(await fetchRollupPayments(user.company.id));
+  let items = rows.map((p) => toListItem(p, paid));
+  if (filters.paymentStatus && filters.paymentStatus !== "ALL")
+    items = items.filter((i) => i.paymentStatus === filters.paymentStatus);
+  return items;
 }
 
 export async function getPurchaseOrder(id: string): Promise<PurchaseOrderDetail | null> {
@@ -246,7 +495,7 @@ export async function getPurchaseOrder(id: string): Promise<PurchaseOrderDetail 
     where: { id, companyId: user.company.id },
     include: poInclude,
   });
-  return p ? toDetail(p) : null;
+  return p ? toDetail(p, user.company.id) : null;
 }
 
 async function nextPoNumber(companyId: string): Promise<string> {
@@ -262,10 +511,13 @@ async function nextPoNumber(companyId: string): Promise<string> {
 function lineData(input: CreatePOInput) {
   return input.lineItems.map((l, i) => ({
     material: l.material,
+    category: l.category ?? null,
     quantity: new Prisma.Decimal(l.quantity),
     unit: l.unit,
     ratePaise: l.ratePaise,
-    amountPaise: BigInt(Math.round(l.quantity * l.ratePaise)),
+    gstRateBps: l.gstRateBps,
+    gstPaise: BigInt(lineGstPaise(l.quantity, l.ratePaise, l.gstRateBps)),
+    amountPaise: BigInt(lineAmountPaise(l.quantity, l.ratePaise)),
     sortOrder: i,
   }));
 }
@@ -274,8 +526,7 @@ export async function createPurchaseOrder(input: CreatePOInput): Promise<Purchas
   const user = await requireUser();
   await assertProjectAccess(user, input.projectId);
   const finalize = !(await approvalRequired(user.company.id));
-  const lines = lineData(input);
-  const total = lines.reduce((s, l) => s + l.amountPaise, BigInt(0));
+  const totals = poTotals(input.lineItems);
   const created = await prisma.purchaseOrder.create({
     data: {
       companyId: user.company.id,
@@ -285,12 +536,15 @@ export async function createPurchaseOrder(input: CreatePOInput): Promise<Purchas
       status: finalize ? "APPROVED" : "DRAFT",
       invoiceNumber: input.invoiceNumber ?? null,
       purchaseDate: new Date(input.purchaseDate),
+      expectedDelivery: input.expectedDelivery ? new Date(input.expectedDelivery) : null,
       notes: input.notes ?? null,
-      totalPaise: total,
+      subtotalPaise: BigInt(totals.subtotalPaise),
+      gstPaise: BigInt(totals.gstPaise),
+      totalPaise: BigInt(totals.totalPaise),
       createdById: user.id,
       approvedById: finalize ? user.id : null,
       approvedAt: finalize ? new Date() : null,
-      lineItems: { create: lines },
+      lineItems: { create: lineData(input) },
     },
     select: { id: true },
   });
@@ -303,8 +557,7 @@ export async function updatePurchaseOrder(id: string, input: CreatePOInput): Pro
   if (!existing) throw new Error("NOT_FOUND");
   await assertProjectAccess(user, existing.projectId);
   if (existing.status !== "DRAFT") throw new Error("IMMUTABLE");
-  const lines = lineData(input);
-  const total = lines.reduce((s, l) => s + l.amountPaise, BigInt(0));
+  const totals = poTotals(input.lineItems);
   await prisma.$transaction([
     prisma.pOLineItem.deleteMany({ where: { purchaseOrderId: id } }),
     prisma.purchaseOrder.update({
@@ -313,10 +566,13 @@ export async function updatePurchaseOrder(id: string, input: CreatePOInput): Pro
         vendorId: input.vendorId,
         projectId: input.projectId,
         purchaseDate: new Date(input.purchaseDate),
+        expectedDelivery: input.expectedDelivery ? new Date(input.expectedDelivery) : null,
         invoiceNumber: input.invoiceNumber ?? null,
         notes: input.notes ?? null,
-        totalPaise: total,
-        lineItems: { create: lines },
+        subtotalPaise: BigInt(totals.subtotalPaise),
+        gstPaise: BigInt(totals.gstPaise),
+        totalPaise: BigInt(totals.totalPaise),
+        lineItems: { create: lineData(input) },
       },
     }),
   ]);
@@ -325,8 +581,12 @@ export async function updatePurchaseOrder(id: string, input: CreatePOInput): Pro
 
 export async function submitPurchaseOrder(id: string): Promise<PurchaseOrderListItem> {
   const user = await requireUser();
-  const po = await prisma.purchaseOrder.update({ where: { id, companyId: user.company.id }, data: { status: "SUBMITTED" }, include: { vendor: { select: { businessName: true } }, project: { select: { name: true, code: true } } } });
-  return toListItem(po);
+  const po = await prisma.purchaseOrder.update({
+    where: { id, companyId: user.company.id },
+    data: { status: "SUBMITTED" },
+    include: { vendor: { select: { businessName: true } }, project: { select: { name: true, code: true } } },
+  });
+  return toListItem(po, paidByPO(await fetchRollupPayments(user.company.id)));
 }
 
 export async function approvePurchaseOrder(id: string): Promise<PurchaseOrderListItem> {
@@ -337,10 +597,10 @@ export async function approvePurchaseOrder(id: string): Promise<PurchaseOrderLis
     data: { status: "APPROVED", approvedById: user.id, approvedAt: new Date() },
     include: { vendor: { select: { businessName: true } }, project: { select: { name: true, code: true } } },
   });
-  return toListItem(po);
+  return toListItem(po, paidByPO(await fetchRollupPayments(user.company.id)));
 }
 
-export async function revisePurchaseOrder(id: string): Promise<PurchaseOrderDetail> {
+async function clonePO(id: string, opts: { linkRevision: boolean }): Promise<PurchaseOrderDetail> {
   const user = await requireUser();
   const src = await prisma.purchaseOrder.findFirstOrThrow({ where: { id, companyId: user.company.id }, include: { lineItems: true } });
   await assertProjectAccess(user, src.projectId);
@@ -351,17 +611,23 @@ export async function revisePurchaseOrder(id: string): Promise<PurchaseOrderDeta
       projectId: src.projectId,
       poNumber: await nextPoNumber(user.company.id),
       status: "DRAFT",
-      purchaseDate: src.purchaseDate,
+      purchaseDate: opts.linkRevision ? src.purchaseDate : new Date(),
+      expectedDelivery: opts.linkRevision ? src.expectedDelivery : null,
       notes: src.notes,
+      subtotalPaise: src.subtotalPaise,
+      gstPaise: src.gstPaise,
       totalPaise: src.totalPaise,
       createdById: user.id,
-      revisedFromId: src.id,
+      revisedFromId: opts.linkRevision ? src.id : null,
       lineItems: {
         create: src.lineItems.map((l) => ({
           material: l.material,
+          category: l.category,
           quantity: l.quantity,
           unit: l.unit,
           ratePaise: l.ratePaise,
+          gstRateBps: l.gstRateBps,
+          gstPaise: l.gstPaise,
           amountPaise: l.amountPaise,
           sortOrder: l.sortOrder,
         })),
@@ -370,6 +636,14 @@ export async function revisePurchaseOrder(id: string): Promise<PurchaseOrderDeta
     select: { id: true },
   });
   return (await getPurchaseOrder(created.id))!;
+}
+
+export async function revisePurchaseOrder(id: string): Promise<PurchaseOrderDetail> {
+  return clonePO(id, { linkRevision: true });
+}
+
+export async function duplicatePurchaseOrder(id: string): Promise<PurchaseOrderDetail> {
+  return clonePO(id, { linkRevision: false });
 }
 
 export async function deletePurchaseOrder(id: string): Promise<void> {
@@ -381,4 +655,133 @@ export async function deletePurchaseOrder(id: string): Promise<void> {
 export async function pendingApprovalCount(): Promise<number> {
   const user = await requireUser();
   return prisma.purchaseOrder.count({ where: { companyId: user.company.id, status: "SUBMITTED" } });
+}
+
+/* ── Payments ────────────────────────────────────────────────────────── */
+
+export async function listPayments(filters: PaymentFilters = {}): Promise<VendorPaymentItem[]> {
+  const user = await requireUser();
+  const rows = await prisma.vendorPayment.findMany({
+    where: {
+      companyId: user.company.id,
+      ...(user.role !== "OWNER" ? { project: { pmId: user.id } } : {}),
+      ...(filters.vendorId && filters.vendorId !== "ALL" ? { vendorId: filters.vendorId } : {}),
+      ...(filters.projectId && filters.projectId !== "ALL" ? { projectId: filters.projectId } : {}),
+      ...(filters.purchaseOrderId ? { purchaseOrderId: filters.purchaseOrderId } : {}),
+      ...(filters.mode && filters.mode !== "ALL" ? { paymentMode: filters.mode } : {}),
+      ...(filters.dateFrom ? { date: { gte: new Date(filters.dateFrom) } } : {}),
+      ...(filters.dateTo ? { AND: [{ date: { lte: new Date(filters.dateTo) } }] } : {}),
+    },
+    orderBy: { date: "desc" },
+    include: paymentInclude,
+  });
+  return rows.map(toPaymentItem);
+}
+
+export async function createPayment(input: CreatePaymentInput): Promise<VendorPaymentItem> {
+  const user = await requireUser();
+  await assertProjectAccess(user, input.projectId);
+  const row = await prisma.vendorPayment.create({
+    data: {
+      companyId: user.company.id,
+      vendorId: input.vendorId,
+      projectId: input.projectId,
+      purchaseOrderId: input.purchaseOrderId ?? null,
+      amountPaise: BigInt(input.amountPaise),
+      paymentMode: input.paymentMode,
+      referenceNumber: input.referenceNumber ?? null,
+      date: new Date(input.date),
+      remarks: input.remarks ?? null,
+      createdById: user.id,
+    },
+    include: paymentInclude,
+  });
+  await prisma.activityLog.create({
+    data: {
+      companyId: user.company.id,
+      actorId: user.id,
+      action: "payment.recorded",
+      entityType: "vendor_payment",
+      entityId: row.id,
+      summary: `Recorded a payment to ${row.vendor.businessName}`,
+      meta: { vendorId: input.vendorId, projectId: input.projectId, amountPaise: input.amountPaise },
+    },
+  });
+  return toPaymentItem(row);
+}
+
+export async function deletePayment(id: string): Promise<void> {
+  const user = await requireUser();
+  assertOwner(user);
+  const row = await prisma.vendorPayment.delete({ where: { id, companyId: user.company.id } });
+  await prisma.activityLog.create({
+    data: {
+      companyId: user.company.id,
+      actorId: user.id,
+      action: "payment.deleted",
+      entityType: "vendor_payment",
+      entityId: id,
+      summary: "Deleted a vendor payment",
+      meta: { vendorId: row.vendorId, projectId: row.projectId, amountPaise: Number(row.amountPaise) },
+    },
+  });
+}
+
+/* ── Project-aware views ─────────────────────────────────────────────── */
+
+export async function getProjectProcurement(projectId: string): Promise<ProjectProcurement> {
+  const user = await requireUser();
+  await assertProjectAccess(user, projectId);
+  const [project, pos, payments, approval, poRows, paymentRows, vendors] = await Promise.all([
+    prisma.project.findUniqueOrThrow({ where: { id: projectId }, select: { procurementBudgetPaise: true } }),
+    fetchRollupPOs(user.company.id),
+    fetchRollupPayments(user.company.id),
+    approvalRequired(user.company.id),
+    prisma.purchaseOrder.findMany({
+      where: { companyId: user.company.id, projectId },
+      orderBy: { purchaseDate: "desc" },
+      include: { vendor: { select: { businessName: true } }, project: { select: { name: true, code: true } } },
+    }),
+    prisma.vendorPayment.findMany({
+      where: { companyId: user.company.id, projectId },
+      orderBy: { date: "desc" },
+      include: paymentInclude,
+    }),
+    prisma.vendor.findMany({ where: { companyId: user.company.id }, select: { id: true, businessName: true, status: true } }),
+  ]);
+  const vendorById = new Map(vendors.map((v) => [v.id, v]));
+  const paid = paidByPO(payments);
+  return {
+    summary: projectProcurementSummary(
+      project.procurementBudgetPaise == null ? null : Number(project.procurementBudgetPaise),
+      pos,
+      payments,
+      projectId,
+      approval,
+    ),
+    vendors: projectVendorRollups(pos, payments, projectId, approval).map((r) => ({
+      ...r,
+      vendor: {
+        id: r.id,
+        name: vendorById.get(r.id)?.businessName ?? "Unknown",
+        status: vendorById.get(r.id)?.status ?? "ACTIVE",
+      },
+    })),
+    purchaseOrders: poRows.map((p) => toListItem(p, paid)),
+    payments: paymentRows.map(toPaymentItem),
+  };
+}
+
+export async function vendorAging(vendorId: string, projectId?: string): Promise<AgingBuckets> {
+  const user = await requireUser();
+  const [pos, payments, approval, poNumbers] = await Promise.all([
+    fetchRollupPOs(user.company.id),
+    fetchRollupPayments(user.company.id),
+    approvalRequired(user.company.id),
+    prisma.purchaseOrder.findMany({ where: { companyId: user.company.id, vendorId }, select: { id: true, poNumber: true } }),
+  ]);
+  const buckets = agingBuckets(pos, payments, vendorId, approval, new Date().toISOString().slice(0, 10), projectId);
+  const byId = new Map(poNumbers.map((p) => [p.id, p.poNumber]));
+  buckets.rows.forEach((r) => (r.poNumber = byId.get(r.poId)));
+  return buckets;
 }

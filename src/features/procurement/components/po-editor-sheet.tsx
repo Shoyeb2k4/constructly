@@ -32,11 +32,13 @@ import { useProjectSpend } from "@/features/budget/hooks";
 import { deriveBudget } from "@/features/budget/calc";
 import { poFormSchema, poFormToInput, type POFormValues } from "../schema";
 import { UNITS } from "../constants";
-import { useVendors, usePOMutations } from "../hooks";
+import { poTotals } from "../calc";
+import { useVendors, usePOMutations, useMaterialCategories } from "../hooks";
 import { pushRecentVendor } from "../recently-vendors";
 import { getApprovalRequired } from "@/features/settings/demo-settings";
 
-const EMPTY_LINE = { material: "", quantity: 1, unit: "nos", rateRupees: 0 };
+const EMPTY_LINE = { material: "", category: "", quantity: 1, unit: "nos", rateRupees: 0, gstPercent: 18 };
+const NO_CATEGORY = "__none__";
 
 function num(v: unknown): number {
   const n = typeof v === "number" ? v : parseFloat(String(v));
@@ -56,6 +58,7 @@ export function POEditorSheet({
   const { create } = usePOMutations();
   const { data: projects = [] } = useProjects({});
   const { data: vendors = [] } = useVendors({ status: "ACTIVE" });
+  const { data: categories = [] } = useMaterialCategories();
 
   const {
     register,
@@ -81,10 +84,14 @@ export function POEditorSheet({
   const projectId = watch("projectId");
   const vendorId = watch("vendorId");
 
-  const totalPaise = (lines ?? []).reduce(
-    (s, l) => s + toPaise(num(l.quantity) * num(l.rateRupees)),
-    0,
+  const totals = poTotals(
+    (lines ?? []).map((l) => ({
+      quantity: num(l.quantity),
+      ratePaise: toPaise(num(l.rateRupees)),
+      gstRateBps: Math.round(num(l.gstPercent) * 100),
+    })),
   );
+  const totalPaise = totals.totalPaise;
 
   const project = projects.find((p) => p.id === projectId);
   const { data: spend } = useProjectSpend(projectId || "none");
@@ -112,7 +119,7 @@ export function POEditorSheet({
 
   return (
     <Sheet open={open} onOpenChange={(o) => (o ? onOpenChange(true) : close())}>
-      <SheetContent className="sm:max-w-2xl">
+      <SheetContent className="sm:max-w-3xl">
         <SheetHeader>
           <SheetTitle>New purchase order</SheetTitle>
           <SheetDescription>
@@ -163,10 +170,14 @@ export function POEditorSheet({
               </div>
             </div>
 
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
               <div className="space-y-1.5">
                 <Label>Purchase date</Label>
                 <Input type="date" {...register("purchaseDate")} />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Expected delivery</Label>
+                <Input type="date" {...register("expectedDelivery")} />
               </div>
               <div className="space-y-1.5">
                 <Label>Invoice # (optional)</Label>
@@ -178,12 +189,28 @@ export function POEditorSheet({
             <div className="space-y-2">
               <Label>Line items</Label>
               <div className="rounded-lg border border-border">
-                <div className="hidden grid-cols-[1fr_70px_80px_90px_90px_32px] gap-2 border-b border-border px-3 py-2 text-xs text-foreground-subtle sm:grid">
-                  <span>Material</span><span>Qty</span><span>Unit</span><span>Rate ₹</span><span className="text-right">Amount</span><span />
+                <div className="hidden grid-cols-[1fr_110px_64px_74px_84px_64px_88px_28px] gap-2 border-b border-border px-3 py-2 text-xs text-foreground-subtle sm:grid">
+                  <span>Material</span><span>Category</span><span>Qty</span><span>Unit</span><span>Rate ₹</span><span>GST %</span><span className="text-right">Amount</span><span />
                 </div>
                 {fields.map((f, i) => (
-                  <div key={f.id} className="grid grid-cols-[1fr_70px_80px_90px_90px_32px] items-center gap-2 border-b border-border px-3 py-2 last:border-0">
+                  <div key={f.id} className="grid grid-cols-2 items-center gap-2 border-b border-border px-3 py-2 last:border-0 sm:grid-cols-[1fr_110px_64px_74px_84px_64px_88px_28px]">
                     <Input className="h-8" placeholder="OPC Cement" {...register(`lineItems.${i}.material`)} />
+                    <Controller
+                      control={control}
+                      name={`lineItems.${i}.category`}
+                      render={({ field }) => (
+                        <Select
+                          value={field.value || NO_CATEGORY}
+                          onValueChange={(v) => field.onChange(v === NO_CATEGORY ? "" : v)}
+                        >
+                          <SelectTrigger className="h-8 px-2 text-xs"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value={NO_CATEGORY}>—</SelectItem>
+                            {categories.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
+                      )}
+                    />
                     <Input className="h-8 px-2" type="number" step="0.01" min={0} {...register(`lineItems.${i}.quantity`)} />
                     <Controller
                       control={control}
@@ -198,6 +225,15 @@ export function POEditorSheet({
                       )}
                     />
                     <Input className="h-8 px-2" type="number" step="0.01" min={0} {...register(`lineItems.${i}.rateRupees`)} />
+                    <Input
+                      className="h-8 px-2"
+                      type="number"
+                      step="0.01"
+                      min={0}
+                      max={100}
+                      list="gst-presets"
+                      {...register(`lineItems.${i}.gstPercent`)}
+                    />
                     <span className="text-right font-mono text-xs tabular-nums text-foreground-muted">
                       {formatPaiseCompact(toPaise(num(lines?.[i]?.quantity) * num(lines?.[i]?.rateRupees)))}
                     </span>
@@ -212,6 +248,10 @@ export function POEditorSheet({
                     </button>
                   </div>
                 ))}
+                {/* Standard GST slabs as quick suggestions; free entry allowed. */}
+                <datalist id="gst-presets">
+                  <option value="0" /><option value="5" /><option value="12" /><option value="18" /><option value="28" />
+                </datalist>
               </div>
               <button
                 type="button"
@@ -225,9 +265,19 @@ export function POEditorSheet({
               )}
             </div>
 
-            <div className="flex items-center justify-between border-t border-border pt-3">
-              <span className="text-sm text-foreground-muted">Total</span>
-              <span className="text-lg font-semibold"><MoneyText paise={totalPaise} whole /></span>
+            <div className="space-y-1.5 border-t border-border pt-3">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-foreground-muted">Subtotal</span>
+                <span className="font-mono tabular-nums"><MoneyText paise={totals.subtotalPaise} whole /></span>
+              </div>
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-foreground-muted">GST</span>
+                <span className="font-mono tabular-nums"><MoneyText paise={totals.gstPaise} whole /></span>
+              </div>
+              <div className="flex items-center justify-between pt-1">
+                <span className="text-sm font-medium">Grand total</span>
+                <span className="text-lg font-semibold"><MoneyText paise={totals.totalPaise} whole /></span>
+              </div>
             </div>
 
             {impact && project && project.budgetPaise > 0 && (

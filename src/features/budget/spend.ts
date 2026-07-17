@@ -7,7 +7,11 @@ import { poCountsForBudget, type ProjectSpend } from "./calc";
  */
 
 const LABOUR_ATT = "constructly.demo.labourAttendance.v2";
-const POS = "constructly.demo.pos.v1";
+// v2 (procurement redesign): totalPaise is the GRAND total (subtotal + GST).
+// Falls back to the v1 store until the procurement repo's migration runs
+// (pre-GST totals carry the same meaning — gst was implicitly 0).
+const POS = "constructly.demo.pos.v2";
+const POS_V1 = "constructly.demo.pos.v1";
 const SETTINGS = "constructly.demo.settings.v1";
 
 export function demoApprovalRequired(): boolean {
@@ -39,7 +43,13 @@ export function demoSpendByProject(): Map<string, ProjectSpend> {
   for (const a of readStore<{ projectId: string; estimatedCostPaise: number }>(LABOUR_ATT)) {
     get(a.projectId).laborPaise += a.estimatedCostPaise ?? 0;
   }
-  for (const po of readStore<{ projectId: string; status: string; totalPaise: number }>(POS)) {
+  const poRows = (() => {
+    const v2 = readStore<{ projectId: string; status: string; totalPaise: number }>(POS);
+    if (v2.length) return v2;
+    if (typeof window !== "undefined" && localStorage.getItem(POS) != null) return v2;
+    return readStore<{ projectId: string; status: string; totalPaise: number }>(POS_V1);
+  })();
+  for (const po of poRows) {
     if (poCountsForBudget(po.status as "DRAFT" | "SUBMITTED" | "APPROVED", approval)) {
       get(po.projectId).procurementPaise += po.totalPaise;
     }

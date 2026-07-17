@@ -79,6 +79,20 @@ Status legend: `Accepted` · `Superseded` · `Proposed`
 **Decision:** A `CONSTRUCTLY_DEMO` flag (auto-on when Supabase env is absent) serves a seeded demo identity ("Meridian Build Co.", owner Aarav Mehta) with no real auth. All env branching lives in `src/lib/env.ts`; `getCurrentUser()` returns the demo user in this mode. Playwright runs against demo mode.
 **Consequences:** `npm run dev` renders the full app immediately. Real auth activates automatically once Supabase env vars are set.
 
+## ADR-0024 — Procurement & Vendor Management v2 (extends ADR-0018/0019)
+**Status:** Accepted · 2026-07-17 (roadmap re-prioritized ahead of Reports)
+**Context:** Procurement is the purchasing backbone: many-to-many `Vendor ↔ Project` through purchase orders, plus GST, vendor payments with outstanding tracking, project-wise purchasing, and richer dashboards. Module 3 shipped the PO core; this extends it without a rewrite (all Module-3 data survives).
+**Decision:**
+- **Schema (additive):** `Project.procurementBudgetPaise?` (dedicated, independent of `budgetPaise`); `Vendor.pan?`; `VendorDocument`; PO gains `expectedDelivery?`, `subtotalPaise`, `gstPaise` (grand `totalPaise` = subtotal + GST — budget math unchanged); `POLineItem` gains `category?`, `gstRateBps` (basis points — integer tax math, no float), `gstPaise` (rounded **per line** so totals equal the sum of visible lines); new `VendorPayment` (project-aware, PO link **optional** for advances / on-account / multi-PO settlements, `PaymentMode` enum); `GoodsReceipt`/`GoodsReceiptItem` (schema + RLS + repository stubs only — UI deferred).
+- **Outstanding is DERIVED, never stored** (mirrors budget ADR-0018): `Σ counted PO grand totals − Σ payments`, scoped by vendor and/or project. PO payment status (UNPAID/PARTIAL/PAID) and aging buckets (0–30 / 31–60 / 60+, advances applied FIFO to oldest POs) all come from one pure `calc.ts` consumed by demo, server, dashboard, and UI — no duplicated math.
+- **Material categories** are company-wide presets in `Company.settings.materialCategories` (seeded: Cement, Steel, Sand & Aggregate, Electrical, Plumbing, Paint, Hardware, Other), Settings-managed, powering PO line categories + filters + analytics.
+- **Duplicate PO** clones any PO to a fresh unlinked draft dated today (distinct from Revise, which links to the source for audit).
+- **Online-only** (financial integrity): procurement, POs, vendors, payments, goods receipts. Labour attendance remains the sole offline-first module.
+- **Navigation both ways:** project → Procurement tab (6 summary cards, vendors-involved table with per-vendor drill-in, scoped POs/payments) and Labour tab; vendor profile (4 stat cards + Overview/Projects/POs/Payments/Documents/Outstanding tabs, project-filter pill); PO detail ↔ project ↔ vendor; company dashboard procurement card (spend, outstanding + top vendors, recent POs, monthly trend).
+- **Payment deletion is owner-only** and writes an `ActivityLog` entry (PMs can record, not remove).
+**Migration:** `prisma/migration-procurement-v2.sql` backfills `subtotal = old total, gst = 0` and seeds category presets. Demo stores bump to v2 keys (`vendors.v2`, `pos.v2`, `vendorPayments.v1`) with automatic v1 → v2 migration on load (verified live: pre-GST PO migrated with subtotal = total, gst = 0, category null, legacy keys removed).
+**Consequences:** GST-accurate financials; project-wise purchasing; real outstanding/aging without stored drift; goods-receipt-ready. Reports & Analytics (Module 5) resumes after this.
+
 ## ADR-0023 — Labour hierarchy: Category → Subcategory (extends ADR-0021)
 **Status:** Accepted · 2026-07-16 (client change request)
 **Context:** Sites organize labour as trade groups with roles inside them (Carpenter → Main Carpenter / Carpenter Helper). Still strictly headcounts — no individuals, IDs, check-in/out, or payroll.

@@ -68,6 +68,8 @@ export interface ProjectListItem {
   stage: ProjectStage;
   budgetPaise: number;
   contractValuePaise: number;
+  /** Dedicated procurement budget (independent of budgetPaise). Null = not set. */
+  procurementBudgetPaise: number | null;
   /** Derived spend (POs + labor). 0 until Modules 2–3; demo seeds realistic values. */
   usedPaise: number;
   startDate: string | null;
@@ -117,6 +119,7 @@ export interface CreateProjectInput {
   gpsLng?: number | null;
   budgetPaise: number;
   contractValuePaise: number;
+  procurementBudgetPaise?: number | null;
   startDate?: string | null;
   expectedCompletionDate?: string | null;
   pmId?: string | null;

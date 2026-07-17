@@ -4,9 +4,12 @@ import type {
   DashActivity,
   RawDashboardData,
   RawLabourEntry,
+  RawProcurementPayment,
+  RawProcurementPO,
   RawProject,
   RawSpendEntry,
 } from "../types";
+import { poPaymentStatus } from "@/features/procurement/calc";
 import type { PurchaseOrderListItem } from "@/features/procurement/types";
 
 const K = {
@@ -14,8 +17,11 @@ const K = {
   labourAttendance: "constructly.demo.labourAttendance.v2",
   labourCategories: "constructly.demo.labourCategories.v2",
   labourSubcategories: "constructly.demo.labourSubcategories.v2",
-  pos: "constructly.demo.pos.v1",
-  vendors: "constructly.demo.vendors.v1",
+  pos: "constructly.demo.pos.v2",
+  posV1: "constructly.demo.pos.v1",
+  vendors: "constructly.demo.vendors.v2",
+  vendorsV1: "constructly.demo.vendors.v1",
+  payments: "constructly.demo.vendorPayments.v1",
 };
 
 function read<T>(key: string): T[] {
@@ -39,6 +45,14 @@ interface StoredCategory { id: string; name: string; color: string | null }
 interface StoredSubcategory { id: string; categoryId: string; name: string }
 interface StoredPO { id: string; poNumber: string; vendorId: string; projectId: string; status: string; purchaseDate: string; totalPaise: number; invoiceNumber: string | null; createdByName: string; createdAt: string; approvedByName: string | null; approvedAt: string | null }
 interface StoredVendor { id: string; businessName: string }
+interface StoredPayment { vendorId: string; projectId: string; purchaseOrderId: string | null; amountPaise: number }
+
+/** Read the current key, falling back to the pre-v2 store if not migrated. */
+function readWithFallback<T>(key: string, legacy: string): T[] {
+  if (typeof window === "undefined") return [];
+  if (window.localStorage.getItem(key) != null) return read<T>(key);
+  return read<T>(legacy);
+}
 
 export function gatherDemoDashboard(opts: { userId: string; isOwner: boolean }): RawDashboardData {
   const today = new Date().toISOString().slice(0, 10);
@@ -53,9 +67,14 @@ export function gatherDemoDashboard(opts: { userId: string; isOwner: boolean }):
   const catById = new Map(categories.map((c) => [c.id, c]));
   const subById = new Map(read<StoredSubcategory>(K.labourSubcategories).map((s) => [s.id, s]));
   const labour = read<StoredLabour>(K.labourAttendance).filter((a) => projectIds.has(a.projectId));
-  const pos = read<StoredPO>(K.pos).filter((p) => projectIds.has(p.projectId));
-  const vendors = read<StoredVendor>(K.vendors);
+  const pos = readWithFallback<StoredPO>(K.pos, K.posV1).filter((p) => projectIds.has(p.projectId));
+  const vendors = readWithFallback<StoredVendor>(K.vendors, K.vendorsV1);
+  const payments = read<StoredPayment>(K.payments).filter((p) => projectIds.has(p.projectId));
   const vendorName = (id: string) => vendors.find((v) => v.id === id)?.businessName ?? "Unknown";
+  const paidByPO = new Map<string, number>();
+  payments.forEach((p) => {
+    if (p.purchaseOrderId) paidByPO.set(p.purchaseOrderId, (paidByPO.get(p.purchaseOrderId) ?? 0) + p.amountPaise);
+  });
 
   // Per-project labor (stored snapshot estimates, ADR-0022) + procurement.
   const laborByProject = new Map<string, number>();
@@ -105,19 +124,43 @@ export function gatherDemoDashboard(opts: { userId: string; isOwner: boolean }):
       .map((p) => ({ date: p.purchaseDate, laborPaise: 0, procurementPaise: p.totalPaise })),
   ];
 
-  const pendingPOs: PurchaseOrderListItem[] = pos
-    .filter((p) => p.status === "SUBMITTED")
-    .map((p) => ({
-      id: p.id,
-      poNumber: p.poNumber,
-      status: "SUBMITTED",
-      purchaseDate: p.purchaseDate,
-      totalPaise: p.totalPaise,
-      invoiceNumber: p.invoiceNumber,
-      vendor: { id: p.vendorId, name: vendorName(p.vendorId) },
-      project: { id: p.projectId, name: projMeta.get(p.projectId)?.name ?? "", code: projMeta.get(p.projectId)?.code ?? "" },
-      createdAt: p.createdAt,
-    }));
+  const toListItem = (p: StoredPO): PurchaseOrderListItem => ({
+    id: p.id,
+    poNumber: p.poNumber,
+    status: p.status as "DRAFT" | "SUBMITTED" | "APPROVED",
+    purchaseDate: p.purchaseDate,
+    expectedDelivery: null,
+    subtotalPaise: p.totalPaise,
+    gstPaise: 0,
+    totalPaise: p.totalPaise,
+    paidPaise: paidByPO.get(p.id) ?? 0,
+    paymentStatus: poPaymentStatus(p.totalPaise, paidByPO.get(p.id) ?? 0),
+    invoiceNumber: p.invoiceNumber,
+    vendor: { id: p.vendorId, name: vendorName(p.vendorId) },
+    project: { id: p.projectId, name: projMeta.get(p.projectId)?.name ?? "", code: projMeta.get(p.projectId)?.code ?? "" },
+    createdAt: p.createdAt,
+  });
+
+  const pendingPOs: PurchaseOrderListItem[] = pos.filter((p) => p.status === "SUBMITTED").map(toListItem);
+
+  const procurementPOs: RawProcurementPO[] = pos.map((p) => ({
+    id: p.id,
+    poNumber: p.poNumber,
+    vendorId: p.vendorId,
+    vendorName: vendorName(p.vendorId),
+    projectId: p.projectId,
+    projectName: projMeta.get(p.projectId)?.name ?? "",
+    projectCode: projMeta.get(p.projectId)?.code ?? "",
+    status: p.status as "DRAFT" | "SUBMITTED" | "APPROVED",
+    purchaseDate: p.purchaseDate,
+    totalPaise: p.totalPaise,
+    paidPaise: paidByPO.get(p.id) ?? 0,
+    createdAt: p.createdAt,
+  }));
+  const procurementPayments: RawProcurementPayment[] = payments.map((p) => ({
+    vendorId: p.vendorId,
+    amountPaise: p.amountPaise,
+  }));
 
   // Unified activity feed.
   const activity: DashActivity[] = [];
@@ -136,5 +179,15 @@ export function gatherDemoDashboard(opts: { userId: string; isOwner: boolean }):
     activity.push({ id: `att-${date}`, summary: `recorded labour attendance — ${total} workers`, actorName: null, createdAt: `${date}T09:00:00.000Z`, href: "/labor", kind: "attendance" }),
   );
 
-  return { projects: rawProjects, spendEntries, labourEntries, pendingPOs, activity, today };
+  return {
+    projects: rawProjects,
+    spendEntries,
+    labourEntries,
+    pendingPOs,
+    procurementPOs,
+    procurementPayments,
+    approvalRequired: approval,
+    activity,
+    today,
+  };
 }

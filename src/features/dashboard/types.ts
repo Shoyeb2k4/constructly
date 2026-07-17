@@ -45,11 +45,35 @@ export interface RawLabourEntry {
   estimatedCostPaise: number;
 }
 
+/** One counted purchase order, flattened for procurement widgets. */
+export interface RawProcurementPO {
+  id: string;
+  poNumber: string;
+  vendorId: string;
+  vendorName: string;
+  projectId: string;
+  projectName: string;
+  projectCode: string;
+  status: "DRAFT" | "SUBMITTED" | "APPROVED";
+  purchaseDate: string;
+  totalPaise: number;
+  paidPaise: number;
+  createdAt: string;
+}
+
+export interface RawProcurementPayment {
+  vendorId: string;
+  amountPaise: number;
+}
+
 export interface RawDashboardData {
   projects: RawProject[];
   spendEntries: RawSpendEntry[];
   labourEntries: RawLabourEntry[];
   pendingPOs: PurchaseOrderListItem[];
+  procurementPOs: RawProcurementPO[];
+  procurementPayments: RawProcurementPayment[];
+  approvalRequired: boolean;
   activity: DashActivity[];
   today: string; // YYYY-MM-DD (IST)
 }
@@ -111,12 +135,28 @@ export interface LabourWidget {
   trend: { date: string; total: number }[];
 }
 
+export interface VendorRollupRow {
+  vendorId: string;
+  name: string;
+  amountPaise: number;
+}
+
+export interface ProcurementWidget {
+  spendPaise: number;
+  outstandingPaise: number;
+  outstandingVendors: VendorRollupRow[];
+  topVendors: VendorRollupRow[];
+  recentPOs: PurchaseOrderListItem[];
+  monthlyTrend: { month: string; procurementPaise: number }[];
+}
+
 export interface DashboardSnapshot {
   isEmpty: boolean;
   kpis: DashboardKpis;
   spendTrend: SpendWeek[];
   costSplit: { laborPaise: number; procurementPaise: number };
   labour: LabourWidget;
+  procurement: ProcurementWidget;
   budgetHealth: BudgetHealthItem[];
   attention: {
     overdueProjects: { projectId: string; name: string; daysOverdue: number }[];

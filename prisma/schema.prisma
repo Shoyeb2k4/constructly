@@ -54,6 +54,15 @@ enum DocumentCategory {
   OTHER
 }
 
+enum PaymentMode {
+  CASH
+  UPI
+  BANK_TRANSFER
+  CHEQUE
+  CARD
+  OTHER
+}
+
 /// A tenant. Every domain row carries companyId.
 model Company {
   id        String   @id @default(uuid()) @db.Uuid
@@ -73,6 +82,9 @@ model Company {
   labourAttendance    LabourAttendance[]
   vendors             Vendor[]
   purchaseOrders      PurchaseOrder[]
+  vendorPayments      VendorPayment[]
+  vendorDocuments     VendorDocument[]
+  goodsReceipts       GoodsReceipt[]
 
   @@map("companies")
 }
@@ -96,6 +108,8 @@ model User {
   createdPurchaseOrders    PurchaseOrder[]   @relation("POCreatedBy")
   approvedPurchaseOrders   PurchaseOrder[]   @relation("POApprovedBy")
   vendorFavorites          VendorFavorite[]
+  vendorPayments           VendorPayment[]   @relation("PaymentCreatedBy")
+  goodsReceipts            GoodsReceipt[]    @relation("GoodsReceiptCreatedBy")
 
   @@index([companyId])
   @@map("users")
@@ -119,6 +133,8 @@ model Project {
   /// Integer paise (BigInt — budgets can exceed Int32). DTOs expose as number.
   budgetPaise            BigInt       @default(0) @map("budget_paise")
   contractValuePaise     BigInt       @default(0) @map("contract_value_paise")
+  /// Dedicated procurement budget (independent of budgetPaise). Null = not set.
+  procurementBudgetPaise BigInt?      @map("procurement_budget_paise")
   startDate              DateTime?    @map("start_date") @db.Date
   expectedCompletionDate DateTime?    @map("expected_completion_date") @db.Date
   tags                   String[]     @default([])
@@ -138,6 +154,8 @@ model Project {
   favorites        ProjectFavorite[]
   labourAttendance LabourAttendance[]
   purchaseOrders   PurchaseOrder[]
+  vendorPayments   VendorPayment[]
+  goodsReceipts    GoodsReceipt[]
 
   @@unique([companyId, code])
   @@index([companyId, stage])
@@ -345,6 +363,7 @@ model Vendor {
   phone            String?
   email            String?
   gstin            String?
+  pan              String?
   address          String?
   materialsSupplied String[]    @default([]) @map("materials_supplied")
   paymentTerms     String?      @map("payment_terms")
@@ -356,9 +375,32 @@ model Vendor {
   company        Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
   purchaseOrders PurchaseOrder[]
   favorites      VendorFavorite[]
+  payments       VendorPayment[]
+  documents      VendorDocument[]
+  goodsReceipts  GoodsReceipt[]
 
   @@index([companyId, status])
   @@map("vendors")
+}
+
+/// A document attached to a vendor (agreements, rate cards, GST certificates).
+model VendorDocument {
+  id           String           @id @default(uuid()) @db.Uuid
+  companyId    String           @map("company_id") @db.Uuid
+  vendorId     String           @map("vendor_id") @db.Uuid
+  category     DocumentCategory @default(OTHER)
+  storagePath  String           @map("storage_path")
+  filename     String
+  sizeBytes    Int              @map("size_bytes")
+  mimeType     String           @map("mime_type")
+  uploadedById String           @map("uploaded_by_id") @db.Uuid
+  createdAt    DateTime         @default(now()) @map("created_at")
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  vendor  Vendor  @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, vendorId])
+  @@map("vendor_documents")
 }
 
 /// Per-user vendor pin/favorite (optional).
@@ -385,8 +427,13 @@ model PurchaseOrder {
   status        PurchaseOrderStatus @default(DRAFT)
   invoiceNumber String?             @map("invoice_number")
   purchaseDate  DateTime            @map("purchase_date") @db.Date
+  expectedDelivery DateTime?        @map("expected_delivery") @db.Date
   notes         String?
-  /// Denormalized sum of line item amounts (integer paise).
+  /// Denormalized Σ line taxable amounts (integer paise, ex-GST).
+  subtotalPaise BigInt              @default(0) @map("subtotal_paise")
+  /// Denormalized Σ line GST (integer paise).
+  gstPaise      BigInt              @default(0) @map("gst_paise")
+  /// Grand total = subtotal + GST (integer paise). Budget math uses this.
   totalPaise    BigInt              @default(0) @map("total_paise")
   createdById   String              @map("created_by_id") @db.Uuid
   approvedById  String?             @map("approved_by_id") @db.Uuid
@@ -403,6 +450,8 @@ model PurchaseOrder {
   revisedFrom PurchaseOrder? @relation("PORevision", fields: [revisedFromId], references: [id])
   revisions   PurchaseOrder[] @relation("PORevision")
   lineItems   POLineItem[]
+  payments    VendorPayment[]
+  goodsReceipts GoodsReceipt[]
 
   @@unique([companyId, poNumber])
   @@index([companyId, status])
@@ -415,9 +464,17 @@ model POLineItem {
   id              String  @id @default(uuid()) @db.Uuid
   purchaseOrderId String  @map("purchase_order_id") @db.Uuid
   material        String
+  /// Material category preset (Cement, Steel, …) — powers filters + analytics.
+  category        String?
   quantity        Decimal @db.Decimal(12, 3)
   unit            String
+  /// Rate snapshot (frozen at entry — never recomputed).
   ratePaise       Int     @map("rate_paise")
+  /// GST rate in basis points (1800 = 18%). Integer — no float tax math.
+  gstRateBps      Int     @default(0) @map("gst_rate_bps")
+  /// GST amount, rounded per line: round(quantity × rate × bps / 10000).
+  gstPaise        BigInt  @default(0) @map("gst_paise")
+  /// Taxable amount = quantity × rate (ex-GST).
   amountPaise     BigInt  @map("amount_paise")
   sortOrder       Int     @default(0) @map("sort_order")
 
@@ -425,4 +482,70 @@ model POLineItem {
 
   @@index([purchaseOrderId])
   @@map("po_line_items")
+}
+
+/// A payment made to a vendor. Always project-aware; PO link OPTIONAL
+/// (advances / on-account / multi-PO settlements). Outstanding is DERIVED
+/// (Σ counted PO grand totals − Σ payments) — never stored.
+model VendorPayment {
+  id              String      @id @default(uuid()) @db.Uuid
+  companyId       String      @map("company_id") @db.Uuid
+  vendorId        String      @map("vendor_id") @db.Uuid
+  projectId       String      @map("project_id") @db.Uuid
+  purchaseOrderId String?     @map("purchase_order_id") @db.Uuid
+  amountPaise     BigInt      @map("amount_paise")
+  paymentMode     PaymentMode @default(BANK_TRANSFER) @map("payment_mode")
+  referenceNumber String?     @map("reference_number")
+  date            DateTime    @db.Date
+  remarks         String?
+  createdById     String      @map("created_by_id") @db.Uuid
+  createdAt       DateTime    @default(now()) @map("created_at")
+  updatedAt       DateTime    @updatedAt @map("updated_at")
+
+  company       Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  vendor        Vendor         @relation(fields: [vendorId], references: [id])
+  project       Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  purchaseOrder PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id], onDelete: SetNull)
+  createdBy     User           @relation("PaymentCreatedBy", fields: [createdById], references: [id])
+
+  @@index([companyId, vendorId])
+  @@index([companyId, projectId])
+  @@index([companyId, date])
+  @@map("vendor_payments")
+}
+
+/// Goods received against a PO. Schema-ready (ADR pending UI) so receiving /
+/// GRN can ship later without redesign.
+model GoodsReceipt {
+  id              String   @id @default(uuid()) @db.Uuid
+  companyId       String   @map("company_id") @db.Uuid
+  projectId       String   @map("project_id") @db.Uuid
+  vendorId        String   @map("vendor_id") @db.Uuid
+  purchaseOrderId String   @map("purchase_order_id") @db.Uuid
+  receivedDate    DateTime @map("received_date") @db.Date
+  notes           String?
+  createdById     String   @map("created_by_id") @db.Uuid
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  company       Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  project       Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  vendor        Vendor             @relation(fields: [vendorId], references: [id])
+  purchaseOrder PurchaseOrder      @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  createdBy     User               @relation("GoodsReceiptCreatedBy", fields: [createdById], references: [id])
+  items         GoodsReceiptItem[]
+
+  @@index([companyId, purchaseOrderId])
+  @@map("goods_receipts")
+}
+
+model GoodsReceiptItem {
+  id             String  @id @default(uuid()) @db.Uuid
+  goodsReceiptId String  @map("goods_receipt_id") @db.Uuid
+  poLineItemId   String  @map("po_line_item_id") @db.Uuid
+  quantityReceived Decimal @map("quantity_received") @db.Decimal(12, 3)
+
+  goodsReceipt GoodsReceipt @relation(fields: [goodsReceiptId], references: [id], onDelete: Cascade)
+
+  @@index([goodsReceiptId])
+  @@map("goods_receipt_items")
 }

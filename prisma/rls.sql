@@ -171,6 +171,42 @@ create policy po_line_items_all on public.po_line_items
     )
   );
 
+-- ── vendor_documents (tenant-scoped) ───────────────────────────────────
+alter table public.vendor_documents enable row level security;
+create policy vendor_documents_tenant on public.vendor_documents
+  for all using (company_id = public.current_company_id())
+  with check (company_id = public.current_company_id());
+
+-- ── vendor_payments (tenant + PM-scoped via project) ───────────────────
+-- Recording is open to owners + the assigned PM; DELETE is owner-only
+-- (payments are financial records — removal is audited + restricted).
+alter table public.vendor_payments enable row level security;
+create policy vendor_payments_select on public.vendor_payments
+  for select using (company_id = public.current_company_id() and public.can_access_project(project_id));
+create policy vendor_payments_insert on public.vendor_payments
+  for insert with check (company_id = public.current_company_id() and public.can_access_project(project_id));
+create policy vendor_payments_update on public.vendor_payments
+  for update using (company_id = public.current_company_id() and public.is_owner());
+create policy vendor_payments_delete on public.vendor_payments
+  for delete using (company_id = public.current_company_id() and public.is_owner());
+
+-- ── goods_receipts (tenant + PM-scoped via project) ────────────────────
+alter table public.goods_receipts enable row level security;
+create policy goods_receipts_all on public.goods_receipts
+  for all using (company_id = public.current_company_id() and public.can_access_project(project_id))
+  with check (company_id = public.current_company_id() and public.can_access_project(project_id));
+
+alter table public.goods_receipt_items enable row level security;
+create policy goods_receipt_items_all on public.goods_receipt_items
+  for all using (
+    exists (
+      select 1 from public.goods_receipts gr
+      where gr.id = goods_receipt_id
+        and gr.company_id = public.current_company_id()
+        and public.can_access_project(gr.project_id)
+    )
+  );
+
 -- ── Template for future domain tables ──────────────────────────────────
 -- alter table public.<table> enable row level security;
 -- create policy <table>_tenant on public.<table>

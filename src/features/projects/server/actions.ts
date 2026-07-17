@@ -61,6 +61,7 @@ const listSelect = {
   stage: true,
   budgetPaise: true,
   contractValuePaise: true,
+  procurementBudgetPaise: true,
   startDate: true,
   expectedCompletionDate: true,
   tags: true,
@@ -81,6 +82,7 @@ function toItem(row: ListRow, userId: string): ProjectListItem {
     stage: row.stage,
     budgetPaise: Number(row.budgetPaise),
     contractValuePaise: Number(row.contractValuePaise),
+    procurementBudgetPaise: row.procurementBudgetPaise == null ? null : Number(row.procurementBudgetPaise),
     usedPaise: 0, // derived in Modules 2–3
     startDate: row.startDate ? row.startDate.toISOString().slice(0, 10) : null,
     expectedCompletionDate: row.expectedCompletionDate
@@ -234,6 +236,8 @@ export async function createProject(
       gpsLng: input.gpsLng ?? null,
       budgetPaise: BigInt(input.budgetPaise),
       contractValuePaise: BigInt(input.contractValuePaise),
+      procurementBudgetPaise:
+        input.procurementBudgetPaise != null ? BigInt(input.procurementBudgetPaise) : null,
       startDate: input.startDate ? new Date(input.startDate) : null,
       expectedCompletionDate: input.expectedCompletionDate
         ? new Date(input.expectedCompletionDate)
@@ -269,6 +273,12 @@ export async function updateProject(
       ...(patch.budgetPaise != null ? { budgetPaise: BigInt(patch.budgetPaise) } : {}),
       ...(patch.contractValuePaise != null
         ? { contractValuePaise: BigInt(patch.contractValuePaise) }
+        : {}),
+      ...(patch.procurementBudgetPaise !== undefined
+        ? {
+            procurementBudgetPaise:
+              patch.procurementBudgetPaise != null ? BigInt(patch.procurementBudgetPaise) : null,
+          }
         : {}),
       ...(patch.startDate !== undefined
         ? { startDate: patch.startDate ? new Date(patch.startDate) : null }
@@ -332,6 +342,7 @@ export async function duplicateProject(id: string): Promise<ProjectDetail> {
       gpsLng: src.gpsLng,
       budgetPaise: src.budgetPaise,
       contractValuePaise: src.contractValuePaise,
+      procurementBudgetPaise: src.procurementBudgetPaise,
       tags: src.tags,
       pmId: src.pmId,
       createdById: user.id,

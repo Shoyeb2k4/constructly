@@ -25,6 +25,9 @@ function raw(over: Partial<RawDashboardData> = {}): RawDashboardData {
     spendEntries: [],
     labourEntries: [],
     pendingPOs: [],
+    procurementPOs: [],
+    procurementPayments: [],
+    approvalRequired: false,
     activity: [],
     today,
     ...over,
@@ -144,5 +147,34 @@ describe("assembleDashboard", () => {
       { date: "2026-07-14", total: 10 },
       { date: today, total: 29 },
     ]);
+  });
+
+  it("assembles the procurement widget: spend, outstanding, top vendors, trend", () => {
+    const snap = assembleDashboard(
+      raw({
+        approvalRequired: false,
+        procurementPOs: [
+          { id: "po1", poNumber: "PO-1", vendorId: "v1", vendorName: "Steelco", projectId: "p1", projectName: "A", projectCode: "PRJ-1", status: "APPROVED", purchaseDate: "2026-07-01", totalPaise: 300_000, paidPaise: 100_000, createdAt: "2026-07-01T00:00:00Z" },
+          { id: "po2", poNumber: "PO-2", vendorId: "v2", vendorName: "Cementco", projectId: "p1", projectName: "A", projectCode: "PRJ-1", status: "APPROVED", purchaseDate: "2026-06-10", totalPaise: 100_000, paidPaise: 100_000, createdAt: "2026-06-10T00:00:00Z" },
+          { id: "po3", poNumber: "PO-3", vendorId: "v1", vendorName: "Steelco", projectId: "p1", projectName: "A", projectCode: "PRJ-1", status: "DRAFT", purchaseDate: "2026-07-10", totalPaise: 999, paidPaise: 0, createdAt: "2026-07-10T00:00:00Z" },
+        ],
+        procurementPayments: [
+          { vendorId: "v1", amountPaise: 100_000 },
+          { vendorId: "v2", amountPaise: 100_000 },
+        ],
+      }),
+    );
+    // Draft excluded from spend.
+    expect(snap.procurement.spendPaise).toBe(400_000);
+    // Steelco: 300k purchased − 100k paid = 200k outstanding; Cementco fully paid.
+    expect(snap.procurement.outstandingPaise).toBe(200_000);
+    expect(snap.procurement.outstandingVendors).toEqual([
+      { vendorId: "v1", name: "Steelco", amountPaise: 200_000 },
+    ]);
+    expect(snap.procurement.topVendors[0]).toEqual({ vendorId: "v1", name: "Steelco", amountPaise: 300_000 });
+    expect(snap.procurement.recentPOs[0].poNumber).toBe("PO-3"); // most recent by date
+    expect(snap.procurement.monthlyTrend).toHaveLength(6);
+    const july = snap.procurement.monthlyTrend.find((m) => m.month === "2026-07")!;
+    expect(july.procurementPaise).toBe(300_000); // only counted July PO
   });
 });
