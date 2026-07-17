@@ -106,3 +106,16 @@ and independently reviewable, over a big shared components dump.
 | production | Vercel prod + Supabase prod project |
 
 Secrets in Vercel/Supabase env vars; never committed.
+
+## 7. Production hardening (Module 6)
+
+Layers added to make the MVP a production-grade SaaS — no workflow changes:
+
+- **Security**: strict security headers + CSP (`next.config.ts`), per-user rate limiting on `/api/sync` (`src/lib/rate-limit.ts`), three-layer authorization (UI + server guards + Postgres RLS), Zod validation at every boundary, immutable audit log. See [security.md](./security.md).
+- **Observability**: structured logger with a single `reportError()` Sentry seam (`src/lib/logger.ts`), route + global error boundaries (`app/**/error.tsx`, `app/global-error.tsx`), client error reporter, `/api/health` (+ deep DB probe).
+- **Reliability**: offline-first attendance with an idempotent, ordered, retry-safe sync engine; TanStack Query `refetchOnReconnect` + mutation retry; optimistic updates with rollback. See [offline-sync.md](./offline-sync.md).
+- **Accessibility**: WCAG 2.2 AA target — skip-to-content, focus management, reduced-motion, `role="img"` + descriptive labels on custom charts, axe-core CI gate.
+- **Performance**: route-based code splitting, lazy-loaded PDF/Excel exporters (jsPDF/SheetJS out of route bundles), virtualized long lists, tuned query cache, pure-function memo-friendly aggregation.
+- **CI/CD**: GitHub Actions (`.github/workflows/ci.yml`) — typecheck · lint (0 warnings) · unit/integration · production build · Playwright + axe · dependency audit. Green pipeline required to merge.
+
+The single-source-of-truth principle is unchanged: all money/budget/GST/outstanding math is pure and shared, so the dashboard, project views, procurement, labour, and every report always agree.

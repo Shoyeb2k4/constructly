@@ -1,4 +1,5 @@
 import { MoneyText } from "@/components/patterns/money-text";
+import { formatPaiseCompact } from "@/lib/money";
 
 /** SVG donut splitting labor vs procurement. Theme-aware via stroke utilities. */
 export function CostSplitDonut({
@@ -12,11 +13,12 @@ export function CostSplitDonut({
   const procPct = total > 0 ? procurementPaise / total : 0;
   const r = 42;
   const circ = 2 * Math.PI * r;
+  const label = `Cost split: procurement ${formatPaiseCompact(procurementPaise)} (${Math.round(procPct * 100)}%), labour ${formatPaiseCompact(laborPaise)} (${Math.round((1 - procPct) * 100)}%). Total ${formatPaiseCompact(total)}.`;
 
   return (
     <div className="flex flex-col items-center">
       <div className="relative size-32">
-        <svg viewBox="0 0 100 100" className="size-32 -rotate-90">
+        <svg viewBox="0 0 100 100" className="size-32 -rotate-90" role="img" aria-label={label}>
           <circle cx="50" cy="50" r={r} fill="none" className="stroke-warning" strokeWidth="12" />
           <circle
             cx="50"

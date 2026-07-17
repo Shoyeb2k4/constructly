@@ -4,6 +4,17 @@ _Human-readable log of what changed and when. Newest first. Keep entries short; 
 
 ## [Unreleased]
 
+### 2026-07-18 — Module 6: Hardening & Production Readiness (v1.0.0)
+Transforms the MVP into a production-grade commercial SaaS. No new business features — every change makes the product more robust without altering workflows.
+- **Security:** strict security headers + CSP, HSTS, X-Frame-Options, nosniff, Referrer/Permissions policies (`next.config.ts`); per-user rate limiting + batch cap on `/api/sync` (`src/lib/rate-limit.ts`); documented three-layer authz (UI + server guards + RLS), CSRF/XSS/SQLi protections, secure uploads, audit logging (`docs/security.md`).
+- **Observability:** structured logger with a single `reportError()` Sentry seam (`src/lib/logger.ts`); route + global error boundaries; client error reporter (window error/unhandledrejection); `/api/health` (+ `?deep=1` DB probe).
+- **Accessibility:** skip-to-content link, `role="img"` + descriptive labels on custom charts, reduced-motion honored, `motion-safe` transitions; `@axe-core/playwright` a11y suite scanning every key surface (WCAG 2.2 AA).
+- **Performance:** lazy-loaded PDF/Excel exporters (jsPDF/SheetJS out of route bundles), tuned QueryClient (gcTime, `refetchOnReconnect`, mutation retry), virtualization confirmed on long lists.
+- **Reliability:** offline sync engine tests (ordered idempotent flush, offline no-op, retry retention, applied cleanup); auto-reconnect refetch.
+- **Testing:** +permission tests (owner-only guards reject PMs before DB access), +sync engine tests, +rate-limit tests, +axe a11y E2E.
+- **CI/CD:** GitHub Actions pipeline (`.github/workflows/ci.yml`) — typecheck · lint (0 warnings) · unit/integration · build · Playwright + axe · `npm audit`. `lint` now `--max-warnings 0`.
+- **Docs:** new `security.md`, `deployment.md`, `testing.md`, `development.md`, `user-guide.md`, `erd.md` (mermaid), `offline-sync.md`, `production-checklist.md`; architecture updated. Plus release notes + deployment/installation guides + production-readiness report at the repo root.
+
 ### 2026-07-17 — Module 5: Reports & Analytics
 A reporting layer that's provably consistent with every module (ADR-0026) — reports call the same shared repositories/aggregation, never a second calculation.
 - **Registry:** six reports — **Budget vs Actual** (flagship), Project summary, Labour cost (Category → Subcategory with category + grand totals), Procurement (GST split + payment status), Vendor (derived outstanding), Deadline. Adding one = a single registry entry.

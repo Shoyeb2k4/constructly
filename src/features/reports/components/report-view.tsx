@@ -21,7 +21,7 @@ import { useProjects } from "@/features/projects/hooks";
 import { useVendors } from "@/features/procurement/hooks";
 import { getReport } from "../registry";
 import { useReport } from "../hooks";
-import { reportToPdf, reportToExcel } from "../exporters";
+// exporters.ts (jsPDF + SheetJS) is lazy-loaded on click — see handlers below.
 import type { ReportFilters } from "../types";
 import { ReportTable } from "./report-table";
 
@@ -119,7 +119,7 @@ export function ReportView({ id }: { id: string }) {
               variant="secondary"
               size="sm"
               disabled={!result || result.isEmpty}
-              onClick={() => result && reportToExcel(result)}
+              onClick={async () => { if (result) (await import("../exporters")).reportToExcel(result); }}
             >
               <FileSpreadsheet />
               Excel
@@ -128,7 +128,7 @@ export function ReportView({ id }: { id: string }) {
               variant="secondary"
               size="sm"
               disabled={!result || result.isEmpty}
-              onClick={() => result && reportToPdf(result)}
+              onClick={async () => { if (result) (await import("../exporters")).reportToPdf(result); }}
             >
               <Download />
               PDF

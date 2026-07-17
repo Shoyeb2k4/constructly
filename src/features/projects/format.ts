@@ -32,11 +32,12 @@ export function deadlineCountdown(
 ): { label: string; tone: CountdownTone } {
   if (completed) return { label: "Done", tone: "done" };
   if (!dueDate) return { label: "No deadline", tone: "default" };
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const due = new Date(dueDate);
-  due.setHours(0, 0, 0, 0);
-  const days = Math.round((due.getTime() - today.getTime()) / 86_400_000);
+  // UTC-based day math: the due date is a YYYY-MM-DD (UTC) and "today" must be
+  // compared the same way, or a machine in a +hours timezone reads an ISO
+  // "today" as yesterday near midnight and mis-labels it. (Matches ADR-0020.)
+  const todayUTC = Date.parse(new Date().toISOString().slice(0, 10) + "T00:00:00Z");
+  const dueUTC = Date.parse(dueDate.slice(0, 10) + "T00:00:00Z");
+  const days = Math.round((dueUTC - todayUTC) / 86_400_000);
   if (days < 0) return { label: `${Math.abs(days)}d overdue`, tone: "danger" };
   if (days === 0) return { label: "Due today", tone: "danger" };
   if (days <= 14) return { label: `${days}d left`, tone: "warning" };

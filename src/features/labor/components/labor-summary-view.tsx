@@ -18,7 +18,7 @@ import { EmptyState } from "@/components/patterns/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useProjects } from "@/features/projects/hooks";
 import { useLabourSummary, useAttendanceList } from "../hooks";
-import { exportRangePdf, exportRangeExcel } from "../exports";
+// exports.ts (jsPDF + SheetJS) is lazy-loaded on click — see handlers below.
 import { todayISO } from "../last-project";
 
 export function LaborSummaryView() {
@@ -60,11 +60,11 @@ export function LaborSummaryView() {
         </div>
         <div className="ml-auto flex items-center gap-2">
           <Button variant="ghost" size="sm" disabled={!summary || summary.totalManDays === 0}
-            onClick={() => summary && exportRangePdf({ records, summary, from, to, scope })}>
+            onClick={async () => { if (summary) (await import("../exports")).exportRangePdf({ records, summary, from, to, scope }); }}>
             <FileText />PDF
           </Button>
           <Button variant="ghost" size="sm" disabled={!summary || summary.totalManDays === 0}
-            onClick={() => summary && exportRangeExcel({ records, summary, from, to, scope })}>
+            onClick={async () => { if (summary) (await import("../exports")).exportRangeExcel({ records, summary, from, to, scope }); }}>
             <FileSpreadsheet />Excel
           </Button>
         </div>

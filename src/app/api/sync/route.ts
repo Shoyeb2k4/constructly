@@ -3,6 +3,14 @@ import { z } from "zod";
 import type { SyncResult } from "@/lib/sync/types";
 import type { SessionUser } from "@/lib/auth/types";
 import { getCurrentUser } from "@/lib/auth/current-user";
+import { rateLimit } from "@/lib/rate-limit";
+import { reportError } from "@/lib/logger";
+
+// A generous ceiling — normal field sync is a handful of rows per flush. This
+// guards against a runaway client or abuse, not legitimate use.
+const SYNC_LIMIT = { limit: 120, windowMs: 60_000 };
+// Cap the batch so one request can't enqueue unbounded work.
+const MAX_MUTATIONS = 500;
 
 /**
  * Offline sync endpoint (ADR-0007). Idempotent batch upsert keyed on
@@ -95,11 +103,26 @@ export async function POST(req: Request) {
     );
   }
 
+  // Per-user rate limit (RLS + auth already scope access; this caps volume).
+  const rl = rateLimit(`sync:${user.id}`, SYNC_LIMIT);
+  if (!rl.ok) {
+    return NextResponse.json(
+      { error: { code: "RATE_LIMITED", message: "Too many sync requests" } },
+      { status: 429, headers: { "Retry-After": String(rl.retryAfter) } },
+    );
+  }
+
   const parsed = bodySchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) {
     return NextResponse.json(
       { error: { code: "INVALID_BODY", message: "Malformed sync payload" } },
       { status: 422 },
+    );
+  }
+  if (parsed.data.mutations.length > MAX_MUTATIONS) {
+    return NextResponse.json(
+      { error: { code: "BATCH_TOO_LARGE", message: `Max ${MAX_MUTATIONS} mutations per request` } },
+      { status: 413 },
     );
   }
 
@@ -110,8 +133,9 @@ export async function POST(req: Request) {
     try {
       await handler(m.clientUuid, m.payload, user);
       result.applied.push(m.clientUuid);
-    } catch {
+    } catch (err) {
       // Left in the client outbox for retry on the next flush.
+      reportError(err, { scope: "sync", entity: m.entity, clientUuid: m.clientUuid, userId: user.id });
     }
   }
   return NextResponse.json(result);

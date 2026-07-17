@@ -30,7 +30,8 @@ import { cn } from "@/lib/utils";
 import { useProjects } from "@/features/projects/hooks";
 import { useAttendanceSheet, useSetQuantity, useCopyPreviousDay } from "../../hooks";
 import { getLastProject, setLastProject, todayISO } from "../../last-project";
-import { exportSheetPdf, exportSheetExcel } from "../../exports";
+// exports.ts (jsPDF + SheetJS) is lazy-loaded on click to keep it out of the
+// route bundle — see the export handlers below.
 import { FALLBACK_COLOR } from "../../constants";
 import type { SheetGroup, SheetRow } from "../../types";
 import { SyncChip } from "./sync-chip";
@@ -260,12 +261,12 @@ export function AttendanceView() {
           </Button>
           <div className="ml-auto flex items-center gap-2">
             <Button variant="ghost" size="sm" disabled={!sheet || sheet.totalPresent === 0}
-              onClick={() => sheet && exportSheetPdf(sheet, projectName)}>
+              onClick={async () => { if (sheet) (await import("../../exports")).exportSheetPdf(sheet, projectName); }}>
               <FileText />
               PDF
             </Button>
             <Button variant="ghost" size="sm" disabled={!sheet || sheet.totalPresent === 0}
-              onClick={() => sheet && exportSheetExcel(sheet, projectName)}>
+              onClick={async () => { if (sheet) (await import("../../exports")).exportSheetExcel(sheet, projectName); }}>
               <FileSpreadsheet />
               Excel
             </Button>
