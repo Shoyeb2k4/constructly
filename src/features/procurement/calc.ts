@@ -271,6 +271,88 @@ export function projectVendorRollups(
   );
 }
 
+/* ── Vendor ledger (future-ready · ADR-0025) ─────────────────────────── */
+// A running ledger derives entirely from existing PurchaseOrder + VendorPayment
+// rows — no schema redesign needed. POs are DEBITS (what we owe), payments are
+// CREDITS (what we paid); the running balance is the outstanding at each point.
+// Positive balance = we owe the vendor; negative = advance credit sits with them.
+
+export interface LedgerEntry {
+  date: string;
+  kind: "purchase" | "payment";
+  ref: string; // PO number or payment reference/id
+  debitPaise: number; // purchases increase what we owe
+  creditPaise: number; // payments reduce it
+  balancePaise: number; // running outstanding after this entry
+}
+
+export interface LedgerMonth {
+  month: string; // YYYY-MM
+  purchasesPaise: number;
+  paymentsPaise: number;
+  closingBalancePaise: number;
+}
+
+export interface VendorLedger {
+  entries: LedgerEntry[];
+  months: LedgerMonth[];
+  /** Final running balance: > 0 owed to vendor, < 0 advance credit. */
+  closingBalancePaise: number;
+}
+
+/** Build a vendor's running ledger + monthly summary from POs and payments. */
+export function vendorLedger(
+  pos: (POForRollup & { poNumber?: string })[],
+  payments: (PaymentForRollup & { ref?: string })[],
+  vendorId: string,
+  approvalRequired: boolean,
+  projectId?: string,
+): VendorLedger {
+  const inScope = <T extends { vendorId: string; projectId: string }>(x: T) =>
+    x.vendorId === vendorId && (!projectId || x.projectId === projectId);
+
+  const raw: Omit<LedgerEntry, "balancePaise">[] = [
+    ...pos
+      .filter((p) => inScope(p) && poCounted(p.status, approvalRequired))
+      .map((p) => ({
+        date: p.purchaseDate,
+        kind: "purchase" as const,
+        ref: p.poNumber ?? p.id.slice(0, 8),
+        debitPaise: p.totalPaise,
+        creditPaise: 0,
+      })),
+    ...payments.filter(inScope).map((p) => ({
+      date: p.date,
+      kind: "payment" as const,
+      ref: p.ref ?? "Payment",
+      debitPaise: 0,
+      creditPaise: p.amountPaise,
+    })),
+  ].sort((a, b) => (a.date === b.date ? (a.kind === "purchase" ? -1 : 1) : a.date.localeCompare(b.date)));
+
+  let balance = 0;
+  const entries: LedgerEntry[] = raw.map((e) => {
+    balance += e.debitPaise - e.creditPaise;
+    return { ...e, balancePaise: balance };
+  });
+
+  const byMonth = new Map<string, LedgerMonth>();
+  for (const e of entries) {
+    const m = e.date.slice(0, 7);
+    const row = byMonth.get(m) ?? { month: m, purchasesPaise: 0, paymentsPaise: 0, closingBalancePaise: 0 };
+    row.purchasesPaise += e.debitPaise;
+    row.paymentsPaise += e.creditPaise;
+    row.closingBalancePaise = e.balancePaise; // last entry in the month wins
+    byMonth.set(m, row);
+  }
+
+  return {
+    entries,
+    months: [...byMonth.values()].sort((a, b) => a.month.localeCompare(b.month)),
+    closingBalancePaise: balance,
+  };
+}
+
 /* ── Project procurement summary (the six cards) ─────────────────────── */
 
 export interface ProjectProcurementSummary {

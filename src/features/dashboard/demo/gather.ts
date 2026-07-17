@@ -43,7 +43,8 @@ interface StoredProject {
 interface StoredLabour { projectId: string; date: string; labourSubcategoryId: string; quantityPresent: number; estimatedCostPaise: number }
 interface StoredCategory { id: string; name: string; color: string | null }
 interface StoredSubcategory { id: string; categoryId: string; name: string }
-interface StoredPO { id: string; poNumber: string; vendorId: string; projectId: string; status: string; purchaseDate: string; totalPaise: number; invoiceNumber: string | null; createdByName: string; createdAt: string; approvedByName: string | null; approvedAt: string | null }
+interface StoredPOLine { material: string; category: string | null; amountPaise: number }
+interface StoredPO { id: string; poNumber: string; vendorId: string; projectId: string; status: string; purchaseDate: string; expectedDelivery: string | null; subtotalPaise: number; gstPaise: number; totalPaise: number; invoiceNumber: string | null; createdByName: string; createdAt: string; approvedByName: string | null; approvedAt: string | null; lineItems: StoredPOLine[] }
 interface StoredVendor { id: string; businessName: string }
 interface StoredPayment { vendorId: string; projectId: string; purchaseOrderId: string | null; amountPaise: number }
 
@@ -153,9 +154,12 @@ export function gatherDemoDashboard(opts: { userId: string; isOwner: boolean }):
     projectCode: projMeta.get(p.projectId)?.code ?? "",
     status: p.status as "DRAFT" | "SUBMITTED" | "APPROVED",
     purchaseDate: p.purchaseDate,
+    expectedDelivery: p.expectedDelivery ?? null,
+    gstPaise: p.gstPaise ?? 0,
     totalPaise: p.totalPaise,
     paidPaise: paidByPO.get(p.id) ?? 0,
     createdAt: p.createdAt,
+    lines: (p.lineItems ?? []).map((l) => ({ material: l.material, category: l.category ?? null, amountPaise: l.amountPaise })),
   }));
   const procurementPayments: RawProcurementPayment[] = payments.map((p) => ({
     vendorId: p.vendorId,

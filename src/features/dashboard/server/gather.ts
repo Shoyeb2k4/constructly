@@ -34,7 +34,11 @@ export async function gatherServerDashboard(): Promise<RawDashboardData> {
     }),
     prisma.purchaseOrder.findMany({
       where: { companyId, ...(isOwner ? {} : { project: { pmId: user.id } }) },
-      include: { vendor: { select: { businessName: true } }, project: { select: { name: true, code: true } } },
+      include: {
+        vendor: { select: { businessName: true } },
+        project: { select: { name: true, code: true } },
+        lineItems: { select: { material: true, category: true, amountPaise: true } },
+      },
     }),
     prisma.vendorPayment.findMany({
       where: { companyId, ...(isOwner ? {} : { project: { pmId: user.id } }) },
@@ -129,9 +133,12 @@ export async function gatherServerDashboard(): Promise<RawDashboardData> {
     projectCode: p.project.code,
     status: p.status,
     purchaseDate: p.purchaseDate.toISOString().slice(0, 10),
+    expectedDelivery: p.expectedDelivery ? p.expectedDelivery.toISOString().slice(0, 10) : null,
+    gstPaise: Number(p.gstPaise),
     totalPaise: Number(p.totalPaise),
     paidPaise: paidByPO.get(p.id) ?? 0,
     createdAt: p.createdAt.toISOString(),
+    lines: p.lineItems.map((l) => ({ material: l.material, category: l.category, amountPaise: Number(l.amountPaise) })),
   }));
   const procurementPayments: RawProcurementPayment[] = payments.map((p) => ({
     vendorId: p.vendorId,

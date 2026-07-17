@@ -471,6 +471,10 @@ model POLineItem {
   /// Rate snapshot (frozen at entry — never recomputed).
   ratePaise       Int     @map("rate_paise")
   /// GST rate in basis points (1800 = 18%). Integer — no float tax math.
+  /// Forward-compat (ADR-0025, not yet implemented): CGST/SGST/IGST split derives
+  /// from this single rate (intra-state = CGST+SGST halves, inter-state = IGST);
+  /// `hsn_code` and a PO-level tax-inclusive/exclusive flag attach as new columns
+  /// with no redesign — `gst_paise` stays the per-line rounded source of truth.
   gstRateBps      Int     @default(0) @map("gst_rate_bps")
   /// GST amount, rounded per line: round(quantity × rate × bps / 10000).
   gstPaise        BigInt  @default(0) @map("gst_paise")

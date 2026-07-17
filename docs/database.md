@@ -138,6 +138,8 @@ Vendor (…, pan?)
 - **Money:** `POLineItem.amount_paise` = taxable (qty × rate, ex-GST); `gst_paise` rounded **per line**
   (`round(qty × rate × gst_rate_bps / 10000)`); PO `total_paise` (grand, incl. GST) feeds budget + outstanding.
 - **GST rate** stored as integer **basis points** (`gst_rate_bps`, 1800 = 18%) — no float tax math.
+  Forward-compat (ADR-0025, not built yet): CGST/SGST/IGST are a derived split of this one rate;
+  `hsn_code` + a PO `tax_inclusive` flag attach as nullable columns — no redesign.
 - **Rate snapshot:** `rate_paise` is frozen at entry; approved POs are immutable (Revise clones to a linked
   draft via `revised_from_id`; Duplicate clones to an unlinked draft dated today).
 - **Outstanding (derived, ADR-0024):** `Σ counted PO grand totals − Σ payments`, scoped by vendor/project;

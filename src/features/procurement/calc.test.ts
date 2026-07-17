@@ -8,6 +8,7 @@ import {
   agingBuckets,
   projectProcurementSummary,
   vendorProjectRollups,
+  vendorLedger,
   type POForRollup,
   type PaymentForRollup,
 } from "./calc";
@@ -101,5 +102,28 @@ describe("procurement calc — rollups + summary", () => {
   });
   it("remaining is null when no procurement budget is set", () => {
     expect(projectProcurementSummary(null, pos, payments, "p1", false).remainingPaise).toBeNull();
+  });
+});
+
+describe("procurement calc — vendor ledger (future-ready)", () => {
+  it("builds a running ledger + monthly summary from POs and payments", () => {
+    const led = vendorLedger(
+      pos.map((p) => ({ ...p, poNumber: p.id.toUpperCase() })),
+      payments.map((p) => ({ ...p, ref: "PAY" })),
+      "v1",
+      false,
+    );
+    // Debits: po1 100k (May), po2 200k (Jun). Credits: 40k (May), 50k (Jun).
+    // Chronological running balance ends at 210k owed.
+    expect(led.closingBalancePaise).toBe(210_000);
+    expect(led.entries.map((e) => e.balancePaise)).toEqual([100_000, 60_000, 260_000, 210_000]);
+    const may = led.months.find((m) => m.month === "2026-05")!;
+    expect(may.purchasesPaise).toBe(100_000);
+    expect(may.paymentsPaise).toBe(40_000);
+    expect(may.closingBalancePaise).toBe(60_000);
+  });
+  it("scopes the ledger to a project", () => {
+    const led = vendorLedger(pos, payments, "v1", false, "p2");
+    expect(led.closingBalancePaise).toBe(150_000); // po2 200k − 50k payment
   });
 });

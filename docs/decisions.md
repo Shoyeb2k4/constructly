@@ -79,6 +79,15 @@ Status legend: `Accepted` · `Superseded` · `Proposed`
 **Decision:** A `CONSTRUCTLY_DEMO` flag (auto-on when Supabase env is absent) serves a seeded demo identity ("Meridian Build Co.", owner Aarav Mehta) with no real auth. All env branching lives in `src/lib/env.ts`; `getCurrentUser()` returns the demo user in this mode. Playwright runs against demo mode.
 **Consequences:** `npm run dev` renders the full app immediately. Real auth activates automatically once Supabase env vars are set.
 
+## ADR-0025 — Procurement forward-compatibility (GST split, vendor ledger)
+**Status:** Accepted · 2026-07-17 (client refinements after ADR-0024; readiness only, not implemented)
+**Context:** The client approved Procurement v2 and asked that the architecture be ready for richer tax and a full vendor ledger **without a future schema redesign** — but explicitly *not* to build them yet.
+**Decision (readiness commitments, no behaviour change now):**
+- **GST split / HSN / tax mode:** `POLineItem.gstRateBps` stays the single per-line rate and `gstPaise` the per-line rounded source of truth. CGST/SGST/IGST are a *presentation* split derived from that one rate (intra-state → CGST+SGST halves, inter-state → IGST) — no stored duplication. `hsnCode` (line) and a PO-level `taxInclusive` boolean attach as new nullable columns when needed; existing rows default correctly (exclusive, null HSN). No redesign.
+- **Vendor ledger:** a complete running ledger (purchases as debits, payments as credits, running balance, monthly summary, credit/debit balances) derives entirely from existing `PurchaseOrder` + `VendorPayment` rows. Proven now by the pure `vendorLedger()` in `src/features/procurement/calc.ts` (unit-tested: running balance + monthly rollup + project scoping) — the Vendor Profile can grow an eventual Ledger tab with zero schema change.
+- **Project Overview** now shows the dedicated Procurement budget (budget / used / remaining) distinctly from the overall project budget (used / remaining); the dashboard procurement card became a command center (spend, GST paid, outstanding + pending count, top vendors, spend by project, top materials, upcoming deliveries, monthly trend) — all from the same shared assembler.
+**Consequences:** Tax/ledger features ship later as additive columns + UI over the existing pure calc; no migration risk introduced now.
+
 ## ADR-0024 — Procurement & Vendor Management v2 (extends ADR-0018/0019)
 **Status:** Accepted · 2026-07-17 (roadmap re-prioritized ahead of Reports)
 **Context:** Procurement is the purchasing backbone: many-to-many `Vendor ↔ Project` through purchase orders, plus GST, vendor payments with outstanding tracking, project-wise purchasing, and richer dashboards. Module 3 shipped the PO core; this extends it without a rewrite (all Module-3 data survives).

@@ -45,6 +45,13 @@ export interface RawLabourEntry {
   estimatedCostPaise: number;
 }
 
+/** One material line on a counted PO, for material-spend rollups. */
+export interface RawProcurementLine {
+  material: string;
+  category: string | null;
+  amountPaise: number; // taxable (ex-GST)
+}
+
 /** One counted purchase order, flattened for procurement widgets. */
 export interface RawProcurementPO {
   id: string;
@@ -56,9 +63,12 @@ export interface RawProcurementPO {
   projectCode: string;
   status: "DRAFT" | "SUBMITTED" | "APPROVED";
   purchaseDate: string;
+  expectedDelivery: string | null;
+  gstPaise: number;
   totalPaise: number;
   paidPaise: number;
   createdAt: string;
+  lines: RawProcurementLine[];
 }
 
 export interface RawProcurementPayment {
@@ -141,11 +151,41 @@ export interface VendorRollupRow {
   amountPaise: number;
 }
 
+export interface MaterialSpendRow {
+  material: string;
+  category: string | null;
+  amountPaise: number;
+}
+
+export interface ProjectSpendRow {
+  projectId: string;
+  name: string;
+  code: string;
+  amountPaise: number;
+}
+
+export interface UpcomingDelivery {
+  poId: string;
+  poNumber: string;
+  vendorName: string;
+  projectName: string;
+  expectedDelivery: string;
+  daysUntil: number;
+  totalPaise: number;
+}
+
 export interface ProcurementWidget {
   spendPaise: number;
+  /** GST paid across counted POs (period-agnostic; matches spend scope). */
+  gstPaidPaise: number;
   outstandingPaise: number;
+  /** Count of POs with any outstanding balance (pending payments). */
+  pendingPaymentsCount: number;
   outstandingVendors: VendorRollupRow[];
   topVendors: VendorRollupRow[];
+  spendByProject: ProjectSpendRow[];
+  topMaterials: MaterialSpendRow[];
+  upcomingDeliveries: UpcomingDelivery[];
   recentPOs: PurchaseOrderListItem[];
   monthlyTrend: { month: string; procurementPaise: number }[];
 }

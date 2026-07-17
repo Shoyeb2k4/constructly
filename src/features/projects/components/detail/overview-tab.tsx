@@ -44,6 +44,7 @@ export function OverviewTab({ project }: { project: ProjectDetail }) {
           projectId={project.id}
           budgetPaise={project.budgetPaise}
           contractValuePaise={project.contractValuePaise}
+          procurementBudgetPaise={project.procurementBudgetPaise}
         />
 
         <Card>

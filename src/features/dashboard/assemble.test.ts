@@ -149,14 +149,19 @@ describe("assembleDashboard", () => {
     ]);
   });
 
-  it("assembles the procurement widget: spend, outstanding, top vendors, trend", () => {
+  it("assembles the procurement widget: spend, GST, outstanding, rollups, deliveries, trend", () => {
+    const po = (over: Partial<import("./types").RawProcurementPO>): import("./types").RawProcurementPO => ({
+      id: "po", poNumber: "PO", vendorId: "v1", vendorName: "Steelco", projectId: "p1", projectName: "A",
+      projectCode: "PRJ-1", status: "APPROVED", purchaseDate: "2026-07-01", expectedDelivery: null,
+      gstPaise: 0, totalPaise: 0, paidPaise: 0, createdAt: "2026-07-01T00:00:00Z", lines: [], ...over,
+    });
     const snap = assembleDashboard(
       raw({
         approvalRequired: false,
         procurementPOs: [
-          { id: "po1", poNumber: "PO-1", vendorId: "v1", vendorName: "Steelco", projectId: "p1", projectName: "A", projectCode: "PRJ-1", status: "APPROVED", purchaseDate: "2026-07-01", totalPaise: 300_000, paidPaise: 100_000, createdAt: "2026-07-01T00:00:00Z" },
-          { id: "po2", poNumber: "PO-2", vendorId: "v2", vendorName: "Cementco", projectId: "p1", projectName: "A", projectCode: "PRJ-1", status: "APPROVED", purchaseDate: "2026-06-10", totalPaise: 100_000, paidPaise: 100_000, createdAt: "2026-06-10T00:00:00Z" },
-          { id: "po3", poNumber: "PO-3", vendorId: "v1", vendorName: "Steelco", projectId: "p1", projectName: "A", projectCode: "PRJ-1", status: "DRAFT", purchaseDate: "2026-07-10", totalPaise: 999, paidPaise: 0, createdAt: "2026-07-10T00:00:00Z" },
+          po({ id: "po1", poNumber: "PO-1", vendorId: "v1", vendorName: "Steelco", status: "APPROVED", purchaseDate: "2026-07-01", expectedDelivery: "2026-07-20", gstPaise: 54_000, totalPaise: 300_000, paidPaise: 100_000, lines: [{ material: "TMT Steel", category: "Steel", amountPaise: 246_000 }] }),
+          po({ id: "po2", poNumber: "PO-2", vendorId: "v2", vendorName: "Cementco", projectId: "p2", projectName: "B", projectCode: "PRJ-2", status: "APPROVED", purchaseDate: "2026-06-10", gstPaise: 12_000, totalPaise: 100_000, paidPaise: 100_000, lines: [{ material: "OPC Cement", category: "Cement", amountPaise: 88_000 }] }),
+          po({ id: "po3", poNumber: "PO-3", vendorId: "v1", vendorName: "Steelco", status: "DRAFT", purchaseDate: "2026-07-10", totalPaise: 999, lines: [{ material: "TMT Steel", category: "Steel", amountPaise: 999 }] }),
         ],
         procurementPayments: [
           { vendorId: "v1", amountPaise: 100_000 },
@@ -164,17 +169,28 @@ describe("assembleDashboard", () => {
         ],
       }),
     );
-    // Draft excluded from spend.
-    expect(snap.procurement.spendPaise).toBe(400_000);
+    const pr = snap.procurement;
+    // Draft excluded from spend + GST.
+    expect(pr.spendPaise).toBe(400_000);
+    expect(pr.gstPaidPaise).toBe(66_000); // 54k + 12k (draft excluded)
     // Steelco: 300k purchased − 100k paid = 200k outstanding; Cementco fully paid.
-    expect(snap.procurement.outstandingPaise).toBe(200_000);
-    expect(snap.procurement.outstandingVendors).toEqual([
-      { vendorId: "v1", name: "Steelco", amountPaise: 200_000 },
+    expect(pr.outstandingPaise).toBe(200_000);
+    expect(pr.pendingPaymentsCount).toBe(1); // only po1 has a balance
+    expect(pr.outstandingVendors).toEqual([{ vendorId: "v1", name: "Steelco", amountPaise: 200_000 }]);
+    expect(pr.topVendors[0]).toEqual({ vendorId: "v1", name: "Steelco", amountPaise: 300_000 });
+    // Spend by project (grand totals, draft excluded).
+    expect(pr.spendByProject).toEqual([
+      { projectId: "p1", name: "A", code: "PRJ-1", amountPaise: 300_000 },
+      { projectId: "p2", name: "B", code: "PRJ-2", amountPaise: 100_000 },
     ]);
-    expect(snap.procurement.topVendors[0]).toEqual({ vendorId: "v1", name: "Steelco", amountPaise: 300_000 });
-    expect(snap.procurement.recentPOs[0].poNumber).toBe("PO-3"); // most recent by date
-    expect(snap.procurement.monthlyTrend).toHaveLength(6);
-    const july = snap.procurement.monthlyTrend.find((m) => m.month === "2026-07")!;
-    expect(july.procurementPaise).toBe(300_000); // only counted July PO
+    // Top materials by taxable amount (draft excluded).
+    expect(pr.topMaterials[0]).toEqual({ material: "TMT Steel", category: "Steel", amountPaise: 246_000 });
+    // Upcoming delivery: po1 expected 2026-07-20 (5 days from today 2026-07-15).
+    expect(pr.upcomingDeliveries).toEqual([
+      { poId: "po1", poNumber: "PO-1", vendorName: "Steelco", projectName: "A", expectedDelivery: "2026-07-20", daysUntil: 5, totalPaise: 300_000 },
+    ]);
+    expect(pr.recentPOs[0].poNumber).toBe("PO-3"); // most recent by date
+    expect(pr.monthlyTrend).toHaveLength(6);
+    expect(pr.monthlyTrend.find((m) => m.month === "2026-07")!.procurementPaise).toBe(300_000);
   });
 });

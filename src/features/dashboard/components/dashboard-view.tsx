@@ -105,15 +105,13 @@ export function DashboardView({
         <BudgetHealthCard items={data.budgetHealth} budgetUsedPaise={k.budgetUsedPaise} budgetTotalPaise={k.budgetTotalPaise} />
       </div>
 
-      {/* Procurement + labour */}
-      <div className="grid gap-6 lg:grid-cols-2">
-        <ProcurementCard procurement={data.procurement} />
-        <LabourCard labour={data.labour} />
-      </div>
+      {/* Procurement command center (full width) */}
+      <ProcurementCard procurement={data.procurement} />
 
-      {/* Attention + activity */}
+      {/* Attention + labour + activity */}
       <div className="grid gap-6 lg:grid-cols-3">
         <AttentionCenter attention={data.attention} isOwner={isOwner} />
+        <LabourCard labour={data.labour} />
         <ActivityFeed items={data.recentActivity} />
       </div>
     </div>

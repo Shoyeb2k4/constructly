@@ -5,10 +5,13 @@ import type {
   BudgetHealthItem,
   DashboardSnapshot,
   DeadlineItem,
+  MaterialSpendRow,
   ProcurementWidget,
+  ProjectSpendRow,
   RawDashboardData,
   RawProject,
   SpendWeek,
+  UpcomingDelivery,
   VendorRollupRow,
 } from "./types";
 
@@ -81,10 +84,12 @@ function monthKey(dateISO: string): string {
   return dateISO.slice(0, 7);
 }
 
-/** Procurement widgets: spend, outstanding + top vendors, recent POs, trend. */
+/** Procurement widgets: spend, GST, outstanding, top vendors/projects/materials,
+ *  pending payments, upcoming deliveries, recent POs, monthly trend. */
 function assembleProcurement(raw: RawDashboardData): ProcurementWidget {
   const counted = raw.procurementPOs.filter((p) => poCountsForBudget(p.status, raw.approvalRequired));
   const spendPaise = counted.reduce((s, p) => s + p.totalPaise, 0);
+  const gstPaidPaise = counted.reduce((s, p) => s + p.gstPaise, 0);
 
   // Outstanding per vendor = counted purchases − all payments to that vendor.
   const byVendor = new Map<string, { name: string; purchased: number; paid: number }>();
@@ -117,6 +122,43 @@ function assembleProcurement(raw: RawDashboardData): ProcurementWidget {
   );
 
   const paidByPO = new Map(raw.procurementPOs.map((p) => [p.id, p.paidPaise]));
+  const pendingPaymentsCount = counted.filter((p) => p.totalPaise - (paidByPO.get(p.id) ?? 0) > 0).length;
+
+  // Spend by project (counted grand totals).
+  const byProject = new Map<string, ProjectSpendRow>();
+  counted.forEach((p) => {
+    const row = byProject.get(p.projectId) ?? { projectId: p.projectId, name: p.projectName, code: p.projectCode, amountPaise: 0 };
+    row.amountPaise += p.totalPaise;
+    byProject.set(p.projectId, row);
+  });
+  const spendByProject = [...byProject.values()].sort((a, b) => b.amountPaise - a.amountPaise).slice(0, 6);
+
+  // Top materials purchased (taxable line amounts across counted POs).
+  const byMaterial = new Map<string, MaterialSpendRow>();
+  counted.forEach((p) =>
+    p.lines.forEach((l) => {
+      const key = l.material.toLowerCase();
+      const row = byMaterial.get(key) ?? { material: l.material, category: l.category, amountPaise: 0 };
+      row.amountPaise += l.amountPaise;
+      byMaterial.set(key, row);
+    }),
+  );
+  const topMaterials = [...byMaterial.values()].sort((a, b) => b.amountPaise - a.amountPaise).slice(0, 6);
+
+  // Upcoming deliveries: counted POs with a future (or today) expected date.
+  const upcomingDeliveries: UpcomingDelivery[] = counted
+    .filter((p) => p.expectedDelivery && daysBetween(p.expectedDelivery, raw.today) >= 0)
+    .map((p) => ({
+      poId: p.id,
+      poNumber: p.poNumber,
+      vendorName: p.vendorName,
+      projectName: p.projectName,
+      expectedDelivery: p.expectedDelivery!,
+      daysUntil: -daysBetween(raw.today, p.expectedDelivery!),
+      totalPaise: p.totalPaise,
+    }))
+    .sort((a, b) => a.expectedDelivery.localeCompare(b.expectedDelivery))
+    .slice(0, 5);
   const recentPOs: PurchaseOrderListItem[] = [...raw.procurementPOs]
     .sort((a, b) => b.purchaseDate.localeCompare(a.purchaseDate))
     .slice(0, 6)
@@ -151,7 +193,19 @@ function assembleProcurement(raw: RawDashboardData): ProcurementWidget {
   });
   const monthlyTrend = months.map((m) => ({ month: m, procurementPaise: monthIndex.get(m) ?? 0 }));
 
-  return { spendPaise, outstandingPaise, outstandingVendors, topVendors, recentPOs, monthlyTrend };
+  return {
+    spendPaise,
+    gstPaidPaise,
+    outstandingPaise,
+    pendingPaymentsCount,
+    outstandingVendors,
+    topVendors,
+    spendByProject,
+    topMaterials,
+    upcomingDeliveries,
+    recentPOs,
+    monthlyTrend,
+  };
 }
 
 /**
