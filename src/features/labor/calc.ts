@@ -20,17 +20,15 @@ export function sheetTotals(rows: SheetRow[]): { totalPresent: number; estimated
 /**
  * Summarize attendance records over a range — man-days by category, by
  * project, daily trend, and totals. Pure; demo + server both use it.
+ * Costs come from each record's stored snapshot (ADR-0022).
  */
-export function summarize(
-  records: AttendanceRecordItem[],
-  rateOf: (categoryId: string) => number | null,
-): LabourSummary {
+export function summarize(records: AttendanceRecordItem[]): LabourSummary {
   const byCategory = new Map<string, CategoryManDays>();
   const byProject = new Map<string, { projectId: string; projectName: string; manDays: number; estimatedCostPaise: number }>();
   const byDate = new Map<string, number>();
 
   for (const r of records) {
-    const cost = estimateCostPaise(rateOf(r.categoryId), r.quantityPresent);
+    const cost = r.estimatedCostPaise;
 
     const c = byCategory.get(r.categoryId) ?? {
       categoryId: r.categoryId,

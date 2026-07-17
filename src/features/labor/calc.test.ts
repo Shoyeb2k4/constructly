@@ -2,18 +2,26 @@ import { describe, it, expect } from "vitest";
 import { estimateCostPaise, sheetTotals, summarize } from "./calc";
 import type { AttendanceRecordItem } from "./types";
 
-const rec = (over: Partial<AttendanceRecordItem>): AttendanceRecordItem => ({
-  id: Math.random().toString(36),
-  projectId: "p1",
-  projectName: "Skyline",
-  date: "2026-07-14",
-  categoryId: "helper",
-  categoryName: "Helper",
-  color: "#F59E0B",
-  quantityPresent: 10,
-  notes: null,
-  ...over,
-});
+const rec = (over: Partial<AttendanceRecordItem>): AttendanceRecordItem => {
+  const base = {
+    id: Math.random().toString(36),
+    projectId: "p1",
+    projectName: "Skyline",
+    date: "2026-07-14",
+    categoryId: "helper",
+    categoryName: "Helper",
+    color: "#F59E0B",
+    quantityPresent: 10,
+    dailyRatePaiseSnapshot: 55000 as number | null,
+    notes: null,
+    ...over,
+  };
+  return {
+    ...base,
+    estimatedCostPaise:
+      over.estimatedCostPaise ?? (base.dailyRatePaiseSnapshot ?? 0) * base.quantityPresent,
+  };
+};
 
 describe("estimateCostPaise", () => {
   it("multiplies rate by headcount", () => {
@@ -37,19 +45,13 @@ describe("sheetTotals", () => {
 });
 
 describe("summarize", () => {
-  const rates = new Map([["helper", 55000], ["mason", 85000]]);
-  const rateOf = (id: string) => rates.get(id) ?? null;
-
-  it("computes man-days by category, project, and daily trend", () => {
-    const s = summarize(
-      [
-        rec({ quantityPresent: 12 }),
-        rec({ date: "2026-07-15", quantityPresent: 10 }),
-        rec({ categoryId: "mason", categoryName: "Mason", quantityPresent: 8 }),
-        rec({ projectId: "p2", projectName: "Orion", quantityPresent: 5 }),
-      ],
-      rateOf,
-    );
+  it("computes man-days by category, project, and daily trend from snapshot costs", () => {
+    const s = summarize([
+      rec({ quantityPresent: 12 }),
+      rec({ date: "2026-07-15", quantityPresent: 10 }),
+      rec({ categoryId: "mason", categoryName: "Mason", quantityPresent: 8, dailyRatePaiseSnapshot: 85000 }),
+      rec({ projectId: "p2", projectName: "Orion", quantityPresent: 5 }),
+    ]);
     expect(s.totalManDays).toBe(35);
     expect(s.byCategory.find((c) => c.categoryId === "helper")?.manDays).toBe(27);
     expect(s.byProject.find((p) => p.projectId === "p2")?.manDays).toBe(5);
@@ -58,5 +60,14 @@ describe("summarize", () => {
       { date: "2026-07-15", total: 10 },
     ]);
     expect(s.estimatedCostPaise).toBe(27 * 55000 + 8 * 85000);
+  });
+
+  it("uses each record's stored snapshot, not a current rate", () => {
+    // Two records for the same category recorded under different rates.
+    const s = summarize([
+      rec({ quantityPresent: 10, dailyRatePaiseSnapshot: 70000 }), // recorded @ ₹700
+      rec({ date: "2026-07-15", quantityPresent: 10, dailyRatePaiseSnapshot: 80000 }), // later @ ₹800
+    ]);
+    expect(s.estimatedCostPaise).toBe(10 * 70000 + 10 * 80000);
   });
 });

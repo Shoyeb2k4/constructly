@@ -34,13 +34,14 @@ export interface DashActivity {
   kind: ActivityKind;
 }
 
-/** One category-attendance record in scope (category-based labour redesign). */
+/** One category-attendance record in scope. Cost is the stored snapshot
+ *  estimate (rate-at-record-time × headcount, ADR-0022). */
 export interface RawLabourEntry {
   date: string; // YYYY-MM-DD
   categoryName: string;
   color: string;
   quantityPresent: number;
-  ratePaise: number | null;
+  estimatedCostPaise: number;
 }
 
 export interface RawDashboardData {

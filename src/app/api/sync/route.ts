@@ -49,18 +49,34 @@ async function applyLabourAttendance(clientUuid: string, payload: unknown, user:
     await prisma.labourAttendance.deleteMany({ where: { ...key, companyId: user.company.id } });
     return;
   }
+  // Snapshot the rate on first recording; edits keep it (ADR-0022).
+  const existing = await prisma.labourAttendance.findUnique({
+    where: { projectId_date_labourCategoryId: key },
+    select: { dailyRatePaiseSnapshot: true },
+  });
+  const snapshot = existing
+    ? existing.dailyRatePaiseSnapshot
+    : (
+        await prisma.labourCategory.findFirstOrThrow({
+          where: { id: p.labourCategoryId, companyId: user.company.id },
+          select: { dailyRatePaise: true },
+        })
+      ).dailyRatePaise;
   await prisma.labourAttendance.upsert({
     where: { projectId_date_labourCategoryId: key },
     create: {
       companyId: user.company.id,
       ...key,
       quantityPresent: p.quantityPresent,
+      dailyRatePaiseSnapshot: snapshot,
+      estimatedCostPaise: (snapshot ?? 0) * p.quantityPresent,
       notes: p.notes ?? null,
       clientUuid,
       clientSeq: BigInt(Date.now()),
     },
     update: {
       quantityPresent: p.quantityPresent,
+      estimatedCostPaise: (snapshot ?? 0) * p.quantityPresent,
       ...(p.notes !== undefined ? { notes: p.notes } : {}),
     },
   });

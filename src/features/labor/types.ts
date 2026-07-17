@@ -18,7 +18,9 @@ export interface CreateCategoryInput {
 
 export type UpdateCategoryInput = Partial<CreateCategoryInput>;
 
-/** One category row on the daily sheet. quantity 0 = not recorded. */
+/** One category row on the daily sheet. quantity 0 = not recorded.
+ *  dailyRatePaise is the EFFECTIVE rate: the record's snapshot when recorded,
+ *  else the category's current rate (used for new entries). */
 export interface SheetRow {
   categoryId: string;
   name: string;
@@ -36,7 +38,8 @@ export interface AttendanceSheet {
   estimatedCostPaise: number;
 }
 
-/** Flat record for range views and exports. */
+/** Flat record for range views and exports. Cost is the stored snapshot-based
+ *  value (quantity × rate-at-record-time) — immutable history (ADR-0022). */
 export interface AttendanceRecordItem {
   id: string;
   projectId: string;
@@ -46,6 +49,8 @@ export interface AttendanceRecordItem {
   categoryName: string;
   color: string;
   quantityPresent: number;
+  dailyRatePaiseSnapshot: number | null;
+  estimatedCostPaise: number;
   notes: string | null;
 }
 

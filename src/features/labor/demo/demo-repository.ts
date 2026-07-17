@@ -73,7 +73,8 @@ function buildSheet(
       categoryId: c.id,
       name: c.name,
       color: c.color,
-      dailyRatePaise: c.dailyRatePaise,
+      // Effective rate: the record's snapshot when recorded, else current.
+      dailyRatePaise: rec ? rec.dailyRatePaiseSnapshot : c.dailyRatePaise,
       quantity: rec?.quantityPresent ?? 0,
       notes: rec?.notes ?? null,
     };
@@ -93,6 +94,8 @@ function toItems(records: LabourAttendanceRecord[], categories: CategoryRecord[]
       categoryName: c?.name ?? "Unknown",
       color: c?.color ?? "#64748B",
       quantityPresent: r.quantityPresent,
+      dailyRatePaiseSnapshot: r.dailyRatePaiseSnapshot,
+      estimatedCostPaise: r.estimatedCostPaise,
       notes: r.notes,
     };
   });
@@ -157,16 +160,22 @@ export const demoLaborRepository: LaborRepository = {
     if (quantity <= 0) {
       attendance = attendance.filter((a) => a !== existing);
     } else if (existing) {
+      // Keep the original rate snapshot — editing a headcount never adopts a
+      // newer rate; history stays immutable (ADR-0022).
       existing.quantityPresent = quantity;
+      existing.estimatedCostPaise = (existing.dailyRatePaiseSnapshot ?? 0) * quantity;
       if (notes !== undefined) existing.notes = notes;
       existing.updatedAt = new Date().toISOString();
     } else {
+      const rate = categories.find((c) => c.id === categoryId)?.dailyRatePaise ?? null;
       attendance.push({
         id: uid(),
         projectId,
         date,
         labourCategoryId: categoryId,
         quantityPresent: quantity,
+        dailyRatePaiseSnapshot: rate,
+        estimatedCostPaise: (rate ?? 0) * quantity,
         notes: notes ?? null,
         clientUuid: uid(),
         updatedAt: new Date().toISOString(),
@@ -190,10 +199,14 @@ export const demoLaborRepository: LaborRepository = {
         attendance = attendance.filter(
           (a) => !(a.projectId === projectId && a.date === date && a.labourCategoryId === rec.labourCategoryId),
         );
+        // Copying into a new day is a NEW recording → snapshot today's rate.
+        const rate = categories.find((c) => c.id === rec.labourCategoryId)?.dailyRatePaise ?? null;
         attendance.push({
           ...rec,
           id: uid(),
           date,
+          dailyRatePaiseSnapshot: rate,
+          estimatedCostPaise: (rate ?? 0) * rec.quantityPresent,
           clientUuid: uid(),
           updatedAt: new Date().toISOString(),
         });
@@ -211,9 +224,7 @@ export const demoLaborRepository: LaborRepository = {
   },
 
   async summary(filters: AttendanceFilters) {
-    const categories = loadCategories();
-    const rateOf = (id: string) => categories.find((c) => c.id === id)?.dailyRatePaise ?? null;
-    const items = toItems(applyFilters(loadAttendance(), filters), categories);
-    return summarize(items, rateOf);
+    const items = toItems(applyFilters(loadAttendance(), filters), loadCategories());
+    return summarize(items);
   },
 };

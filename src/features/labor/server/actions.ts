@@ -74,7 +74,8 @@ async function buildSheet(companyId: string, projectId: string, date: string): P
       categoryId: c.id,
       name: c.name,
       color: c.color,
-      dailyRatePaise: c.dailyRatePaise,
+      // Effective rate: the record's snapshot when recorded, else current.
+      dailyRatePaise: rec ? rec.dailyRatePaiseSnapshot : c.dailyRatePaise,
       quantity: rec?.quantityPresent ?? 0,
       notes: rec?.notes ?? null,
     };
@@ -101,17 +102,38 @@ export async function setQuantity(
   if (quantity <= 0) {
     await prisma.labourAttendance.deleteMany({ where: { ...key, companyId: user.company.id } });
   } else {
+    // Snapshot the rate on FIRST recording; edits keep the original snapshot
+    // so history never rewrites when category rates change (ADR-0022).
+    const existing = await prisma.labourAttendance.findUnique({
+      where: { projectId_date_labourCategoryId: key },
+      select: { dailyRatePaiseSnapshot: true },
+    });
+    const snapshot = existing
+      ? existing.dailyRatePaiseSnapshot
+      : (
+          await prisma.labourCategory.findFirstOrThrow({
+            where: { id: categoryId, companyId: user.company.id },
+            select: { dailyRatePaise: true },
+          })
+        ).dailyRatePaise;
+    const estimatedCostPaise = (snapshot ?? 0) * quantity;
     await prisma.labourAttendance.upsert({
       where: { projectId_date_labourCategoryId: key },
       create: {
         companyId: user.company.id,
         ...key,
         quantityPresent: quantity,
+        dailyRatePaiseSnapshot: snapshot,
+        estimatedCostPaise,
         notes: notes ?? null,
         clientUuid: crypto.randomUUID(),
         clientSeq: BigInt(Date.now()),
       },
-      update: { quantityPresent: quantity, ...(notes !== undefined ? { notes } : {}) },
+      update: {
+        quantityPresent: quantity,
+        estimatedCostPaise,
+        ...(notes !== undefined ? { notes } : {}),
+      },
     });
   }
   return buildSheet(user.company.id, projectId, date);
@@ -161,6 +183,8 @@ async function fetchItems(user: SessionUser, filters: AttendanceFilters): Promis
     categoryName: r.category.name,
     color: r.category.color,
     quantityPresent: r.quantityPresent,
+    dailyRatePaiseSnapshot: r.dailyRatePaiseSnapshot,
+    estimatedCostPaise: r.estimatedCostPaise,
     notes: r.notes,
   }));
 }
@@ -172,10 +196,5 @@ export async function listAttendance(filters: AttendanceFilters): Promise<Attend
 
 export async function summary(filters: AttendanceFilters): Promise<LabourSummary> {
   const user = await requireUser();
-  const [items, categories] = await Promise.all([
-    fetchItems(user, filters),
-    prisma.labourCategory.findMany({ where: { companyId: user.company.id } }),
-  ]);
-  const rateOf = (id: string) => categories.find((c) => c.id === id)?.dailyRatePaise ?? null;
-  return summarize(items, rateOf);
+  return summarize(await fetchItems(user, filters));
 }

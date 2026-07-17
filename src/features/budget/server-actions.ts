@@ -10,31 +10,23 @@ async function approvalRequired(companyId: string): Promise<boolean> {
   return s?.poApprovalRequired ?? false;
 }
 
-/** Labor cost ESTIMATE = category day rate × headcount (null rate → ₹0). */
+/** Labor cost = stored snapshot estimates (ADR-0022) — a simple sum. */
 async function labourByProject(companyId: string): Promise<Map<string, number>> {
-  const rows = await prisma.labourAttendance.findMany({
+  const rows = await prisma.labourAttendance.groupBy({
+    by: ["projectId"],
     where: { companyId },
-    select: {
-      projectId: true,
-      quantityPresent: true,
-      category: { select: { dailyRatePaise: true } },
-    },
+    _sum: { estimatedCostPaise: true },
   });
-  const map = new Map<string, number>();
-  for (const r of rows) {
-    const cost = (r.category.dailyRatePaise ?? 0) * r.quantityPresent;
-    map.set(r.projectId, (map.get(r.projectId) ?? 0) + cost);
-  }
-  return map;
+  return new Map(rows.map((r) => [r.projectId, r._sum.estimatedCostPaise ?? 0]));
 }
 
 export async function projectSpend(projectId: string): Promise<ProjectSpend> {
   const user = await requireUser();
   const approval = await approvalRequired(user.company.id);
   const [labour, pos] = await Promise.all([
-    prisma.labourAttendance.findMany({
+    prisma.labourAttendance.aggregate({
       where: { companyId: user.company.id, projectId },
-      select: { quantityPresent: true, category: { select: { dailyRatePaise: true } } },
+      _sum: { estimatedCostPaise: true },
     }),
     prisma.purchaseOrder.findMany({
       where: {
@@ -46,7 +38,7 @@ export async function projectSpend(projectId: string): Promise<ProjectSpend> {
     }),
   ]);
   return {
-    laborPaise: labour.reduce((s, r) => s + (r.category.dailyRatePaise ?? 0) * r.quantityPresent, 0),
+    laborPaise: labour._sum.estimatedCostPaise ?? 0,
     procurementPaise: pos.reduce((s, p) => s + Number(p.totalPaise), 0),
   };
 }

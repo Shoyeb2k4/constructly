@@ -14,6 +14,9 @@ export interface LabourAttendanceRecord {
   date: string; // YYYY-MM-DD
   labourCategoryId: string;
   quantityPresent: number;
+  /** Rate snapshot at record time — immutable history (ADR-0022). */
+  dailyRatePaiseSnapshot: number | null;
+  estimatedCostPaise: number;
   notes: string | null;
   clientUuid: string;
   updatedAt: string;
@@ -50,6 +53,7 @@ export function demoLabourAttendance(): LabourAttendanceRecord[] {
     if (isWeekend(date)) continue;
     DEMO_CATEGORIES.forEach((cat, i) => {
       const wobble = ((offset * 7 + i * 3) % 5) - 2; // -2..+2, deterministic
+      const rate = cat.dailyRatePaise;
       const skyQty = Math.max(0, SKYLINE_BASE[i] + wobble);
       if (skyQty > 0) {
         records.push({
@@ -58,6 +62,8 @@ export function demoLabourAttendance(): LabourAttendanceRecord[] {
           date,
           labourCategoryId: cat.id,
           quantityPresent: skyQty,
+          dailyRatePaiseSnapshot: rate,
+          estimatedCostPaise: (rate ?? 0) * skyQty,
           notes: null,
           clientUuid: `seed-sky-${cat.id}-${date}`,
           updatedAt: new Date().toISOString(),
@@ -72,6 +78,8 @@ export function demoLabourAttendance(): LabourAttendanceRecord[] {
             date,
             labourCategoryId: cat.id,
             quantityPresent: orionQty,
+            dailyRatePaiseSnapshot: rate,
+            estimatedCostPaise: (rate ?? 0) * orionQty,
             notes: null,
             clientUuid: `seed-ori-${cat.id}-${date}`,
             updatedAt: new Date().toISOString(),

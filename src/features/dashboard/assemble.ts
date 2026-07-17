@@ -162,7 +162,7 @@ export function assembleDashboard(raw: RawDashboardData): DashboardSnapshot {
       upcomingDeadlines: upcomingDeadlines.length + overdueProjects.length,
       overdue: overdueProjects.length,
       todaysLaborCount: todays.reduce((s, e) => s + e.quantityPresent, 0),
-      todaysWagesPaise: todays.reduce((s, e) => s + (e.ratePaise ?? 0) * e.quantityPresent, 0),
+      todaysWagesPaise: todays.reduce((s, e) => s + e.estimatedCostPaise, 0),
       budgetUsedPaise,
       budgetTotalPaise,
       pendingApprovals: raw.pendingPOs.length,

@@ -33,7 +33,7 @@ interface StoredProject {
   deadlines: { id: string; title: string; dueDate: string; completedAt: string | null }[];
   activity: { id: string; summary: string; actorName?: string; createdAt: string }[];
 }
-interface StoredLabour { projectId: string; date: string; labourCategoryId: string; quantityPresent: number }
+interface StoredLabour { projectId: string; date: string; labourCategoryId: string; quantityPresent: number; estimatedCostPaise: number }
 interface StoredCategory { id: string; name: string; color: string; dailyRatePaise: number | null }
 interface StoredPO { id: string; poNumber: string; vendorId: string; projectId: string; status: string; purchaseDate: string; totalPaise: number; invoiceNumber: string | null; createdByName: string; createdAt: string; approvedByName: string | null; approvedAt: string | null }
 interface StoredVendor { id: string; businessName: string }
@@ -54,11 +54,10 @@ export function gatherDemoDashboard(opts: { userId: string; isOwner: boolean }):
   const vendors = read<StoredVendor>(K.vendors);
   const vendorName = (id: string) => vendors.find((v) => v.id === id)?.businessName ?? "Unknown";
 
-  // Per-project labor (rate × headcount) + procurement.
+  // Per-project labor (stored snapshot estimates, ADR-0022) + procurement.
   const laborByProject = new Map<string, number>();
   labour.forEach((a) => {
-    const cost = (catById.get(a.labourCategoryId)?.dailyRatePaise ?? 0) * a.quantityPresent;
-    laborByProject.set(a.projectId, (laborByProject.get(a.projectId) ?? 0) + cost);
+    laborByProject.set(a.projectId, (laborByProject.get(a.projectId) ?? 0) + (a.estimatedCostPaise ?? 0));
   });
   const procByProject = new Map<string, number>();
   pos
@@ -86,14 +85,14 @@ export function gatherDemoDashboard(opts: { userId: string; isOwner: boolean }):
       categoryName: c?.name ?? "Unknown",
       color: c?.color ?? "#64748B",
       quantityPresent: a.quantityPresent,
-      ratePaise: c?.dailyRatePaise ?? null,
+      estimatedCostPaise: a.estimatedCostPaise ?? 0,
     };
   });
 
   const spendEntries: RawSpendEntry[] = [
     ...labourEntries.map((e) => ({
       date: e.date,
-      laborPaise: (e.ratePaise ?? 0) * e.quantityPresent,
+      laborPaise: e.estimatedCostPaise,
       procurementPaise: 0,
     })),
     ...pos

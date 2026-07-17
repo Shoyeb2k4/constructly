@@ -120,9 +120,9 @@ describe("assembleDashboard", () => {
     const snap = assembleDashboard(
       raw({
         labourEntries: [
-          { date: today, categoryName: "Helper", color: "#F59E0B", quantityPresent: 12, ratePaise: 55000 },
-          { date: today, categoryName: "Mason", color: "#3B82F6", quantityPresent: 8, ratePaise: 85000 },
-          { date: "2026-07-14", categoryName: "Helper", color: "#F59E0B", quantityPresent: 10, ratePaise: 55000 },
+          { date: today, categoryName: "Helper", color: "#F59E0B", quantityPresent: 12, estimatedCostPaise: 12 * 55000 },
+          { date: today, categoryName: "Mason", color: "#3B82F6", quantityPresent: 8, estimatedCostPaise: 8 * 85000 },
+          { date: "2026-07-14", categoryName: "Helper", color: "#F59E0B", quantityPresent: 10, estimatedCostPaise: 10 * 55000 },
         ],
       }),
     );

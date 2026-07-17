@@ -270,18 +270,24 @@ model LabourCategory {
 /// Category-based daily attendance: the number of workers present for a
 /// labour category on a project + date. Offline-syncable (clientUuid
 /// idempotency, clientSeq order); one row per (project, date, category).
+/// The category's day rate is SNAPSHOTTED at record time — editing a
+/// category's rate later never rewrites historical cost (ADR-0022).
 model LabourAttendance {
-  id               String   @id @default(uuid()) @db.Uuid
-  companyId        String   @map("company_id") @db.Uuid
-  projectId        String   @map("project_id") @db.Uuid
-  date             DateTime @db.Date
-  labourCategoryId String   @map("labour_category_id") @db.Uuid
-  quantityPresent  Int      @map("quantity_present")
-  notes            String?
-  clientUuid       String   @unique @map("client_uuid")
-  clientSeq        BigInt   @map("client_seq")
-  createdAt        DateTime @default(now()) @map("created_at")
-  updatedAt        DateTime @updatedAt @map("updated_at")
+  id                      String   @id @default(uuid()) @db.Uuid
+  companyId               String   @map("company_id") @db.Uuid
+  projectId               String   @map("project_id") @db.Uuid
+  date                    DateTime @db.Date
+  labourCategoryId        String   @map("labour_category_id") @db.Uuid
+  quantityPresent         Int      @map("quantity_present")
+  /// Rate snapshot at first recording (null if the category had no rate).
+  dailyRatePaiseSnapshot  Int?     @map("daily_rate_paise_snapshot")
+  /// quantityPresent × dailyRatePaiseSnapshot, stored for immutable history.
+  estimatedCostPaise      Int      @default(0) @map("estimated_cost_paise")
+  notes                   String?
+  clientUuid              String   @unique @map("client_uuid")
+  clientSeq               BigInt   @map("client_seq")
+  createdAt               DateTime @default(now()) @map("created_at")
+  updatedAt               DateTime @updatedAt @map("updated_at")
 
   company  Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
   project  Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
