@@ -35,7 +35,8 @@ Vendor CRM, POs + line items, **configurable approval flow**, budget used/remain
 Real-data overview: active projects, deadlines, overdue, today's labor, purchases, procurement/budget summary, recent activity, quick actions.
 
 ### Module 5 — Reports & Analytics
-Project / labor / procurement / vendor / financial / budget-vs-actual / deadline reports. PDF + Excel export.
+Project / labour / procurement / vendor / financial / budget-vs-actual / deadline reports. PDF + Excel export.
+**Shipped 2026-07-17 (ADR-0026):** a registry of six reports over the shared aggregation (no re-derivation), `/reports` hub + URL-synced param views, generic `ReportResult` + PDF/Excel exporters.
 
 ### Module 6 — Hardening & Production Readiness
 Performance, a11y audit, full empty/loading/error pass, seed/demo data, security review, observability, deploy runbook.
@@ -48,5 +49,5 @@ Performance, a11y audit, full empty/loading/error pass, seed/demo data, security
 | 2 Labor & Attendance | ✅ Shipped 2026-07-14 — tagged v0.3.0-labor |
 | 3 Vendors & Procurement | ✅ Shipped 2026-07-14 — tagged v0.4.0-procurement · **v2 2026-07-17 (GST, payments, outstanding) — tagged v0.6.0-procurement-v2** |
 | 4 Executive Dashboard | ✅ Shipped 2026-07-14 — real KPIs, charts, attention, activity; procurement widget added in v2 |
-| 5 Reports & Analytics | Next — approved, paused for Procurement v2; resumes now |
-| 6 Hardening | Planned |
+| 5 Reports & Analytics | ✅ Shipped 2026-07-17 — 6-report registry over shared aggregation, PDF/Excel — tagged v0.6.0-reports |
+| 6 Hardening | Next — spec pending review |

@@ -79,6 +79,12 @@ Status legend: `Accepted` · `Superseded` · `Proposed`
 **Decision:** A `CONSTRUCTLY_DEMO` flag (auto-on when Supabase env is absent) serves a seeded demo identity ("Meridian Build Co.", owner Aarav Mehta) with no real auth. All env branching lives in `src/lib/env.ts`; `getCurrentUser()` returns the demo user in this mode. Playwright runs against demo mode.
 **Consequences:** `npm run dev` renders the full app immediately. Real auth activates automatically once Supabase env vars are set.
 
+## ADR-0026 — Reports & Analytics: a registry over the shared aggregation
+**Status:** Accepted · 2026-07-17
+**Context:** Reports must be trustworthy — every figure has to match the module it came from. The risk in a reporting layer is a second, divergent calculation path.
+**Decision:** No new business logic. A report is a `ReportDef` (id, category, accepted filters, `run(filters)`) whose `run` calls the **existing** `projectsApi` / `laborApi` / `procurementApi` singletons (which already switch demo/server and enforce PM scoping) and the shared budget/labour aggregation. It returns a generic `ReportResult` — `{ columns, rows (typed cells, optional group/total kind), kpis }`. A `/reports` hub lists the registry; `/reports/[id]` renders a URL-synced filter bar (project / vendor / date range) + KPI tiles + table, with generic `reportToPdf` (jsPDF + autotable) and `reportToExcel` (SheetJS) exporters that format by column kind. Six reports ship: Budget vs Actual (flagship), Project summary, Labour cost (Category → Subcategory), Procurement (GST + payment status), Vendor, Deadline.
+**Consequences:** Reports are provably consistent with the app (unit tests assert e.g. procurement report total == shared PO list total, budget-vs-actual labour + procurement == used, labour grand total == labour summary). Adding a report = one registry entry; no schema, no endpoints. Exports reuse one code path for every report.
+
 ## ADR-0025 — Procurement forward-compatibility (GST split, vendor ledger)
 **Status:** Accepted · 2026-07-17 (client refinements after ADR-0024; readiness only, not implemented)
 **Context:** The client approved Procurement v2 and asked that the architecture be ready for richer tax and a full vendor ledger **without a future schema redesign** — but explicitly *not* to build them yet.

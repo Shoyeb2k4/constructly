@@ -116,5 +116,21 @@ cached via TanStack Query with background refetch. The snapshot now includes a *
 (spend, outstanding total + top/outstanding vendors, recent POs, 6-month trend — ADR-0024) and the
 project detail exposes **Procurement** and **Labour** tabs.
 
-## Later modules
-Report export endpoints (PDF/Excel) are documented here as Module 5 is built.
+## Module 5 — Reports & Analytics (ADR-0026)
+`src/features/reports`. A report is a `ReportDef` in `registry.ts` whose `run(filters)` returns a
+generic `ReportResult` (columns + typed rows + KPIs) by calling the **same shared repositories /
+aggregation** every other module uses — so reports match the Dashboard, Project Overview,
+Procurement, and Labour views exactly (single source of truth, no re-derivation).
+
+| Report | Source it reuses | Filters |
+|---|---|---|
+| Budget vs Actual (flagship) | `projectsApi.list` (`usedPaise` = shared budget source) + `laborApi.summary` split | project |
+| Project summary | `projectsApi.list` | project |
+| Labour cost | `laborApi.summary` (Category → Subcategory) | project, date range |
+| Procurement | `procurementApi.listPurchaseOrders` (GST split, payment status) | project, vendor, date range |
+| Vendor report | `procurementApi.listVendors` (derived outstanding) | vendor |
+| Deadline report | `projectsApi.get` deadlines | project |
+
+Filters are URL-synced on `/reports/[id]`. Export is client-side over `ReportResult` — generic
+`reportToPdf` (jsPDF + autotable) / `reportToExcel` (SheetJS), grouped rows + totals, "Rs." in PDFs.
+Role scoping comes for free: the underlying repos already scope PM access. No new server endpoints.

@@ -4,6 +4,20 @@ _Human-readable log of what changed and when. Newest first. Keep entries short; 
 
 ## [Unreleased]
 
+### 2026-07-17 — Module 5: Reports & Analytics
+A reporting layer that's provably consistent with every module (ADR-0026) — reports call the same shared repositories/aggregation, never a second calculation.
+- **Registry:** six reports — **Budget vs Actual** (flagship), Project summary, Labour cost (Category → Subcategory with category + grand totals), Procurement (GST split + payment status), Vendor (derived outstanding), Deadline. Adding one = a single registry entry.
+- **`/reports` hub** (report catalogue cards, flagship highlighted) + **`/reports/[id]`** with a URL-synced filter bar (project / vendor / date range), KPI tiles, and a typed table with group/total rows and row deep-links.
+- **Generic exporters** over `ReportResult`: `reportToPdf` (jsPDF + autotable, landscape for wide tables, "Rs." glyph) and `reportToExcel` (SheetJS, numeric money cells) — one code path for every report.
+- **Single source of truth:** Budget-vs-Actual reuses the shared budget `usedPaise`; labour reports reuse the hierarchy summary; procurement reuses the PO list with GST; vendor reuses derived outstanding. Unit tests assert reports equal their sources.
+- **Tests:** 100 unit/integration (7 new report tests: source-consistency, filter scoping, empty state) + 4 Playwright E2E. Build/typecheck/lint clean; verified in-browser (all six reports, exact figures matching Dashboard/Overview/Procurement/Labour; PDF + Excel export fire cleanly).
+
+### 2026-07-17 — Procurement refinements (pre-Reports, ADR-0025)
+Client refinements approved after Procurement v2.
+- **Project Overview** now shows the dedicated **Procurement budget** (budget / used / remaining, over-budget warning) as a clearly separate block from the overall project budget (used / total / remaining) — all six figures obvious.
+- **Procurement dashboard → command center:** expanded to spend, **GST paid**, outstanding + pending-payment count, top vendors, **spend by project**, **top materials purchased**, **upcoming deliveries**, and monthly spend trend — all via the shared assembler, full-width layout.
+- **Forward-compatibility (readiness only, not implemented):** documented GST split (CGST/SGST/IGST derive from the one `gstRateBps`; HSN + tax-inclusive flag attach as nullable columns) and a pure `vendorLedger()` (running debit/credit balance + monthly summary + project scoping, unit-tested) proving a full vendor ledger needs no schema redesign.
+
 ### 2026-07-17 — Procurement & Vendor Management v2 (roadmap re-prioritized ahead of Reports)
 The purchasing backbone — GST, vendor payments with derived outstanding, project-wise purchasing, and richer dashboards (ADR-0024). Extends Module 3; all existing data survives.
 - **Schema (additive):** `Project.procurementBudgetPaise?` (dedicated, independent budget); `Vendor.pan?`; `VendorDocument`; PO gains `expectedDelivery?` + `subtotalPaise`/`gstPaise` (grand `totalPaise` = subtotal + GST); `POLineItem` gains `category?`, `gstRateBps` (basis points), `gstPaise` (rounded per line); new `VendorPayment` (project-aware, **optional** PO link, `PaymentMode` enum); `GoodsReceipt`/`GoodsReceiptItem` (schema + RLS + repository stubs, UI deferred).
