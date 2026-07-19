@@ -11,6 +11,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatGridSkeleton } from "@/components/patterns/loading-state";
+import { ErrorState } from "@/components/patterns/error-state";
 import { MoneyText } from "@/components/patterns/money-text";
 import { formatPaiseCompact } from "@/lib/money";
 import { useDashboard } from "../hooks";
@@ -36,7 +37,19 @@ export function DashboardView({
   greeting: string;
   firstName: string;
 }) {
-  const { data, isLoading } = useDashboard(userId, isOwner);
+  const { data, isLoading, isError, error, refetch } = useDashboard(userId, isOwner);
+
+  // A failed aggregation must surface, not sit behind skeletons forever.
+  if (isError) {
+    return (
+      <ErrorState
+        title="Couldn't load your dashboard"
+        description="The overview failed to assemble. Your data is safe — try again."
+        onRetry={() => refetch()}
+        detail={error instanceof Error ? `${error.message}\n${error.stack ?? ""}` : String(error)}
+      />
+    );
+  }
 
   if (isLoading || !data) {
     return (

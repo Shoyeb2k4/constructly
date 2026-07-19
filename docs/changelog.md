@@ -4,6 +4,13 @@ _Human-readable log of what changed and when. Newest first. Keep entries short; 
 
 ## [Unreleased]
 
+### 2026-07-19 — v1.0.0 customer acceptance test (PASS) + launch prep
+Full production validation on `next start` from a brand-new empty company through project → labour hierarchy + attendance → vendor → GST purchase order (draft→approved) → partial payment → budgets → dashboard → all six reports → exports → persistence → mobile → dark mode. Every figure verified in exact paise; full report in `PRODUCTION_READINESS.md`.
+- **Fix:** onboarding "Add your crew" card linked to the removed `/labor/workers` route → now `/labor` with category-based copy.
+- **Fix:** dashboard now shows a visible error state with retry when aggregation fails (was: skeletons forever).
+- **Test:** empty-company dashboard regression (`gather.test.ts`) — 121 total.
+- **Docs:** roadmap updated with client-approved v1.1 priorities (Equipment, CRM, BOQ, Material Requests, Inventory, AI, mobile apps, Client Portal, i18n), the commercial-readiness workstream, and the per-release audit discipline.
+
 ### 2026-07-18 — Module 6: Hardening & Production Readiness (v1.0.0)
 Transforms the MVP into a production-grade commercial SaaS. No new business features — every change makes the product more robust without altering workflows.
 - **Security:** strict security headers + CSP, HSTS, X-Frame-Options, nosniff, Referrer/Permissions policies (`next.config.ts`); per-user rate limiting + batch cap on `/api/sync` (`src/lib/rate-limit.ts`); documented three-layer authz (UI + server guards + RLS), CSRF/XSS/SQLi protections, secure uploads, audit logging (`docs/security.md`).

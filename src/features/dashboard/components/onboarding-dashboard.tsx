@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 
 const STEPS = [
   { icon: FolderKanban, title: "Create a project", desc: "Set up your first site with budget and deadlines.", href: "/projects" },
-  { icon: HardHat, title: "Add your crew", desc: "Build your labor roster and record attendance.", href: "/labor/workers" },
+  { icon: HardHat, title: "Set up labour", desc: "Create labour categories and record daily attendance.", href: "/labor" },
   { icon: Truck, title: "Add vendors", desc: "Set up suppliers and raise purchase orders.", href: "/vendors" },
 ];
 
