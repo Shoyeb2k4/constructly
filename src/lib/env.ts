@@ -1,9 +1,18 @@
 /** Environment capability flags. Keep all env branching in one place. */
 
-export const isSupabaseConfigured = Boolean(
-  process.env.NEXT_PUBLIC_SUPABASE_URL &&
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
-);
+export const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
+
+/**
+ * Publishable API key. Supabase now issues `sb_publishable_...` keys; the
+ * legacy JWT "anon" key is still supported — accept either env name so both
+ * key formats work without code changes.
+ */
+export const supabasePublishableKey =
+  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ??
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ??
+  "";
+
+export const isSupabaseConfigured = Boolean(supabaseUrl && supabasePublishableKey);
 
 /**
  * Demo mode serves a seeded demo company without real auth. Active when

@@ -6,9 +6,12 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import { useQueryClient } from "@tanstack/react-query";
+import { isDemoMode } from "@/lib/env";
 import type { DocumentCategory, ProjectDetail } from "../../types";
 import { relativeTime } from "../../format";
 import { useProjectDetailActions } from "../../hooks";
+import { projectKeys } from "../../data";
 
 const MAX_BYTES = 25 * 1024 * 1024;
 const ACCEPT = [
@@ -40,8 +43,24 @@ export function DocumentsTab({
   canEdit: boolean;
 }) {
   const { addDocument, removeDocument } = useProjectDetailActions(project.id);
+  const qc = useQueryClient();
   const [dragging, setDragging] = React.useState(false);
   const inputRef = React.useRef<HTMLInputElement>(null);
+
+  async function uploadReal(f: File) {
+    // Production path: bytes go to Supabase Storage via a server action
+    // (session-bound, tenant-scoped), metadata recorded server-side.
+    const { uploadProjectDocument } = await import("@/features/documents/upload-actions");
+    const fd = new FormData();
+    fd.set("file", f);
+    const res = await uploadProjectDocument(project.id, fd);
+    if (res.ok) {
+      toast.success(`Uploaded ${f.name}`);
+      qc.invalidateQueries({ queryKey: projectKeys.detail(project.id) });
+    } else {
+      toast.error(`Couldn't upload ${f.name}`, { description: res.error });
+    }
+  }
 
   function ingest(files: FileList | null) {
     if (!files) return;
@@ -54,7 +73,11 @@ export function DocumentsTab({
         toast.error(`${f.name} isn't a supported type`);
         return;
       }
-      addDocument.mutate({ filename: f.name, sizeBytes: f.size, mimeType: f.type || "application/octet-stream" });
+      if (isDemoMode) {
+        addDocument.mutate({ filename: f.name, sizeBytes: f.size, mimeType: f.type || "application/octet-stream" });
+      } else {
+        void uploadReal(f);
+      }
     });
   }
 

@@ -2,6 +2,9 @@
 
 import * as React from "react";
 import Link from "next/link";
+import { toast } from "sonner";
+import { useQueryClient } from "@tanstack/react-query";
+import { procurementKeys } from "../data";
 import {
   ChevronRight,
   Star,
@@ -60,6 +63,7 @@ function StatTile({ label, children }: { label: string; children: React.ReactNod
 export function VendorDetailView({ id, isOwner }: { id: string; isOwner: boolean }) {
   const { data: vendor, isLoading } = useVendor(id);
   const { toggleFavorite, addDocument, removeDocument } = useVendorMutations();
+  const qc = useQueryClient();
   const { remove: removePayment } = usePaymentMutations();
   const [payOpen, setPayOpen] = React.useState(false);
   const [tab, setTab] = React.useState("overview");
@@ -295,14 +299,28 @@ export function VendorDetailView({ id, isOwner }: { id: string; isOwner: boolean
                   ref={fileRef}
                   type="file"
                   className="hidden"
-                  onChange={(e) => {
+                  onChange={async (e) => {
                     const f = e.target.files?.[0];
-                    if (f) {
+                    if (!f) return;
+                    e.target.value = "";
+                    const { isDemoMode } = await import("@/lib/env");
+                    if (isDemoMode) {
                       addDocument.mutate({
                         vendorId: vendor.id,
                         doc: { filename: f.name, sizeBytes: f.size, mimeType: f.type || "application/octet-stream" },
                       });
-                      e.target.value = "";
+                      return;
+                    }
+                    // Production: bytes → Supabase Storage via server action.
+                    const { uploadVendorDocument } = await import("@/features/documents/upload-actions");
+                    const fd = new FormData();
+                    fd.set("file", f);
+                    const res = await uploadVendorDocument(vendor.id, fd);
+                    if (res.ok) {
+                      toast.success(`Uploaded ${f.name}`);
+                      qc.invalidateQueries({ queryKey: procurementKeys.vendor(vendor.id) });
+                    } else {
+                      toast.error(`Couldn't upload ${f.name}`, { description: res.error });
                     }
                   }}
                 />
