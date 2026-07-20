@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { createClient } from "@/lib/supabase/client";
 import { isSupabaseConfigured } from "@/lib/env";
+import { signUpAccount } from "@/lib/auth/actions";
 
 export default function SignUpPage() {
   const router = useRouter();
@@ -31,12 +32,36 @@ export default function SignUpPage() {
       return;
     }
     setBusy(true);
+
+    // Server decides the mode. Auto-confirm (dev/internal) creates the user
+    // without sending any email — avoiding the shared-SMTP rate limit entirely.
+    const result = await signUpAccount({ fullName, companyName, email, password });
+
+    if (result.mode === "error") {
+      setBusy(false);
+      toast.error("Couldn't create your account", { description: result.error });
+      return;
+    }
+
+    if (result.mode === "confirmed") {
+      // User exists and is confirmed — sign in to establish the session.
+      const { error } = await createClient().auth.signInWithPassword({ email, password });
+      setBusy(false);
+      if (error) {
+        toast.error("Account created, but sign-in failed", { description: error.message });
+        return;
+      }
+      router.push("/onboarding");
+      router.refresh();
+      return;
+    }
+
+    // Production email-verification path (standard Supabase flow).
     const { data, error } = await createClient().auth.signUp({
       email,
       password,
       options: {
         emailRedirectTo: `${window.location.origin}/auth/callback?next=/onboarding`,
-        // Carried into onboarding so the workspace form is pre-filled.
         data: { full_name: fullName, company_name: companyName },
       },
     });
@@ -46,7 +71,6 @@ export default function SignUpPage() {
       return;
     }
     if (data.session) {
-      // Email confirmation disabled — session is live; provision the workspace.
       router.push("/onboarding");
       router.refresh();
     } else {

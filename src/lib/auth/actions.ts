@@ -3,8 +3,82 @@
 import { z } from "zod";
 import { redirect } from "next/navigation";
 import { createServerClient } from "@/lib/supabase/server";
+import { supabaseUrl } from "@/lib/env";
 import { prisma } from "@/lib/db/prisma";
 import { reportError } from "@/lib/logger";
+
+/* ── Sign-up ───────────────────────────────────────────────────────────
+ * Two modes, chosen server-side:
+ *  • AUTH_AUTOCONFIRM=1 (dev / internal): create the user already-confirmed via
+ *    the Admin API — NO email is sent, so the shared-SMTP rate limit is never
+ *    touched. The client then signs in normally.
+ *  • Otherwise (production default): tell the client to use the standard
+ *    Supabase email-verification flow (a confirmation email is sent by whatever
+ *    SMTP is configured; use a custom SMTP for real volume).
+ * The service-role key stays server-only and is never returned to the client. */
+
+const signUpSchema = z.object({
+  fullName: z.string().trim().min(2, "Enter your name").max(120),
+  companyName: z.string().trim().min(2, "Enter your company name").max(120),
+  email: z.string().trim().email("Enter a valid email"),
+  password: z.string().min(8, "Password must be at least 8 characters").max(200),
+});
+
+export type SignUpResult =
+  | { mode: "confirmed" } // created + confirmed; client should sign in
+  | { mode: "email" } // client should run the standard email-verification signup
+  | { mode: "error"; error: string };
+
+function autoconfirmEnabled(): boolean {
+  return process.env.AUTH_AUTOCONFIRM === "1" && !!process.env.SUPABASE_SERVICE_ROLE_KEY;
+}
+
+export async function signUpAccount(input: {
+  fullName: string;
+  companyName: string;
+  email: string;
+  password: string;
+}): Promise<SignUpResult> {
+  const parsed = signUpSchema.safeParse(input);
+  if (!parsed.success) {
+    return { mode: "error", error: parsed.error.issues[0]?.message ?? "Check the form" };
+  }
+  if (!autoconfirmEnabled()) {
+    // Production email-verification path is owned by the client SDK.
+    return { mode: "email" };
+  }
+
+  // Admin create, pre-confirmed. No email is sent.
+  const service = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+  try {
+    const res = await fetch(`${supabaseUrl}/auth/v1/admin/users`, {
+      method: "POST",
+      headers: {
+        apikey: service,
+        Authorization: `Bearer ${service}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        email: parsed.data.email,
+        password: parsed.data.password,
+        email_confirm: true,
+        user_metadata: { full_name: parsed.data.fullName, company_name: parsed.data.companyName },
+      }),
+    });
+    if (res.ok) return { mode: "confirmed" };
+
+    const body = (await res.json().catch(() => ({}))) as { msg?: string; error_code?: string };
+    const msg = `${body.msg ?? ""} ${body.error_code ?? ""}`.toLowerCase();
+    if (res.status === 422 || msg.includes("already") || msg.includes("registered") || msg.includes("exists")) {
+      return { mode: "error", error: "That email is already registered. Try signing in." };
+    }
+    reportError(new Error(`admin signup ${res.status}: ${body.msg ?? ""}`), { scope: "signup" });
+    return { mode: "error", error: "Couldn't create your account. Please try again." };
+  } catch (err) {
+    reportError(err, { scope: "signup" });
+    return { mode: "error", error: "Couldn't reach the auth service. Please try again." };
+  }
+}
 
 const onboardSchema = z.object({
   fullName: z.string().trim().min(2, "Enter your name").max(120),
