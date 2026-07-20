@@ -1,0 +1,14 @@
+# Never upload local env files to the Vercel build — runtime uses the
+# dashboard environment variables. (Runtime is already secure; this keeps
+# secrets out of the build container entirely.)
+.env
+.env.*
+!.env.example
+
+# Local-only / not needed for the build
+.git
+tests
+playwright-report
+test-results
+*.log
+scratchpad

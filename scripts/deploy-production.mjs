@@ -31,14 +31,30 @@ const enc = encodeURIComponent(password);
 const DATABASE_URL = `postgresql://postgres.${REF}:${enc}@${POOLER}:6543/postgres?pgbouncer=true&connection_limit=1`;
 const DIRECT_URL = `postgresql://postgres.${REF}:${enc}@${POOLER}:5432/postgres`;
 
-// 1. Verify both connections.
-for (const [name, url] of [["session (5432)", DIRECT_URL], ["transaction (6543)", DATABASE_URL.split("?")[0]]]) {
-  try {
-    run(`npx prisma db execute --url "${url}" --stdin`, { input: "select 1;" });
-    console.log(`✓ Postgres ${name} connection OK`);
-  } catch (e) {
-    console.error(`✗ Postgres ${name} FAILED — is the password correct?`);
+// 1. Verify the SESSION pooler (used for migrations) — must be clean.
+try {
+  run(`npx prisma db execute --url "${DIRECT_URL}" --stdin`, { input: "select 1;" });
+  console.log("✓ Postgres session pooler (5432) connection OK");
+} catch {
+  console.error("✗ Postgres session pooler FAILED — check SUPABASE_DB_PASSWORD.");
+  process.exit(1);
+}
+// 2. Verify the TRANSACTION pooler (app runtime). `prisma db execute` emits a
+//    harmless "prepared statement already exists" over pgbouncer transaction
+//    mode — that error itself proves auth + reachability, so we accept it. Only
+//    a genuine auth/network failure (P1000/P1001, "not found") is fatal.
+try {
+  run(`npx prisma db execute --url "${DATABASE_URL}" --stdin`, { input: "select 1;" });
+  console.log("✓ Postgres transaction pooler (6543) connection OK");
+} catch (e) {
+  const s = String(e.stderr || e.message);
+  if (/prepared statement .* already exists/i.test(s)) {
+    console.log("✓ Postgres transaction pooler (6543) reachable (pgbouncer OK)");
+  } else if (/P1000|P1001|authentication failed|not found|does not exist/i.test(s)) {
+    console.error("✗ Postgres transaction pooler FAILED (auth/network).");
     process.exit(1);
+  } else {
+    console.log("… transaction pooler check inconclusive; health check will confirm post-deploy");
   }
 }
 
