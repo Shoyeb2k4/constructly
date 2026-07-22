@@ -1,5 +1,8 @@
 import type { Metadata } from "next";
 import { getCurrentUser } from "@/lib/auth/current-user";
+import { isDemoMode } from "@/lib/env";
+import { gatherServerDashboard } from "@/features/dashboard/server/gather";
+import { assembleDashboard } from "@/features/dashboard/assemble";
 import { DashboardView } from "@/features/dashboard/components/dashboard-view";
 
 export const metadata: Metadata = { title: "Dashboard" };
@@ -14,12 +17,17 @@ function greeting(): string {
 export default async function DashboardPage() {
   const user = await getCurrentUser();
   const firstName = user?.fullName.split(" ")[0] ?? "there";
+  // Fetch the snapshot on the server so the client renders with data already
+  // present — no post-hydration fetch wave. Demo mode fetches client-side.
+  const initialData =
+    isDemoMode || !user ? undefined : assembleDashboard(await gatherServerDashboard());
   return (
     <DashboardView
       userId={user?.id ?? ""}
       isOwner={user?.role === "OWNER"}
       greeting={greeting()}
       firstName={firstName}
+      initialData={initialData}
     />
   );
 }

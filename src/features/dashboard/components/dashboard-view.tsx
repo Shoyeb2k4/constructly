@@ -15,6 +15,7 @@ import { ErrorState } from "@/components/patterns/error-state";
 import { MoneyText } from "@/components/patterns/money-text";
 import { formatPaiseCompact } from "@/lib/money";
 import { useDashboard } from "../hooks";
+import type { DashboardSnapshot } from "../types";
 import { KpiCard } from "./kpi-card";
 import { SpendTrendChart } from "./charts/spend-trend-chart";
 import { CostSplitDonut } from "./charts/cost-split-donut";
@@ -31,13 +32,15 @@ export function DashboardView({
   isOwner,
   greeting,
   firstName,
+  initialData,
 }: {
   userId: string;
   isOwner: boolean;
   greeting: string;
   firstName: string;
+  initialData?: DashboardSnapshot;
 }) {
-  const { data, isLoading, isError, error, refetch } = useDashboard(userId, isOwner);
+  const { data, isLoading, isError, error, refetch } = useDashboard(userId, isOwner, initialData);
 
   // A failed aggregation must surface, not sit behind skeletons forever.
   if (isError) {
