@@ -1,5 +1,6 @@
 "use server";
 
+import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
 import { requireUser } from "@/lib/auth/current-user";
 import type { SessionUser } from "@/lib/auth/types";
@@ -25,6 +26,14 @@ import { spendByProject, projectSpend } from "@/features/budget/server-actions";
 function assertOwner(user: SessionUser) {
   if (user.role !== "OWNER") throw new Error("FORBIDDEN");
 }
+
+/** Server-side input validation for project creation (never trust the client). */
+const createProjectInputSchema = z.object({
+  name: z.string().trim().min(2, "Name is too short").max(120),
+  budgetPaise: z.number().int().min(0),
+  contractValuePaise: z.number().int().min(0),
+  procurementBudgetPaise: z.number().int().min(0).nullable().optional(),
+});
 
 async function assertCanEdit(user: SessionUser, projectId: string) {
   const p = await prisma.project.findFirst({
@@ -221,6 +230,7 @@ export async function createProject(
 ): Promise<ProjectDetail> {
   const user = await requireUser();
   assertOwner(user);
+  createProjectInputSchema.parse(input);
   const created = await prisma.project.create({
     data: {
       companyId: user.company.id,

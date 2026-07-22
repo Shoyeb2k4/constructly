@@ -136,49 +136,46 @@ describe("FIXED: cross-tenant FK ownership is rejected", () => {
 });
 
 /* ═══════════════════════════════════════════════════════════════════════
- * CRITICAL #3 — Missing server-side validation (financial mutations)
+ * FIXED #3 — Server-side validation rejects invalid financial input
  * ═══════════════════════════════════════════════════════════════════════ */
-describe("CRITICAL: missing server-side validation", () => {
-  it("createProject accepts an empty name and a NEGATIVE budget", async () => {
-    db.project.findFirst.mockResolvedValue(null); // nextCode → PRJ-0001; getProject → null
+describe("FIXED: server-side validation rejects invalid input", () => {
+  it("rejects an empty name / negative budget on createProject (no write)", async () => {
+    db.project.findFirst.mockResolvedValue(null);
     db.project.create.mockResolvedValue({ id: "project-1" });
     db.activityLog.create.mockResolvedValue({});
 
-    await projects.createProject({
-      name: "", // client schema requires min(2) — server does not re-check
-      type: "RESIDENTIAL",
-      budgetPaise: -999_999, // client schema requires min(0) — server does not re-check
-      contractValuePaise: 0,
-      tags: [],
-    } as never);
+    await expect(
+      projects.createProject({
+        name: "", // fails min(2)
+        type: "RESIDENTIAL",
+        budgetPaise: -999_999, // fails min(0)
+        contractValuePaise: 0,
+        tags: [],
+      } as never),
+    ).rejects.toThrow();
 
-    // REPRODUCED: the write happened with invalid data.
-    expect(db.project.create).toHaveBeenCalledTimes(1);
-    const arg = db.project.create.mock.calls[0][0] as { data: { name: string; budgetPaise: bigint } };
-    expect(arg.data.name).toBe("");
-    expect(arg.data.budgetPaise).toBe(BigInt(-999_999));
-    // EXPECTED AFTER FIX: createProject runs projectFormSchema/an input schema
-    // server-side and throws before reaching prisma.create.
+    // FIXED: validation throws before any write.
+    expect(db.project.create).not.toHaveBeenCalled();
   });
 
-  it("createPayment accepts a negative amount server-side", async () => {
+  it("rejects a negative amount on createPayment (no write)", async () => {
     db.project.findFirst.mockResolvedValue({ id: "project-1" });
-    db.vendor.findFirst.mockResolvedValue({ id: "vendor-1" }); // vendor in tenant
-    db.vendorPayment.create.mockResolvedValue({
-      id: "pay-neg", vendorId: "vendor-1", projectId: "project-1", purchaseOrderId: null,
-      amountPaise: BigInt(-100), paymentMode: "CASH", referenceNumber: null, date: new Date(),
-      remarks: null, createdAt: new Date(), vendor: { businessName: "V" },
-      project: { name: "P", code: "C" }, purchaseOrder: null, createdBy: { fullName: "O" },
-    });
+    db.vendor.findFirst.mockResolvedValue({ id: "vendor-1" });
+    db.vendorPayment.create.mockResolvedValue({});
     db.activityLog.create.mockResolvedValue({});
 
-    await procurement.createPayment({
-      vendorId: "vendor-1", projectId: "project-1", purchaseOrderId: null,
-      amountPaise: -100, paymentMode: "CASH", referenceNumber: null,
-      date: "2026-07-20", remarks: null,
-    } as never);
+    await expect(
+      procurement.createPayment({
+        vendorId: "11111111-1111-1111-1111-111111111111",
+        projectId: "22222222-2222-2222-2222-222222222222",
+        purchaseOrderId: null,
+        amountPaise: -100, // fails positive()
+        paymentMode: "CASH", referenceNumber: null,
+        date: "2026-07-20", remarks: null,
+      } as never),
+    ).rejects.toThrow();
 
-    const arg = db.vendorPayment.create.mock.calls[0][0] as { data: { amountPaise: bigint } };
-    expect(arg.data.amountPaise).toBe(BigInt(-100)); // negative money accepted
+    // FIXED: validation throws before any write.
+    expect(db.vendorPayment.create).not.toHaveBeenCalled();
   });
 });

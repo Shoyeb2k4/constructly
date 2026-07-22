@@ -1,5 +1,6 @@
 "use server";
 
+import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
 import { requireUser } from "@/lib/auth/current-user";
 import type { SessionUser } from "@/lib/auth/types";
@@ -68,6 +69,35 @@ async function assertPurchaseOrderAccess(user: SessionUser, purchaseOrderId: str
   });
   if (!p) throw new Error("NOT_FOUND");
 }
+/* ── Server-side input validation (never trust the client) ───────────── */
+const poLineInputSchema = z.object({
+  material: z.string().trim().min(1).max(120),
+  category: z.string().max(60).nullable().optional(),
+  quantity: z.number().positive(),
+  unit: z.string().trim().min(1).max(20),
+  ratePaise: z.number().int().min(0),
+  gstRateBps: z.number().int().min(0).max(10_000),
+});
+const createPOInputSchema = z.object({
+  vendorId: z.string().min(1),
+  projectId: z.string().min(1),
+  purchaseDate: z.string().min(1),
+  expectedDelivery: z.string().nullable().optional(),
+  invoiceNumber: z.string().max(60).nullable().optional(),
+  notes: z.string().max(500).nullable().optional(),
+  lineItems: z.array(poLineInputSchema).min(1),
+});
+const createPaymentInputSchema = z.object({
+  vendorId: z.string().min(1),
+  projectId: z.string().min(1),
+  purchaseOrderId: z.string().min(1).nullable().optional(),
+  amountPaise: z.number().int().positive(),
+  paymentMode: z.enum(["CASH", "UPI", "BANK_TRANSFER", "CHEQUE", "CARD", "OTHER"]),
+  referenceNumber: z.string().max(80).nullable().optional(),
+  date: z.string().min(1),
+  remarks: z.string().max(500).nullable().optional(),
+});
+
 async function approvalRequired(companyId: string): Promise<boolean> {
   const c = await prisma.company.findUnique({ where: { id: companyId }, select: { settings: true } });
   return (c?.settings as { poApprovalRequired?: boolean } | null)?.poApprovalRequired ?? false;
@@ -540,6 +570,7 @@ function lineData(input: CreatePOInput) {
 
 export async function createPurchaseOrder(input: CreatePOInput): Promise<PurchaseOrderDetail> {
   const user = await requireUser();
+  createPOInputSchema.parse(input);
   await assertProjectAccess(user, input.projectId);
   await assertVendorAccess(user, input.vendorId);
   const finalize = !(await approvalRequired(user.company.id));
@@ -570,6 +601,7 @@ export async function createPurchaseOrder(input: CreatePOInput): Promise<Purchas
 
 export async function updatePurchaseOrder(id: string, input: CreatePOInput): Promise<PurchaseOrderDetail> {
   const user = await requireUser();
+  createPOInputSchema.parse(input);
   const existing = await prisma.purchaseOrder.findFirst({ where: { id, companyId: user.company.id }, select: { status: true, projectId: true } });
   if (!existing) throw new Error("NOT_FOUND");
   await assertProjectAccess(user, existing.projectId);
@@ -699,6 +731,7 @@ export async function listPayments(filters: PaymentFilters = {}): Promise<Vendor
 
 export async function createPayment(input: CreatePaymentInput): Promise<VendorPaymentItem> {
   const user = await requireUser();
+  createPaymentInputSchema.parse(input);
   await assertProjectAccess(user, input.projectId);
   await assertVendorAccess(user, input.vendorId);
   if (input.purchaseOrderId) await assertPurchaseOrderAccess(user, input.purchaseOrderId);
