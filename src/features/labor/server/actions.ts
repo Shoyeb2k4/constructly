@@ -84,6 +84,12 @@ export async function reorderCategories(orderedIds: string[]): Promise<void> {
 
 export async function createSubcategory(input: CreateSubcategoryInput): Promise<LabourSubcategory> {
   const user = await requireUser();
+  // Tenant guard: the parent category must belong to the caller's company.
+  const category = await prisma.labourCategory.findFirst({
+    where: { id: input.categoryId, companyId: user.company.id },
+    select: { id: true },
+  });
+  if (!category) throw new Error("NOT_FOUND");
   const count = await prisma.labourSubcategory.count({
     where: { companyId: user.company.id, categoryId: input.categoryId },
   });

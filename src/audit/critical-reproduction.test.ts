@@ -68,6 +68,7 @@ describe("CRITICAL: duplicate payment submission", () => {
 
   it("records TWO identical payments from a double-submit — no dedup", async () => {
     db.project.findFirst.mockResolvedValue({ id: "project-1" }); // tenant project ok
+    db.vendor.findFirst.mockResolvedValue({ id: "vendor-1" }); // vendor in tenant
     db.vendorPayment.create.mockResolvedValue(paymentRow);
     db.activityLog.create.mockResolvedValue({});
 
@@ -86,59 +87,51 @@ describe("CRITICAL: duplicate payment submission", () => {
 });
 
 /* ═══════════════════════════════════════════════════════════════════════
- * CRITICAL #2 — Cross-tenant foreign-key ownership bypass
+ * FIXED #2 — Cross-tenant foreign-key ownership is now rejected
  * ═══════════════════════════════════════════════════════════════════════ */
-describe("CRITICAL: cross-tenant FK ownership bypass", () => {
-  it("creates a PO referencing a vendorId that is NEVER tenant-checked", async () => {
+describe("FIXED: cross-tenant FK ownership is rejected", () => {
+  it("rejects a PO referencing a vendorId from another company (no write)", async () => {
     db.project.findFirst.mockResolvedValue({ id: "project-1" }); // project belongs to company-A
-    db.company.findUnique.mockResolvedValue({ settings: {} }); // approval not required
-    db.purchaseOrder.findFirst.mockResolvedValue(null); // nextPoNumber + getPurchaseOrder
+    db.vendor.findFirst.mockResolvedValue(null); // vendor NOT in company-A
+    db.company.findUnique.mockResolvedValue({ settings: {} });
+    db.purchaseOrder.findFirst.mockResolvedValue(null);
     db.purchaseOrder.create.mockResolvedValue({ id: "po-1" });
 
-    const foreignVendorId = "vendor-owned-by-company-B";
-    await procurement.createPurchaseOrder({
-      vendorId: foreignVendorId,
-      projectId: "project-1",
-      purchaseDate: "2026-07-20",
-      expectedDelivery: null,
-      invoiceNumber: null,
-      notes: null,
-      lineItems: [{ material: "Cement", category: null, quantity: 10, unit: "bag", ratePaise: 40_000, gstRateBps: 1800 }],
-    } as never);
+    await expect(
+      procurement.createPurchaseOrder({
+        vendorId: "vendor-owned-by-company-B",
+        projectId: "project-1",
+        purchaseDate: "2026-07-20",
+        expectedDelivery: null,
+        invoiceNumber: null,
+        notes: null,
+        lineItems: [{ material: "Cement", category: null, quantity: 10, unit: "bag", ratePaise: 40_000, gstRateBps: 1800 }],
+      } as never),
+    ).rejects.toThrow();
 
-    // REPRODUCED: the vendor is never loaded/verified against company-A.
-    expect(db.vendor.findFirst).not.toHaveBeenCalled();
-    expect(db.vendor.findUnique).not.toHaveBeenCalled();
-
-    // The PO was written with the foreign tenant's vendorId.
-    const createArg = db.purchaseOrder.create.mock.calls[0][0] as { data: { vendorId: string } };
-    expect(createArg.data.vendorId).toBe(foreignVendorId);
-    // EXPECTED AFTER FIX: createPurchaseOrder verifies the vendor belongs to
-    // user.company.id (or the write throws) before persisting.
+    // FIXED: the vendor is tenant-checked, and no PO is written.
+    expect(db.vendor.findFirst).toHaveBeenCalled();
+    expect(db.purchaseOrder.create).not.toHaveBeenCalled();
   });
 
-  it("records a payment against another tenant's PO id without validation", async () => {
+  it("rejects a payment against another company's PO id (no write)", async () => {
     db.project.findFirst.mockResolvedValue({ id: "project-1" });
-    db.vendorPayment.create.mockResolvedValue({
-      id: "pay-x", vendorId: "vendor-1", projectId: "project-1",
-      purchaseOrderId: "po-owned-by-company-B", amountPaise: BigInt(1000), paymentMode: "CASH",
-      referenceNumber: null, date: new Date(), remarks: null, createdAt: new Date(),
-      vendor: { businessName: "V" }, project: { name: "P", code: "C" },
-      purchaseOrder: { id: "po-owned-by-company-B", poNumber: "PO-9999" }, createdBy: { fullName: "O" },
-    });
-    db.activityLog.create.mockResolvedValue({});
+    db.vendor.findFirst.mockResolvedValue({ id: "vendor-1" }); // vendor ok in company-A
+    db.purchaseOrder.findFirst.mockResolvedValue(null); // PO NOT in company-A
+    db.vendorPayment.create.mockResolvedValue({});
 
-    await procurement.createPayment({
-      vendorId: "vendor-1", projectId: "project-1",
-      purchaseOrderId: "po-owned-by-company-B",
-      amountPaise: 1000, paymentMode: "CASH", referenceNumber: null,
-      date: "2026-07-20", remarks: null,
-    } as never);
+    await expect(
+      procurement.createPayment({
+        vendorId: "vendor-1", projectId: "project-1",
+        purchaseOrderId: "po-owned-by-company-B",
+        amountPaise: 1000, paymentMode: "CASH", referenceNumber: null,
+        date: "2026-07-20", remarks: null,
+      } as never),
+    ).rejects.toThrow();
 
-    // REPRODUCED: purchaseOrderId is passed straight to create; no ownership read.
-    expect(db.purchaseOrder.findFirst).not.toHaveBeenCalled();
-    const arg = db.vendorPayment.create.mock.calls[0][0] as { data: { purchaseOrderId: string } };
-    expect(arg.data.purchaseOrderId).toBe("po-owned-by-company-B");
+    // FIXED: the PO ownership is checked, and no payment is written.
+    expect(db.purchaseOrder.findFirst).toHaveBeenCalled();
+    expect(db.vendorPayment.create).not.toHaveBeenCalled();
   });
 });
 
@@ -170,6 +163,7 @@ describe("CRITICAL: missing server-side validation", () => {
 
   it("createPayment accepts a negative amount server-side", async () => {
     db.project.findFirst.mockResolvedValue({ id: "project-1" });
+    db.vendor.findFirst.mockResolvedValue({ id: "vendor-1" }); // vendor in tenant
     db.vendorPayment.create.mockResolvedValue({
       id: "pay-neg", vendorId: "vendor-1", projectId: "project-1", purchaseOrderId: null,
       amountPaise: BigInt(-100), paymentMode: "CASH", referenceNumber: null, date: new Date(),

@@ -52,6 +52,22 @@ async function assertProjectAccess(user: SessionUser, projectId: string) {
   });
   if (!p) throw new Error("FORBIDDEN");
 }
+/** Tenant guard for a client-supplied vendorId — never trust a foreign FK. */
+async function assertVendorAccess(user: SessionUser, vendorId: string) {
+  const v = await prisma.vendor.findFirst({
+    where: { id: vendorId, companyId: user.company.id },
+    select: { id: true },
+  });
+  if (!v) throw new Error("NOT_FOUND");
+}
+/** Tenant guard for a client-supplied purchaseOrderId. */
+async function assertPurchaseOrderAccess(user: SessionUser, purchaseOrderId: string) {
+  const p = await prisma.purchaseOrder.findFirst({
+    where: { id: purchaseOrderId, companyId: user.company.id },
+    select: { id: true },
+  });
+  if (!p) throw new Error("NOT_FOUND");
+}
 async function approvalRequired(companyId: string): Promise<boolean> {
   const c = await prisma.company.findUnique({ where: { id: companyId }, select: { settings: true } });
   return (c?.settings as { poApprovalRequired?: boolean } | null)?.poApprovalRequired ?? false;
@@ -525,6 +541,7 @@ function lineData(input: CreatePOInput) {
 export async function createPurchaseOrder(input: CreatePOInput): Promise<PurchaseOrderDetail> {
   const user = await requireUser();
   await assertProjectAccess(user, input.projectId);
+  await assertVendorAccess(user, input.vendorId);
   const finalize = !(await approvalRequired(user.company.id));
   const totals = poTotals(input.lineItems);
   const created = await prisma.purchaseOrder.create({
@@ -556,6 +573,8 @@ export async function updatePurchaseOrder(id: string, input: CreatePOInput): Pro
   const existing = await prisma.purchaseOrder.findFirst({ where: { id, companyId: user.company.id }, select: { status: true, projectId: true } });
   if (!existing) throw new Error("NOT_FOUND");
   await assertProjectAccess(user, existing.projectId);
+  await assertProjectAccess(user, input.projectId);
+  await assertVendorAccess(user, input.vendorId);
   if (existing.status !== "DRAFT") throw new Error("IMMUTABLE");
   const totals = poTotals(input.lineItems);
   await prisma.$transaction([
@@ -681,6 +700,8 @@ export async function listPayments(filters: PaymentFilters = {}): Promise<Vendor
 export async function createPayment(input: CreatePaymentInput): Promise<VendorPaymentItem> {
   const user = await requireUser();
   await assertProjectAccess(user, input.projectId);
+  await assertVendorAccess(user, input.vendorId);
+  if (input.purchaseOrderId) await assertPurchaseOrderAccess(user, input.purchaseOrderId);
   const row = await prisma.vendorPayment.create({
     data: {
       companyId: user.company.id,
