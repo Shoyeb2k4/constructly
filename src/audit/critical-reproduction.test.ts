@@ -26,7 +26,7 @@ vi.mock("@/lib/db/prisma", () => ({
   prisma: {
     project: { findFirst: vi.fn(), findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), create: vi.fn() },
     vendor: { findFirst: vi.fn(), findUnique: vi.fn() },
-    vendorPayment: { create: vi.fn(), findUnique: vi.fn(), findMany: vi.fn() },
+    vendorPayment: { create: vi.fn(), findFirst: vi.fn(), findUnique: vi.fn(), findMany: vi.fn() },
     purchaseOrder: { findFirst: vi.fn(), create: vi.fn() },
     company: { findUnique: vi.fn() },
     activityLog: { create: vi.fn() },
@@ -34,6 +34,7 @@ vi.mock("@/lib/db/prisma", () => ({
 }));
 
 import { prisma } from "@/lib/db/prisma";
+import { Prisma } from "@/generated/prisma";
 import * as procurement from "@/features/procurement/server/actions";
 import * as projects from "@/features/projects/server/actions";
 
@@ -45,44 +46,87 @@ beforeEach(() => {
 });
 
 /* ═══════════════════════════════════════════════════════════════════════
- * CRITICAL #1 — Duplicate payment submission (no idempotency)
+ * FIXED #1 — Idempotent payment creation (no duplicates)
  * ═══════════════════════════════════════════════════════════════════════ */
-describe("CRITICAL: duplicate payment submission", () => {
-  const paymentInput = {
-    vendorId: "vendor-1",
-    projectId: "project-1",
-    purchaseOrderId: null,
-    amountPaise: 5_000_000,
-    paymentMode: "CASH",
-    referenceNumber: "TXN-DUP-001",
-    date: "2026-07-20",
-    remarks: null,
+describe("FIXED: idempotent payment creation", () => {
+  const baseInput = {
+    vendorId: "vendor-1", projectId: "project-1", purchaseOrderId: null,
+    amountPaise: 5_000_000, paymentMode: "CASH", referenceNumber: "TXN-1",
+    date: "2026-07-20", remarks: null,
   };
   const paymentRow = {
     id: "pay-1", vendorId: "vendor-1", projectId: "project-1", purchaseOrderId: null,
-    amountPaise: BigInt(5_000_000), paymentMode: "CASH", referenceNumber: "TXN-DUP-001",
-    date: new Date("2026-07-20"), remarks: null, createdAt: new Date(),
+    amountPaise: BigInt(5_000_000), paymentMode: "CASH", referenceNumber: "TXN-1",
+    date: new Date("2026-07-20"), remarks: null, createdAt: new Date(), clientUuid: "idem-1",
     vendor: { businessName: "Vendor" }, project: { name: "Proj", code: "PRJ-1" },
     purchaseOrder: null, createdBy: { fullName: "Owner" },
   };
 
-  it("records TWO identical payments from a double-submit — no dedup", async () => {
-    db.project.findFirst.mockResolvedValue({ id: "project-1" }); // tenant project ok
-    db.vendor.findFirst.mockResolvedValue({ id: "vendor-1" }); // vendor in tenant
-    db.vendorPayment.create.mockResolvedValue(paymentRow);
+  function tenantOk() {
+    db.project.findFirst.mockResolvedValue({ id: "project-1" });
+    db.vendor.findFirst.mockResolvedValue({ id: "vendor-1" });
     db.activityLog.create.mockResolvedValue({});
+  }
 
-    // Simulate a double-click / retried request: identical payload twice.
-    await procurement.createPayment(paymentInput as never);
-    await procurement.createPayment(paymentInput as never);
+  it("single submission → exactly one payment", async () => {
+    tenantOk();
+    db.vendorPayment.findFirst.mockResolvedValue(null); // no prior payment
+    db.vendorPayment.create.mockResolvedValue(paymentRow);
 
-    // REPRODUCED: both writes go through — the ledger is now double-counted.
+    await procurement.createPayment({ ...baseInput, clientUuid: "idem-1" } as never);
+
+    expect(db.vendorPayment.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("double-click (same clientUuid) → one payment, second is deduped", async () => {
+    tenantOk();
+    db.vendorPayment.findFirst
+      .mockResolvedValueOnce(null) // 1st: no prior → create
+      .mockResolvedValueOnce(paymentRow); // 2nd: prior found → return it
+    db.vendorPayment.create.mockResolvedValue(paymentRow);
+
+    const r1 = await procurement.createPayment({ ...baseInput, clientUuid: "idem-1" } as never);
+    const r2 = await procurement.createPayment({ ...baseInput, clientUuid: "idem-1" } as never);
+
+    expect(db.vendorPayment.create).toHaveBeenCalledTimes(1);
+    expect(r1.id).toBe(r2.id);
+  });
+
+  it("retry after a timeout (same clientUuid) → one payment (no write)", async () => {
+    tenantOk();
+    db.vendorPayment.findFirst.mockResolvedValue(paymentRow); // first attempt already persisted
+    db.vendorPayment.create.mockResolvedValue(paymentRow);
+
+    await procurement.createPayment({ ...baseInput, clientUuid: "idem-1" } as never);
+
+    expect(db.vendorPayment.create).not.toHaveBeenCalled(); // deduped before any write
+  });
+
+  it("concurrent race (unique-index P2002) → one payment, no error", async () => {
+    tenantOk();
+    db.vendorPayment.findFirst
+      .mockResolvedValueOnce(null) // dedup check passes (both racers see null)
+      .mockResolvedValueOnce(paymentRow); // post-P2002 lookup returns the winner
+    db.vendorPayment.create.mockRejectedValueOnce(
+      new Prisma.PrismaClientKnownRequestError("Unique constraint failed", {
+        code: "P2002",
+        clientVersion: "6.19.3",
+      }),
+    );
+
+    const r = await procurement.createPayment({ ...baseInput, clientUuid: "idem-1" } as never);
+    expect(r.id).toBe("pay-1"); // returns the existing payment instead of throwing
+  });
+
+  it("different clientUuid → a new payment", async () => {
+    tenantOk();
+    db.vendorPayment.findFirst.mockResolvedValue(null);
+    db.vendorPayment.create.mockResolvedValue(paymentRow);
+
+    await procurement.createPayment({ ...baseInput, clientUuid: "idem-A" } as never);
+    await procurement.createPayment({ ...baseInput, clientUuid: "idem-B" } as never);
+
     expect(db.vendorPayment.create).toHaveBeenCalledTimes(2);
-
-    // Root cause: no idempotency read happens before the write.
-    // EXPECTED AFTER FIX: a dedup lookup (findUnique on an idempotency key)
-    // guards the second write. Today there is none.
-    expect(db.vendorPayment.findUnique).not.toHaveBeenCalled();
   });
 });
 

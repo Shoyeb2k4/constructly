@@ -65,6 +65,7 @@ export interface PaymentRecord {
   referenceNumber: string | null;
   date: string;
   remarks: string | null;
+  clientUuid?: string | null;
   createdByName: string;
   createdAt: string;
 }

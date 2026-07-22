@@ -109,6 +109,8 @@ export interface CreatePaymentInput {
   referenceNumber?: string | null;
   date: string;
   remarks?: string | null;
+  /** Client-generated idempotency key — a re-submit with the same value is deduped. */
+  clientUuid?: string | null;
 }
 
 export interface PaymentFilters {

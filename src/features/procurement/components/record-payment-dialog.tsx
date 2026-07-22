@@ -56,6 +56,12 @@ function PaymentDialogInner({
   const { data: vendors = [] } = useVendors({});
   const { data: projects = [] } = useProjects({});
 
+  // One idempotency key per dialog-open session: reused across retries (network
+  // failure, double-click), so the server dedups instead of double-recording.
+  // A fresh key is minted on the next open — the dialog remounts via key="open".
+  const clientUuidRef = React.useRef("");
+  if (!clientUuidRef.current) clientUuidRef.current = crypto.randomUUID();
+
   const {
     register,
     control,
@@ -101,7 +107,7 @@ function PaymentDialogInner({
       ...values,
       purchaseOrderId: values.purchaseOrderId === NO_PO ? "" : values.purchaseOrderId,
     });
-    await create.mutateAsync(paymentFormToInput(parsed));
+    await create.mutateAsync({ ...paymentFormToInput(parsed), clientUuid: clientUuidRef.current });
     onOpenChange(false);
   });
 

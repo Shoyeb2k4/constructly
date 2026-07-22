@@ -599,6 +599,11 @@ export const demoProcurementRepository: ProcurementRepository = {
 
   async createPayment(input: CreatePaymentInput) {
     const rows = loadPayments();
+    // Idempotency parity with the server: a repeated clientUuid is deduped.
+    if (input.clientUuid) {
+      const existing = rows.find((p) => p.clientUuid === input.clientUuid);
+      if (existing) return toPaymentItem(existing, loadVendors(), loadPOs(), projectMeta());
+    }
     const rec: PaymentRecord = {
       id: uid(),
       vendorId: input.vendorId,
@@ -609,6 +614,7 @@ export const demoProcurementRepository: ProcurementRepository = {
       referenceNumber: input.referenceNumber ?? null,
       date: input.date,
       remarks: input.remarks ?? null,
+      clientUuid: input.clientUuid ?? null,
       createdByName: ACTOR,
       createdAt: new Date().toISOString(),
     };

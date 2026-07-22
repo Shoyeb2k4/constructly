@@ -96,6 +96,7 @@ const createPaymentInputSchema = z.object({
   referenceNumber: z.string().max(80).nullable().optional(),
   date: z.string().min(1),
   remarks: z.string().max(500).nullable().optional(),
+  clientUuid: z.string().min(1).max(64).nullable().optional(),
 });
 
 async function approvalRequired(companyId: string): Promise<boolean> {
@@ -735,33 +736,57 @@ export async function createPayment(input: CreatePaymentInput): Promise<VendorPa
   await assertProjectAccess(user, input.projectId);
   await assertVendorAccess(user, input.vendorId);
   if (input.purchaseOrderId) await assertPurchaseOrderAccess(user, input.purchaseOrderId);
-  const row = await prisma.vendorPayment.create({
-    data: {
-      companyId: user.company.id,
-      vendorId: input.vendorId,
-      projectId: input.projectId,
-      purchaseOrderId: input.purchaseOrderId ?? null,
-      amountPaise: BigInt(input.amountPaise),
-      paymentMode: input.paymentMode,
-      referenceNumber: input.referenceNumber ?? null,
-      date: new Date(input.date),
-      remarks: input.remarks ?? null,
-      createdById: user.id,
-    },
-    include: paymentInclude,
-  });
-  await prisma.activityLog.create({
-    data: {
-      companyId: user.company.id,
-      actorId: user.id,
-      action: "payment.recorded",
-      entityType: "vendor_payment",
-      entityId: row.id,
-      summary: `Recorded a payment to ${row.vendor.businessName}`,
-      meta: { vendorId: input.vendorId, projectId: input.projectId, amountPaise: input.amountPaise },
-    },
-  });
-  return toPaymentItem(row);
+
+  // Idempotency: a repeated submission (double-click / retry) carrying the same
+  // clientUuid returns the original payment instead of recording a duplicate.
+  const findByClientUuid = () =>
+    input.clientUuid
+      ? prisma.vendorPayment.findFirst({
+          where: { clientUuid: input.clientUuid, companyId: user.company.id },
+          include: paymentInclude,
+        })
+      : Promise.resolve(null);
+
+  const prior = await findByClientUuid();
+  if (prior) return toPaymentItem(prior);
+
+  try {
+    const row = await prisma.vendorPayment.create({
+      data: {
+        companyId: user.company.id,
+        vendorId: input.vendorId,
+        projectId: input.projectId,
+        purchaseOrderId: input.purchaseOrderId ?? null,
+        amountPaise: BigInt(input.amountPaise),
+        paymentMode: input.paymentMode,
+        referenceNumber: input.referenceNumber ?? null,
+        date: new Date(input.date),
+        remarks: input.remarks ?? null,
+        clientUuid: input.clientUuid ?? null,
+        createdById: user.id,
+      },
+      include: paymentInclude,
+    });
+    await prisma.activityLog.create({
+      data: {
+        companyId: user.company.id,
+        actorId: user.id,
+        action: "payment.recorded",
+        entityType: "vendor_payment",
+        entityId: row.id,
+        summary: `Recorded a payment to ${row.vendor.businessName}`,
+        meta: { vendorId: input.vendorId, projectId: input.projectId, amountPaise: input.amountPaise },
+      },
+    });
+    return toPaymentItem(row);
+  } catch (err) {
+    // Race: a concurrent request with the same clientUuid won the unique index.
+    if (input.clientUuid && err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      const raced = await findByClientUuid();
+      if (raced) return toPaymentItem(raced);
+    }
+    throw err;
+  }
 }
 
 export async function deletePayment(id: string): Promise<void> {

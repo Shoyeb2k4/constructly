@@ -502,6 +502,11 @@ model VendorPayment {
   referenceNumber String?     @map("reference_number")
   date            DateTime    @db.Date
   remarks         String?
+  /// Client-generated idempotency key. A PARTIAL unique index
+  /// (WHERE client_uuid IS NOT NULL) — created in
+  /// prisma/migration-payment-idempotency.sql — dedups repeated submissions
+  /// without constraining the legacy NULL rows.
+  clientUuid      String?     @map("client_uuid")
   createdById     String      @map("created_by_id") @db.Uuid
   createdAt       DateTime    @default(now()) @map("created_at")
   updatedAt       DateTime    @updatedAt @map("updated_at")
