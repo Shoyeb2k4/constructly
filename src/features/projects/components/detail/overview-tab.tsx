@@ -10,6 +10,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { TagChip } from "../tag-chip";
 import { BudgetCard } from "./budget-card";
+import { DeadlineEditor } from "./deadline-editor";
 import type { ProjectDetail } from "../../types";
 import { TYPE_LABEL } from "../../constants";
 import { formatDate, deadlineCountdown } from "../../format";
@@ -34,7 +35,13 @@ function Line({
   );
 }
 
-export function OverviewTab({ project }: { project: ProjectDetail }) {
+export function OverviewTab({
+  project,
+  canEdit = false,
+}: {
+  project: ProjectDetail;
+  canEdit?: boolean;
+}) {
   const cd = deadlineCountdown(project.expectedCompletionDate);
 
   return (
@@ -79,7 +86,12 @@ export function OverviewTab({ project }: { project: ProjectDetail }) {
               }
             />
             <Line icon={CalendarDays} label="Start" value={formatDate(project.startDate)} />
-            <Line icon={CalendarDays} label="Completion" value={formatDate(project.expectedCompletionDate)} />
+            <DeadlineEditor
+              projectId={project.id}
+              startDate={project.startDate}
+              expectedCompletionDate={project.expectedCompletionDate}
+              canEdit={canEdit}
+            />
           </CardContent>
         </Card>
 

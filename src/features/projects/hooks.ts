@@ -155,18 +155,26 @@ export function useProjectDetailActions(id: string) {
     mutationFn: (stage: ProjectStage) => projectsApi.changeStage(id, stage),
     onSuccess: () => qc.invalidateQueries({ queryKey: projectKeys.all }),
   });
+  // Deadline mutations surface failures — previously they failed silently, so a
+  // rejected write looked to the user like "nothing happened".
   const addDeadline = useMutation({
     mutationFn: (v: { title: string; dueDate: string }) =>
       projectsApi.addDeadline(id, v.title, v.dueDate),
-    onSuccess: write,
+    onSuccess: (p) => {
+      write(p);
+      toast.success("Deadline added");
+    },
+    onError: () => toast.error("Couldn't add the deadline"),
   });
   const toggleDeadline = useMutation({
     mutationFn: (deadlineId: string) => projectsApi.toggleDeadline(id, deadlineId),
     onSuccess: write,
+    onError: () => toast.error("Couldn't update the deadline"),
   });
   const removeDeadline = useMutation({
     mutationFn: (deadlineId: string) => projectsApi.removeDeadline(id, deadlineId),
     onSuccess: write,
+    onError: () => toast.error("Couldn't remove the deadline"),
   });
   const addNote = useMutation({
     mutationFn: (body: string) => projectsApi.addNote(id, body),

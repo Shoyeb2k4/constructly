@@ -128,7 +128,7 @@ export function ProjectDetailView({
         </TabsList>
 
         <TabsContent value="overview">
-          <OverviewTab project={project} />
+          <OverviewTab project={project} canEdit={canEdit} />
         </TabsContent>
         <TabsContent value="procurement">
           <ProjectProcurementTab projectId={project.id} />
