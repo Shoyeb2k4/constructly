@@ -31,6 +31,7 @@ export interface ProcurementRepository {
   setVendorStatus(id: string, status: VendorStatus): Promise<Vendor>;
   toggleVendorFavorite(id: string): Promise<boolean>;
   listMaterials(): Promise<string[]>;
+  listMembers(): Promise<{ id: string; fullName: string }[]>;
   addVendorDocument(
     vendorId: string,
     doc: { filename: string; sizeBytes: number; mimeType: string },

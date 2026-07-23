@@ -26,6 +26,7 @@ import type {
   CreateVendorInput,
   PaymentFilters,
   POFilters,
+  POSort,
   ProjectProcurement,
   PurchaseOrderDetail,
   PurchaseOrderListItem,
@@ -436,7 +437,7 @@ export async function setMaterialCategories(categories: string[]): Promise<strin
 const poInclude = {
   vendor: { select: { businessName: true } },
   project: { select: { name: true, code: true } },
-  createdBy: { select: { fullName: true } },
+  createdBy: { select: { id: true, fullName: true } },
   approvedBy: { select: { fullName: true } },
   revisedFrom: { select: { poNumber: true } },
   lineItems: { orderBy: { sortOrder: "asc" } },
@@ -447,8 +448,9 @@ type PORow = Prisma.PurchaseOrderGetPayload<{ include: typeof poInclude }>;
 type POListRow = {
   id: string; poNumber: string; status: "DRAFT" | "SUBMITTED" | "APPROVED"; purchaseDate: Date;
   expectedDelivery: Date | null; subtotalPaise: bigint; gstPaise: bigint; totalPaise: bigint;
-  invoiceNumber: string | null; vendorId: string; projectId: string; createdAt: Date;
+  invoiceNumber: string | null; vendorId: string; projectId: string; createdById: string; createdAt: Date;
   vendor: { businessName: string }; project: { name: string; code: string };
+  createdBy?: { id: string; fullName: string } | null;
 };
 
 function toListItem(p: POListRow, paid: Map<string, number>): PurchaseOrderListItem {
@@ -467,8 +469,26 @@ function toListItem(p: POListRow, paid: Map<string, number>): PurchaseOrderListI
     invoiceNumber: p.invoiceNumber,
     vendor: { id: p.vendorId, name: p.vendor.businessName },
     project: { id: p.projectId, name: p.project.name, code: p.project.code },
+    createdBy: p.createdBy ? { id: p.createdBy.id, name: p.createdBy.fullName } : null,
     createdAt: p.createdAt.toISOString(),
   };
+}
+
+/** Maps a sort mode to a Prisma orderBy (kept in lock-step with poComparator). */
+function poOrderBy(sort: POSort = "NEWEST"): Prisma.PurchaseOrderOrderByWithRelationInput[] {
+  switch (sort) {
+    case "OLDEST": return [{ purchaseDate: "asc" }, { poNumber: "asc" }];
+    case "AMOUNT_DESC": return [{ totalPaise: "desc" }];
+    case "AMOUNT_ASC": return [{ totalPaise: "asc" }];
+    case "VENDOR_ASC": return [{ vendor: { businessName: "asc" } }];
+    case "VENDOR_DESC": return [{ vendor: { businessName: "desc" } }];
+    case "PROJECT_ASC": return [{ project: { name: "asc" } }];
+    case "PO_NUMBER": return [{ poNumber: "asc" }];
+    case "STATUS": return [{ status: "asc" }, { poNumber: "asc" }];
+    case "DELIVERY": return [{ expectedDelivery: { sort: "asc", nulls: "last" } }];
+    case "NEWEST":
+    default: return [{ purchaseDate: "desc" }, { poNumber: "desc" }];
+  }
 }
 
 const paymentInclude = {
@@ -527,6 +547,16 @@ async function toDetail(p: PORow, companyId: string): Promise<PurchaseOrderDetai
   };
 }
 
+/** Active company members — the "Created by" filter options (owners + PMs). */
+export async function listMembers(): Promise<{ id: string; fullName: string }[]> {
+  const user = await requireUser();
+  return prisma.user.findMany({
+    where: { companyId: user.company.id, status: "ACTIVE" },
+    select: { id: true, fullName: true },
+    orderBy: { fullName: "asc" },
+  });
+}
+
 export async function listPurchaseOrders(filters: POFilters = {}): Promise<PurchaseOrderListItem[]> {
   const user = await requireUser();
   const rows = await prisma.purchaseOrder.findMany({
@@ -538,9 +568,24 @@ export async function listPurchaseOrders(filters: POFilters = {}): Promise<Purch
       ...(filters.vendorId && filters.vendorId !== "ALL" ? { vendorId: filters.vendorId } : {}),
       ...(filters.material && filters.material !== "ALL" ? { lineItems: { some: { material: filters.material } } } : {}),
       ...(filters.category && filters.category !== "ALL" ? { lineItems: { some: { category: filters.category } } } : {}),
-      ...(filters.dateFrom ? { purchaseDate: { gte: new Date(filters.dateFrom) } } : {}),
-      ...(filters.dateTo
-        ? { AND: [{ purchaseDate: { lte: new Date(filters.dateTo) } }] }
+      ...(filters.createdById && filters.createdById !== "ALL" ? { createdById: filters.createdById } : {}),
+      ...(filters.gst === "WITH" ? { gstPaise: { gt: 0 } } : {}),
+      ...(filters.gst === "WITHOUT" ? { gstPaise: BigInt(0) } : {}),
+      ...(filters.amountMinPaise != null || filters.amountMaxPaise != null
+        ? {
+            totalPaise: {
+              ...(filters.amountMinPaise != null ? { gte: BigInt(Math.round(filters.amountMinPaise)) } : {}),
+              ...(filters.amountMaxPaise != null ? { lte: BigInt(Math.round(filters.amountMaxPaise)) } : {}),
+            },
+          }
+        : {}),
+      ...(filters.dateFrom || filters.dateTo
+        ? {
+            purchaseDate: {
+              ...(filters.dateFrom ? { gte: new Date(filters.dateFrom) } : {}),
+              ...(filters.dateTo ? { lte: new Date(filters.dateTo) } : {}),
+            },
+          }
         : {}),
       ...(filters.search
         ? {
@@ -552,8 +597,12 @@ export async function listPurchaseOrders(filters: POFilters = {}): Promise<Purch
           }
         : {}),
     },
-    include: { vendor: { select: { businessName: true } }, project: { select: { name: true, code: true } } },
-    orderBy: { purchaseDate: "desc" },
+    include: {
+      vendor: { select: { businessName: true } },
+      project: { select: { name: true, code: true } },
+      createdBy: { select: { id: true, fullName: true } },
+    },
+    orderBy: poOrderBy(filters.sort),
   });
   const paid = paidByPO(await fetchRollupPayments(user.company.id));
   let items = rows.map((p) => toListItem(p, paid));

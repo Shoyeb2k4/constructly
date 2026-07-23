@@ -70,6 +70,8 @@ export interface PurchaseOrderListItem {
   invoiceNumber: string | null;
   vendor: { id: string; name: string };
   project: { id: string; name: string; code: string };
+  /** Creator — present on list rows; used by the "Created by" filter. */
+  createdBy?: { id: string; name: string } | null;
   createdAt: string;
 }
 
@@ -172,6 +174,22 @@ export interface VendorFilters {
   favoritesOnly?: boolean;
 }
 
+/** PO list sort modes. NEWEST is the default. */
+export type POSort =
+  | "NEWEST"
+  | "OLDEST"
+  | "AMOUNT_DESC"
+  | "AMOUNT_ASC"
+  | "VENDOR_ASC"
+  | "VENDOR_DESC"
+  | "PROJECT_ASC"
+  | "PO_NUMBER"
+  | "STATUS"
+  | "DELIVERY";
+
+/** GST presence filter. */
+export type POGstFilter = "ALL" | "WITH" | "WITHOUT";
+
 export interface POFilters {
   search?: string;
   status?: PurchaseOrderStatus | "ALL";
@@ -180,8 +198,14 @@ export interface POFilters {
   material?: string | "ALL";
   category?: string | "ALL";
   paymentStatus?: POPaymentStatus | "ALL";
+  createdById?: string | "ALL";
+  gst?: POGstFilter;
+  /** Grand-total range, in paise (inclusive). */
+  amountMinPaise?: number;
+  amountMaxPaise?: number;
   dateFrom?: string;
   dateTo?: string;
+  sort?: POSort;
 }
 
 /* ── Inputs ──────────────────────────────────────────────────────────── */

@@ -25,6 +25,9 @@ export function useVendor(id: string) {
 export function useMaterials() {
   return useQuery({ queryKey: procurementKeys.materials, queryFn: () => procurementApi.listMaterials(), staleTime: 5 * 60_000 });
 }
+export function useMembers() {
+  return useQuery({ queryKey: procurementKeys.members, queryFn: () => procurementApi.listMembers(), staleTime: 5 * 60_000 });
+}
 export function usePurchaseOrders(filters: POFilters = {}) {
   return useQuery({ queryKey: procurementKeys.pos(filters), queryFn: () => procurementApi.listPurchaseOrders(filters) });
 }

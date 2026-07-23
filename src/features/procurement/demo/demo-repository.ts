@@ -30,6 +30,7 @@ import {
   type POForRollup,
 } from "../calc";
 import { DEFAULT_MATERIAL_CATEGORIES } from "../constants";
+import { poComparator } from "../sort";
 import { demoApprovalRequired } from "@/features/budget/spend";
 import {
   DEMO_VENDORS,
@@ -231,6 +232,7 @@ function toListItem(
     invoiceNumber: po.invoiceNumber,
     vendor: { id: po.vendorId, name: v?.businessName ?? "Unknown" },
     project: { id: po.projectId, name: pm?.name ?? "Unknown", code: pm?.code ?? "" },
+    createdBy: { id: po.createdByName, name: po.createdByName },
     createdAt: po.createdAt,
   };
 }
@@ -412,6 +414,10 @@ export const demoProcurementRepository: ProcurementRepository = {
     return [...new Set(loadVendors().flatMap((v) => v.materialsSupplied))].sort();
   },
 
+  async listMembers() {
+    return [{ id: ACTOR, fullName: ACTOR }];
+  },
+
   async addVendorDocument(vendorId, doc) {
     const docs = loadVendorDocs();
     docs.push({
@@ -460,6 +466,12 @@ export const demoProcurementRepository: ProcurementRepository = {
       rows = rows.filter((p) => p.lineItems.some((l) => l.material === filters.material));
     if (filters.category && filters.category !== "ALL")
       rows = rows.filter((p) => p.lineItems.some((l) => l.category === filters.category));
+    if (filters.createdById && filters.createdById !== "ALL")
+      rows = rows.filter((p) => p.createdByName === filters.createdById);
+    if (filters.gst === "WITH") rows = rows.filter((p) => p.gstPaise > 0);
+    if (filters.gst === "WITHOUT") rows = rows.filter((p) => p.gstPaise === 0);
+    if (filters.amountMinPaise != null) rows = rows.filter((p) => p.totalPaise >= filters.amountMinPaise!);
+    if (filters.amountMaxPaise != null) rows = rows.filter((p) => p.totalPaise <= filters.amountMaxPaise!);
     if (filters.dateFrom) rows = rows.filter((p) => p.purchaseDate >= filters.dateFrom!);
     if (filters.dateTo) rows = rows.filter((p) => p.purchaseDate <= filters.dateTo!);
     if (filters.search) {
@@ -472,8 +484,8 @@ export const demoProcurementRepository: ProcurementRepository = {
       );
     }
     let items = rows
-      .sort((a, b) => b.purchaseDate.localeCompare(a.purchaseDate))
-      .map((p) => toListItem(p, vendors, meta, paid));
+      .map((p) => toListItem(p, vendors, meta, paid))
+      .sort(poComparator(filters.sort));
     if (filters.paymentStatus && filters.paymentStatus !== "ALL")
       items = items.filter((i) => i.paymentStatus === filters.paymentStatus);
     return items;
