@@ -98,6 +98,20 @@ const createPaymentInputSchema = z.object({
   remarks: z.string().max(500).nullable().optional(),
   clientUuid: z.string().min(1).max(64).nullable().optional(),
 });
+/** Vendor edit payload — every field validated server-side. */
+const vendorPatchSchema = z.object({
+  businessName: z.string().trim().min(2, "Name is too short").max(120).optional(),
+  contactPerson: z.string().trim().max(80).nullable().optional(),
+  phone: z.string().trim().max(20).nullable().optional(),
+  email: z.string().trim().max(120).email("Enter a valid email").nullable().optional(),
+  gstin: z.string().trim().max(20).nullable().optional(),
+  pan: z.string().trim().max(15).nullable().optional(),
+  address: z.string().trim().max(240).nullable().optional(),
+  materialsSupplied: z.array(z.string().max(60)).max(50).optional(),
+  paymentTerms: z.string().trim().max(80).nullable().optional(),
+  notes: z.string().trim().max(500).nullable().optional(),
+  status: z.enum(["ACTIVE", "INACTIVE"]).optional(),
+});
 
 async function approvalRequired(companyId: string): Promise<boolean> {
   const c = await prisma.company.findUnique({ where: { id: companyId }, select: { settings: true } });
@@ -325,7 +339,19 @@ export async function createVendor(input: CreateVendorInput): Promise<Vendor> {
 export async function updateVendor(id: string, patch: UpdateVendorInput): Promise<Vendor> {
   const user = await requireUser();
   assertOwner(user);
+  vendorPatchSchema.parse(patch);
   const v = await prisma.vendor.update({ where: { id, companyId: user.company.id }, data: patch });
+  await prisma.activityLog.create({
+    data: {
+      companyId: user.company.id,
+      actorId: user.id,
+      action: "vendor.updated",
+      entityType: "vendor",
+      entityId: v.id,
+      summary: `Updated vendor ${v.businessName}`,
+      meta: { fields: Object.keys(patch) },
+    },
+  });
   const ctx = await vendorContext(user);
   return toVendor(v, ctx.pos, ctx.payments, ctx.favoriteIds, ctx.approval);
 }

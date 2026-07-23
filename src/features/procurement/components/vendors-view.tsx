@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { Truck, Plus, Search, Star, MoreHorizontal, UserX, UserCheck, Clock } from "lucide-react";
+import { Truck, Plus, Search, Star, MoreHorizontal, UserX, UserCheck, Clock, Pencil } from "lucide-react";
 import { PageHeader } from "@/components/patterns/page-header";
 import { EmptyState } from "@/components/patterns/empty-state";
 import { RowsSkeleton } from "@/components/patterns/loading-state";
@@ -26,7 +26,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { TagChip } from "@/features/projects/components/tag-chip";
-import type { VendorFilters, VendorStatus } from "../types";
+import type { Vendor, VendorFilters, VendorStatus } from "../types";
 import { useVendors, useMaterials, useVendorMutations } from "../hooks";
 import { useRecentVendors } from "../recently-vendors";
 import { AddVendorSheet } from "./add-vendor-sheet";
@@ -37,6 +37,7 @@ export function VendorsView({ isOwner }: { isOwner: boolean }) {
   const [material, setMaterial] = React.useState("ALL");
   const [favoritesOnly, setFavoritesOnly] = React.useState(false);
   const [addOpen, setAddOpen] = React.useState(false);
+  const [editVendor, setEditVendor] = React.useState<Vendor | null>(null);
 
   const filters: VendorFilters = { search, status, material, favoritesOnly };
   const { data: vendors = [], isLoading } = useVendors(filters);
@@ -116,6 +117,10 @@ export function VendorsView({ isOwner }: { isOwner: boolean }) {
                         <Button variant="ghost" size="icon" className="size-8 text-foreground-subtle" aria-label="Actions"><MoreHorizontal className="size-4" /></Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
+                        <DropdownMenuItem onSelect={() => setEditVendor(v)}>
+                          <Pencil />
+                          Edit
+                        </DropdownMenuItem>
                         <DropdownMenuItem onSelect={() => setStatusM.mutate({ id: v.id, status: v.status === "ACTIVE" ? "INACTIVE" : "ACTIVE" })}>
                           {v.status === "ACTIVE" ? <UserX /> : <UserCheck />}
                           {v.status === "ACTIVE" ? "Deactivate" : "Activate"}
@@ -143,6 +148,14 @@ export function VendorsView({ isOwner }: { isOwner: boolean }) {
       )}
 
       <AddVendorSheet open={addOpen} onOpenChange={setAddOpen} />
+      {editVendor && (
+        <AddVendorSheet
+          key={editVendor.id}
+          open
+          vendor={editVendor}
+          onOpenChange={(o) => !o && setEditVendor(null)}
+        />
+      )}
     </div>
   );
 }

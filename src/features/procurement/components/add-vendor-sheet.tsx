@@ -15,8 +15,16 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { vendorFormSchema, vendorFormToInput, type VendorFormValues } from "../schema";
 import { useVendorMutations } from "../hooks";
+import type { Vendor, VendorStatus } from "../types";
 
 function Field({ label, error, children }: { label: string; error?: string; children: React.ReactNode }) {
   return (
@@ -28,18 +36,45 @@ function Field({ label, error, children }: { label: string; error?: string; chil
   );
 }
 
-export function AddVendorSheet({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
-  const { create } = useVendorMutations();
-  const [materials, setMaterials] = React.useState<string[]>([]);
+/**
+ * Add a vendor, or edit one when `vendor` is supplied. Mount with a key tied to
+ * the vendor id so the form re-seeds its defaults for each edit.
+ */
+export function AddVendorSheet({
+  open,
+  onOpenChange,
+  vendor,
+}: {
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+  vendor?: Vendor;
+}) {
+  const { create, update } = useVendorMutations();
+  const isEdit = !!vendor;
+  const [materials, setMaterials] = React.useState<string[]>(vendor?.materialsSupplied ?? []);
+  const [status, setStatus] = React.useState<VendorStatus>(vendor?.status ?? "ACTIVE");
   const [draft, setDraft] = React.useState("");
 
   const { register, handleSubmit, reset, formState: { errors } } = useForm<VendorFormValues>({
     resolver: zodResolver(vendorFormSchema),
+    defaultValues: vendor
+      ? {
+          businessName: vendor.businessName,
+          contactPerson: vendor.contactPerson ?? "",
+          phone: vendor.phone ?? "",
+          email: vendor.email ?? "",
+          gstin: vendor.gstin ?? "",
+          pan: vendor.pan ?? "",
+          address: vendor.address ?? "",
+          paymentTerms: vendor.paymentTerms ?? "",
+          notes: vendor.notes ?? "",
+        }
+      : undefined,
   });
 
   function close() {
     reset();
-    setMaterials([]);
+    setMaterials(vendor?.materialsSupplied ?? []);
     setDraft("");
     onOpenChange(false);
   }
@@ -51,16 +86,24 @@ export function AddVendorSheet({ open, onOpenChange }: { open: boolean; onOpenCh
 
   const onSubmit = handleSubmit(async (values) => {
     const parsed = vendorFormSchema.parse({ ...values, materialsSupplied: materials });
-    await create.mutateAsync(vendorFormToInput(parsed));
+    const input = vendorFormToInput(parsed);
+    if (vendor) await update.mutateAsync({ id: vendor.id, patch: { ...input, status } });
+    else await create.mutateAsync(input);
     close();
   });
+
+  const pending = isEdit ? update.isPending : create.isPending;
 
   return (
     <Sheet open={open} onOpenChange={(o) => (o ? onOpenChange(true) : close())}>
       <SheetContent>
         <SheetHeader>
-          <SheetTitle>Add vendor</SheetTitle>
-          <SheetDescription>A supplier you raise purchase orders with.</SheetDescription>
+          <SheetTitle>{isEdit ? "Edit vendor" : "Add vendor"}</SheetTitle>
+          <SheetDescription>
+            {isEdit
+              ? "Update this supplier's details."
+              : "A supplier you raise purchase orders with."}
+          </SheetDescription>
         </SheetHeader>
         <form onSubmit={onSubmit} className="flex min-h-0 flex-1 flex-col">
           <div className="flex-1 space-y-5 overflow-y-auto px-6 py-5">
@@ -113,6 +156,17 @@ export function AddVendorSheet({ open, onOpenChange }: { open: boolean; onOpenCh
               <Field label="Payment terms" error={errors.paymentTerms?.message}>
                 <Input placeholder="30 days" {...register("paymentTerms")} />
               </Field>
+              {isEdit && (
+                <Field label="Status">
+                  <Select value={status} onValueChange={(v) => setStatus(v as VendorStatus)}>
+                    <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="ACTIVE">Active</SelectItem>
+                      <SelectItem value="INACTIVE">Inactive</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </Field>
+              )}
             </div>
             <Field label="Notes" error={errors.notes?.message}>
               <Input placeholder="Preferred for bulk cement" {...register("notes")} />
@@ -120,8 +174,8 @@ export function AddVendorSheet({ open, onOpenChange }: { open: boolean; onOpenCh
           </div>
           <SheetFooter>
             <Button type="button" variant="ghost" onClick={close}>Cancel</Button>
-            <Button type="submit" variant="primary" disabled={create.isPending}>
-              {create.isPending ? "Adding…" : "Add vendor"}
+            <Button type="submit" variant="primary" disabled={pending}>
+              {pending ? (isEdit ? "Saving…" : "Adding…") : isEdit ? "Save changes" : "Add vendor"}
             </Button>
           </SheetFooter>
         </form>
