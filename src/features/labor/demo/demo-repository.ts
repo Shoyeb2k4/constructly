@@ -295,7 +295,7 @@ export const demoLaborRepository: LaborRepository = {
     } else if (existing) {
       // Keep the original rate snapshot — history stays immutable (ADR-0022).
       existing.quantityPresent = quantity;
-      existing.estimatedCostPaise = (existing.dailyRatePaiseSnapshot ?? 0) * quantity;
+      existing.estimatedCostPaise = Math.round((existing.dailyRatePaiseSnapshot ?? 0) * quantity);
       if (notes !== undefined) existing.notes = notes;
       existing.updatedAt = new Date().toISOString();
     } else {
@@ -307,7 +307,7 @@ export const demoLaborRepository: LaborRepository = {
         labourSubcategoryId: subcategoryId,
         quantityPresent: quantity,
         dailyRatePaiseSnapshot: rate,
-        estimatedCostPaise: (rate ?? 0) * quantity,
+        estimatedCostPaise: Math.round((rate ?? 0) * quantity),
         notes: notes ?? null,
         clientUuid: uid(),
         updatedAt: new Date().toISOString(),
@@ -339,7 +339,7 @@ export const demoLaborRepository: LaborRepository = {
           id: uid(),
           date,
           dailyRatePaiseSnapshot: rate,
-          estimatedCostPaise: (rate ?? 0) * rec.quantityPresent,
+          estimatedCostPaise: Math.round((rate ?? 0) * rec.quantityPresent),
           clientUuid: uid(),
           updatedAt: new Date().toISOString(),
         });

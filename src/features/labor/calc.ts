@@ -6,9 +6,10 @@ import type {
   SheetRow,
 } from "./types";
 
-/** Estimated cost for a headcount: (day rate ?? 0) × quantity. */
+/** Estimated cost for a headcount: (day rate ?? 0) × quantity. Rounded because
+ *  half-day quantities (0.5 steps) can otherwise yield fractional paise. */
 export function estimateCostPaise(dailyRatePaise: number | null, quantity: number): number {
-  return (dailyRatePaise ?? 0) * quantity;
+  return Math.round((dailyRatePaise ?? 0) * quantity);
 }
 
 export function rowTotals(rows: SheetRow[]): { totalPresent: number; estimatedCostPaise: number } {

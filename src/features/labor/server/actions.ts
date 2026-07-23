@@ -194,7 +194,8 @@ export async function setQuantity(
             select: { dailyRatePaise: true },
           })
         ).dailyRatePaise;
-    const estimatedCostPaise = (snapshot ?? 0) * quantity;
+    // Round: half-day quantities can produce fractional paise.
+    const estimatedCostPaise = Math.round((snapshot ?? 0) * quantity);
     await prisma.labourAttendance.upsert({
       where: { projectId_date_labourSubcategoryId: key },
       create: {

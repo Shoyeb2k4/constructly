@@ -77,14 +77,14 @@ async function applyLabourAttendance(clientUuid: string, payload: unknown, user:
       ...key,
       quantityPresent: p.quantityPresent,
       dailyRatePaiseSnapshot: snapshot,
-      estimatedCostPaise: (snapshot ?? 0) * p.quantityPresent,
+      estimatedCostPaise: Math.round((snapshot ?? 0) * p.quantityPresent),
       notes: p.notes ?? null,
       clientUuid,
       clientSeq: BigInt(Date.now()),
     },
     update: {
       quantityPresent: p.quantityPresent,
-      estimatedCostPaise: (snapshot ?? 0) * p.quantityPresent,
+      estimatedCostPaise: Math.round((snapshot ?? 0) * p.quantityPresent),
       ...(p.notes !== undefined ? { notes: p.notes } : {}),
     },
   });

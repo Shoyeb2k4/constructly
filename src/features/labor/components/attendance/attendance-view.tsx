@@ -5,6 +5,7 @@ import * as React from "react";
 import Link from "next/link";
 import {
   CalendarCheck,
+  CalendarDays,
   ChevronDown,
   CopyPlus,
   Minus,
@@ -35,6 +36,7 @@ import { getLastProject, setLastProject, todayISO } from "../../last-project";
 import { FALLBACK_COLOR } from "../../constants";
 import type { SheetGroup, SheetRow } from "../../types";
 import { SyncChip } from "./sync-chip";
+import { AttendanceCalendar } from "./attendance-calendar";
 
 function SubcategoryRow({
   row,
@@ -60,13 +62,18 @@ function SubcategoryRow({
     setNote(row.notes ?? "");
   }
 
+  /** Snap to the nearest half so only 0.5 increments are ever recorded. */
+  function snap(n: number) {
+    return Math.max(0, Math.min(5000, Math.round(n * 2) / 2));
+  }
   function commitDraft() {
-    const n = Math.max(0, Math.min(5000, parseInt(draft, 10) || 0));
+    const parsed = Number.parseFloat(draft);
+    const n = snap(Number.isFinite(parsed) ? parsed : 0);
     if (n !== row.quantity) onCommit(n);
     setDraft(String(n || ""));
   }
   function step(delta: number) {
-    const next = Math.max(0, Math.min(5000, row.quantity + delta));
+    const next = snap(row.quantity + delta);
     setDraft(String(next || ""));
     onCommit(next);
   }
@@ -96,29 +103,29 @@ function SubcategoryRow({
 
         <div className="flex items-center overflow-hidden rounded-lg border border-border">
           <button
-            onClick={() => step(-1)}
+            onClick={() => step(-0.5)}
             disabled={row.quantity === 0}
-            aria-label={`Fewer ${row.name}`}
+            aria-label={`Half day fewer ${row.name}`}
             className="flex h-11 w-11 items-center justify-center text-foreground-muted transition-colors hover:bg-surface-muted disabled:opacity-30"
           >
             <Minus className="size-4" />
           </button>
           <input
             value={draft}
-            onChange={(e) => setDraft(e.target.value.replace(/\D/g, ""))}
+            onChange={(e) => setDraft(e.target.value.replace(/[^\d.]/g, ""))}
             onBlur={commitDraft}
             onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
-            inputMode="numeric"
+            inputMode="decimal"
             placeholder="0"
-            aria-label={`${row.name} present`}
+            aria-label={`${row.name} present (0.5 = half day)`}
             className={cn(
-              "h-11 w-14 border-x border-border bg-transparent text-center text-base font-semibold tabular-nums outline-none",
+              "h-11 w-16 border-x border-border bg-transparent text-center text-base font-semibold tabular-nums outline-none",
               row.quantity > 0 ? "text-foreground" : "text-foreground-subtle",
             )}
           />
           <button
-            onClick={() => step(1)}
-            aria-label={`More ${row.name}`}
+            onClick={() => step(0.5)}
+            aria-label={`Half day more ${row.name}`}
             className="flex h-11 w-11 items-center justify-center text-foreground-muted transition-colors hover:bg-surface-muted"
           >
             <Plus className="size-4" />
@@ -192,6 +199,7 @@ export function AttendanceView() {
   const [selectedId, setSelectedId] = React.useState<string | null>(() => getLastProject());
   const [date, setDate] = React.useState(() => todayISO());
   const [collapsed, setCollapsed] = React.useState<Set<string>>(new Set());
+  const [showCalendar, setShowCalendar] = React.useState(false);
 
   const projectId =
     selectedId && active.some((p) => p.id === selectedId) ? selectedId : (active[0]?.id ?? null);
@@ -251,8 +259,26 @@ export function AttendanceView() {
             onChange={(e) => setDate(e.target.value)}
             className="w-40"
           />
+          <Button
+            variant={showCalendar ? "secondary" : "ghost"}
+            size="icon"
+            onClick={() => setShowCalendar((v) => !v)}
+            aria-pressed={showCalendar}
+            aria-label="Toggle attendance calendar"
+            title="Calendar — days with attendance are highlighted"
+          >
+            <CalendarDays className="size-4" />
+          </Button>
           <SyncChip />
         </div>
+
+        {showCalendar && projectId && (
+          <AttendanceCalendar
+            projectId={projectId}
+            selectedDate={date}
+            onSelectDate={setDate}
+          />
+        )}
 
         <div className="flex flex-wrap items-center gap-2">
           <Button variant="secondary" onClick={() => copyPrev.mutate()} disabled={copyPrev.isPending || !projectId}>

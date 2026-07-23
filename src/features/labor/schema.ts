@@ -40,7 +40,12 @@ export const labourAttendanceMutationSchema = z.object({
   projectId: z.string().uuid(),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   labourSubcategoryId: z.string().uuid(),
-  quantityPresent: z.number().int().min(0).max(5000),
+  /** Half-days allowed: any 0.5 increment (0, 0.5, 1, 1.5, …). */
+  quantityPresent: z
+    .number()
+    .min(0)
+    .max(5000)
+    .refine((v) => Number.isInteger(v * 2), "Use 0.5 steps (half day)"),
   notes: z.string().max(300).nullable().optional(),
 });
 export type LabourAttendanceMutation = z.infer<typeof labourAttendanceMutationSchema>;

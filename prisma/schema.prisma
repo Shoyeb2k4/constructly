@@ -320,7 +320,9 @@ model LabourAttendance {
   projectId              String   @map("project_id") @db.Uuid
   date                   DateTime @db.Date
   labourSubcategoryId    String   @map("labour_subcategory_id") @db.Uuid
-  quantityPresent        Int      @map("quantity_present")
+  /// Headcount present. Float to allow half-day (0.5) increments; 0.5 steps
+  /// are exactly representable, and legacy whole-number rows are unaffected.
+  quantityPresent        Float    @map("quantity_present")
   /// Rate snapshot at first recording (null if the subcategory had no rate).
   dailyRatePaiseSnapshot Int?     @map("daily_rate_paise_snapshot")
   /// quantityPresent × dailyRatePaiseSnapshot, stored for immutable history.
