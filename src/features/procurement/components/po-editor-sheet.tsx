@@ -37,7 +37,8 @@ import { useVendors, usePOMutations, useMaterialCategories } from "../hooks";
 import { pushRecentVendor } from "../recently-vendors";
 import { getApprovalRequired } from "@/features/settings/demo-settings";
 
-const EMPTY_LINE = { material: "", category: "", quantity: 1, unit: "nos", rateRupees: 0, gstPercent: 18 };
+// GST defaults to 0% — users set the applicable rate per line when needed.
+const EMPTY_LINE = { material: "", category: "", quantity: 1, unit: "nos", rateRupees: 0, gstPercent: 0 };
 const NO_CATEGORY = "__none__";
 
 function num(v: unknown): number {
