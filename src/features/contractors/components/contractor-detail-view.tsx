@@ -2,11 +2,17 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { ArrowLeft, Plus, Pencil, Wallet, Receipt } from "lucide-react";
+import { ArrowLeft, Plus, Pencil, Wallet, Receipt, Download } from "lucide-react";
 import { EmptyState } from "@/components/patterns/empty-state";
 import { RowsSkeleton } from "@/components/patterns/loading-state";
 import { MoneyText } from "@/components/patterns/money-text";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { formatDate } from "@/features/projects/format";
 import { useContractorLedger } from "../hooks";
@@ -114,7 +120,31 @@ export function ContractorDetailView({
 
       {/* Ledger */}
       <div>
-        <h2 className="mb-2 text-sm font-medium text-foreground-muted">Ledger</h2>
+        <div className="mb-2 flex items-center justify-between">
+          <h2 className="text-sm font-medium text-foreground-muted">Ledger</h2>
+          {entries.length > 0 && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="secondary" size="sm">
+                  <Download className="size-4" />
+                  Export
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem
+                  onSelect={async () => (await import("../exports")).exportLedgerExcel(data)}
+                >
+                  Excel
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onSelect={async () => (await import("../exports")).exportLedgerPdf(data)}
+                >
+                  PDF
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+        </div>
         {entries.length === 0 ? (
           <EmptyState
             icon={Plus}

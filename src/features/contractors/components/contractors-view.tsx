@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { HardHat, Plus, Search, ChevronRight } from "lucide-react";
+import { HardHat, Plus, Search, ChevronRight, Download } from "lucide-react";
 import { PageHeader } from "@/components/patterns/page-header";
 import { EmptyState } from "@/components/patterns/empty-state";
 import { RowsSkeleton } from "@/components/patterns/loading-state";
@@ -16,8 +16,21 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
-import { useContractors } from "../hooks";
+import {
+  useContractors,
+  useOutstandingAdvances,
+  useContractorCostSummary,
+  useSettlements,
+} from "../hooks";
 import type { ContractorStatus } from "../types";
 import { AddContractorSheet } from "./add-contractor-sheet";
 
@@ -27,6 +40,11 @@ export function ContractorsView({ isOwner }: { isOwner: boolean }) {
   const [addOpen, setAddOpen] = React.useState(false);
 
   const { data: contractors = [], isLoading } = useContractors({ search, status });
+  const { data: outstanding = [] } = useOutstandingAdvances();
+  const { data: costSummary = [] } = useContractorCostSummary();
+  const { data: settlements = [] } = useSettlements();
+
+  const reportsEmpty = outstanding.length === 0 && costSummary.length === 0 && settlements.length === 0;
 
   return (
     <div className="space-y-5">
@@ -34,12 +52,41 @@ export function ContractorsView({ isOwner }: { isOwner: boolean }) {
         title="Contractors"
         description="Labour contractors, their advances, and weekly settlements."
         actions={
-          isOwner ? (
-            <Button variant="primary" onClick={() => setAddOpen(true)}>
-              <Plus />
-              Add contractor
-            </Button>
-          ) : undefined
+          <div className="flex items-center gap-2">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="secondary" disabled={reportsEmpty}>
+                  <Download className="size-4" />
+                  Reports
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuLabel>Outstanding advances</DropdownMenuLabel>
+                <DropdownMenuItem disabled={outstanding.length === 0}
+                  onSelect={async () => (await import("../exports")).exportOutstandingExcel(outstanding)}>Excel</DropdownMenuItem>
+                <DropdownMenuItem disabled={outstanding.length === 0}
+                  onSelect={async () => (await import("../exports")).exportOutstandingPdf(outstanding)}>PDF</DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel>Weekly settlements</DropdownMenuLabel>
+                <DropdownMenuItem disabled={settlements.length === 0}
+                  onSelect={async () => (await import("../exports")).exportSettlementsExcel(settlements)}>Excel</DropdownMenuItem>
+                <DropdownMenuItem disabled={settlements.length === 0}
+                  onSelect={async () => (await import("../exports")).exportSettlementsPdf(settlements)}>PDF</DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel>Cost summary</DropdownMenuLabel>
+                <DropdownMenuItem disabled={costSummary.length === 0}
+                  onSelect={async () => (await import("../exports")).exportCostSummaryExcel(costSummary)}>Excel</DropdownMenuItem>
+                <DropdownMenuItem disabled={costSummary.length === 0}
+                  onSelect={async () => (await import("../exports")).exportCostSummaryPdf(costSummary)}>PDF</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            {isOwner && (
+              <Button variant="primary" onClick={() => setAddOpen(true)}>
+                <Plus />
+                Add contractor
+              </Button>
+            )}
+          </div>
         }
       />
 
