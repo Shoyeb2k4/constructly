@@ -44,16 +44,29 @@ describe("assetPath", () => {
     expect(assetPath("logo", "image/png", { companyId: "co1" })).toBe("co1/logo.png");
     expect(assetPath("favicon", "image/svg+xml", { companyId: "co1" })).toBe("co1/favicon.svg");
   });
-  it("per-user asset embeds the userId", () => {
+  it("per-user asset is scoped under {companyId}/{userId}/ (RLS user isolation)", () => {
     expect(assetPath("signature", "image/png", { companyId: "co1", userId: "u1" })).toBe(
-      "co1/u1-signature.png",
+      "co1/u1/signature.png",
+    );
+    expect(assetPath("photo", "image/webp", { companyId: "co1", userId: "u1" })).toBe(
+      "co1/u1/photo.webp",
     );
   });
   it("throws when a per-user asset lacks a userId", () => {
     expect(() => assetPath("photo", "image/png", { companyId: "co1" })).toThrow();
   });
-  it("path always starts with the companyId (RLS isolation)", () => {
+  it("path always starts with the companyId (cross-company isolation)", () => {
     expect(assetPath("stamp", "image/webp", { companyId: "co-xyz" }).startsWith("co-xyz/")).toBe(true);
+    expect(
+      assetPath("signature", "image/png", { companyId: "co-a", userId: "u9" }).startsWith("co-a/"),
+    ).toBe(true);
+  });
+  it("different users get different, non-overlapping signature paths", () => {
+    const a = assetPath("signature", "image/png", { companyId: "co1", userId: "alice" });
+    const b = assetPath("signature", "image/png", { companyId: "co1", userId: "bob" });
+    expect(a).not.toBe(b);
+    expect(a.startsWith("co1/alice/")).toBe(true);
+    expect(b.startsWith("co1/bob/")).toBe(true);
   });
 });
 

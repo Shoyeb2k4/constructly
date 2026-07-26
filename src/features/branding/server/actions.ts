@@ -212,6 +212,7 @@ export async function setBrandingAsset(kindRaw: string, path: string): Promise<v
   const user = await requireUser();
   const kind = assetKindSchema.parse(kindRaw);
   const spec = ASSET_SPECS[kind];
+  if (!spec.perUser) assertOwner(user); // company assets are owner-only (before any DB access)
   if (!path.startsWith(`${user.company.id}/`)) throw new Error("FORBIDDEN");
 
   const prev = await currentAssetPath(user, kind);
@@ -226,7 +227,6 @@ export async function setBrandingAsset(kindRaw: string, path: string): Promise<v
       data: kind === "signature" ? { signaturePath: path } : { photoPath: path },
     });
   } else {
-    assertOwner(user);
     await prisma.company.update({ where: { id: user.company.id }, data: companyAssetData(kind, path) });
   }
   await logActivity(user, "branding.asset", `Updated ${spec.label.toLowerCase()}`);
@@ -236,6 +236,7 @@ export async function removeBrandingAsset(kindRaw: string): Promise<void> {
   const user = await requireUser();
   const kind = assetKindSchema.parse(kindRaw);
   const spec = ASSET_SPECS[kind];
+  if (!spec.perUser) assertOwner(user); // company assets are owner-only (before any DB access)
   const prev = await currentAssetPath(user, kind);
   if (prev) {
     const supabase = await createServerClient();
@@ -247,7 +248,6 @@ export async function removeBrandingAsset(kindRaw: string): Promise<void> {
       data: kind === "signature" ? { signaturePath: null } : { photoPath: null },
     });
   } else {
-    assertOwner(user);
     await prisma.company.update({ where: { id: user.company.id }, data: companyAssetData(kind, null) });
   }
   await logActivity(user, "branding.asset.removed", `Removed ${spec.label.toLowerCase()}`);

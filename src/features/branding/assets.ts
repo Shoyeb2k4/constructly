@@ -47,7 +47,8 @@ export function assetPath(
   const ext = assetExtension(mime);
   if (spec.perUser) {
     if (!ids.userId) throw new Error(`Asset "${kind}" requires a userId`);
-    return `${ids.companyId}/${ids.userId}-${kind}.${ext}`;
+    // "{companyId}/{userId}/…" so RLS can scope per-user assets to their owner.
+    return `${ids.companyId}/${ids.userId}/${kind}.${ext}`;
   }
   return `${ids.companyId}/${kind}.${ext}`;
 }
