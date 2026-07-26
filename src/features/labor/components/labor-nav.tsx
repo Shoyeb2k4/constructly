@@ -2,11 +2,12 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { CalendarCheck, Tags, BarChart3 } from "lucide-react";
+import { CalendarCheck, Tags, BarChart3, HardHat } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const ITEMS = [
   { label: "Attendance", href: "/labor", icon: CalendarCheck, exact: true },
+  { label: "Contractors", href: "/labor/contractors", icon: HardHat },
   { label: "Categories", href: "/labor/categories", icon: Tags },
   { label: "Summary", href: "/labor/summary", icon: BarChart3 },
 ];
