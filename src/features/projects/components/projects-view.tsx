@@ -25,8 +25,18 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import type { ProjectFilters, ProjectStage, ProjectType } from "../types";
+import type { ProjectFilters, ProjectStage, ProjectType, ProjectSort } from "../types";
+import type { DeadlineFilter } from "../deadline";
 import { STAGE_ORDER, STAGE_LABEL, PROJECT_TYPES, TYPE_LABEL } from "../constants";
+
+const DEADLINE_LABEL: Record<DeadlineFilter, string> = {
+  ALL: "Any deadline",
+  OVERDUE: "Overdue",
+  TODAY: "Due today",
+  WEEK: "Due this week",
+  MONTH: "Due this month",
+};
+const DEADLINE_OPTIONS: DeadlineFilter[] = ["ALL", "OVERDUE", "TODAY", "WEEK", "MONTH"];
 import { useProjects, useManagers } from "../hooks";
 import { useRecentProjects } from "../recently-viewed";
 import { ProjectsTable } from "./projects-table";
@@ -65,12 +75,14 @@ export function ProjectsView({ isOwner }: { isOwner: boolean }) {
   const [pmId, setPmId] = React.useState<string>("ALL");
   const [favoritesOnly, setFavoritesOnly] = React.useState(false);
   const [includeArchived, setIncludeArchived] = React.useState(false);
+  const [deadline, setDeadline] = React.useState<DeadlineFilter>("ALL");
+  const [sort, setSort] = React.useState<ProjectSort>("RECENT");
   const [createOpen, setCreateOpen] = React.useState(false);
   const searchRef = React.useRef<HTMLInputElement>(null);
 
   const filters: ProjectFilters = React.useMemo(
-    () => ({ search, stage, type, pmId, favoritesOnly, includeArchived }),
-    [search, stage, type, pmId, favoritesOnly, includeArchived],
+    () => ({ search, stage, type, pmId, favoritesOnly, includeArchived, deadline, sort }),
+    [search, stage, type, pmId, favoritesOnly, includeArchived, deadline, sort],
   );
   const { data: projects, isLoading, isError, refetch } = useProjects(filters);
   const { data: managers = [] } = useManagers();
@@ -98,7 +110,12 @@ export function ProjectsView({ isOwner }: { isOwner: boolean }) {
   }, [isOwner]);
 
   const hasFilters =
-    !!search || stage !== "ALL" || type !== "ALL" || pmId !== "ALL" || favoritesOnly;
+    !!search ||
+    stage !== "ALL" ||
+    type !== "ALL" ||
+    pmId !== "ALL" ||
+    favoritesOnly ||
+    deadline !== "ALL";
   const isEmpty = !isLoading && projects && projects.length === 0;
 
   return (
@@ -175,6 +192,21 @@ export function ProjectsView({ isOwner }: { isOwner: boolean }) {
             ))}
           </SelectContent>
         </Select>
+        <Select value={deadline} onValueChange={(v) => setDeadline(v as DeadlineFilter)}>
+          <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            {DEADLINE_OPTIONS.map((d) => (
+              <SelectItem key={d} value={d}>{DEADLINE_LABEL[d]}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select value={sort} onValueChange={(v) => setSort(v as ProjectSort)}>
+          <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="RECENT">Recently updated</SelectItem>
+            <SelectItem value="DEADLINE">By deadline</SelectItem>
+          </SelectContent>
+        </Select>
         <Button
           variant={favoritesOnly ? "secondary" : "ghost"}
           size="icon"
@@ -214,6 +246,7 @@ export function ProjectsView({ isOwner }: { isOwner: boolean }) {
                   setType("ALL");
                   setPmId("ALL");
                   setFavoritesOnly(false);
+                  setDeadline("ALL");
                 }}
               >
                 Clear filters

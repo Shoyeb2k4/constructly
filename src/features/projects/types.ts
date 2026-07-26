@@ -96,6 +96,9 @@ export interface ProjectDetail extends ProjectListItem {
   activity: ActivityEntry[];
 }
 
+/** Project list sort modes. RECENT (last updated) is the default. */
+export type ProjectSort = "RECENT" | "DEADLINE";
+
 export interface ProjectFilters {
   search?: string;
   stage?: ProjectStage | "ALL";
@@ -104,6 +107,9 @@ export interface ProjectFilters {
   tag?: string | "ALL";
   includeArchived?: boolean;
   favoritesOnly?: boolean;
+  /** Deadline (expected-completion) window: overdue / today / this week / this month. */
+  deadline?: "ALL" | "OVERDUE" | "TODAY" | "WEEK" | "MONTH";
+  sort?: ProjectSort;
 }
 
 export interface CreateProjectInput {

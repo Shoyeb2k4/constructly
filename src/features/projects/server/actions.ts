@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db/prisma";
 import { requireUser } from "@/lib/auth/current-user";
 import type { SessionUser } from "@/lib/auth/types";
 import { STAGE_LABEL } from "../constants";
+import { deadlineBounds, todayISO } from "../deadline";
 import type {
   CreateProjectInput,
   ProjectDetail,
@@ -109,16 +110,32 @@ export async function listProjects(
   filters: ProjectFilters = {},
 ): Promise<ProjectListItem[]> {
   const user = await requireUser();
+  const today = todayISO();
+  const dl = deadlineBounds(filters.deadline ?? "ALL", today);
   const where: Prisma.ProjectWhereInput = {
     companyId: user.company.id,
     deletedAt: null,
     ...(user.role !== "OWNER" ? { pmId: user.id } : {}),
     ...(filters.includeArchived ? {} : { archivedAt: null }),
-    ...(filters.stage && filters.stage !== "ALL" ? { stage: filters.stage } : {}),
+    // Overdue excludes closed projects (unless an explicit stage filter is set).
+    ...(filters.stage && filters.stage !== "ALL"
+      ? { stage: filters.stage }
+      : dl?.excludeClosed
+        ? { stage: { not: "CLOSED" } }
+        : {}),
     ...(filters.type && filters.type !== "ALL" ? { type: filters.type } : {}),
     ...(filters.pmId && filters.pmId !== "ALL" ? { pmId: filters.pmId } : {}),
     ...(filters.tag && filters.tag !== "ALL" ? { tags: { has: filters.tag } } : {}),
     ...(filters.favoritesOnly ? { favorites: { some: { userId: user.id } } } : {}),
+    ...(dl
+      ? {
+          expectedCompletionDate: {
+            ...(dl.lt ? { lt: new Date(dl.lt) } : {}),
+            ...(dl.gte ? { gte: new Date(dl.gte) } : {}),
+            ...(dl.lte ? { lte: new Date(dl.lte) } : {}),
+          },
+        }
+      : {}),
     ...(filters.search
       ? {
           OR: [
@@ -132,7 +149,10 @@ export async function listProjects(
   const rows = await prisma.project.findMany({
     where,
     select: listSelect,
-    orderBy: { updatedAt: "desc" },
+    orderBy:
+      filters.sort === "DEADLINE"
+        ? [{ expectedCompletionDate: { sort: "asc", nulls: "last" } }, { updatedAt: "desc" }]
+        : { updatedAt: "desc" },
   });
   const spend = await spendByProject();
   return rows.map((r) => {

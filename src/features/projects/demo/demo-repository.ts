@@ -8,6 +8,7 @@ import type {
   UpdateProjectInput,
 } from "../types";
 import { STAGE_LABEL } from "../constants";
+import { matchesDeadline, byDeadlineAsc, todayISO } from "../deadline";
 import { demoSeed, DEMO_MANAGERS } from "./seed";
 import { demoProjectSpend } from "@/features/budget/spend";
 
@@ -113,9 +114,19 @@ export const demoRepository: ProjectsRepository = {
           p.tags.some((t) => t.toLowerCase().includes(q)),
       );
     }
-    return rows
-      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-      .map(toItem);
+    if (filters.deadline && filters.deadline !== "ALL") {
+      const today = todayISO();
+      rows = rows.filter((p) =>
+        matchesDeadline(p.expectedCompletionDate, p.stage, filters.deadline!, today),
+      );
+    }
+    const sorted =
+      filters.sort === "DEADLINE"
+        ? rows
+            .slice()
+            .sort((a, b) => byDeadlineAsc(a, b) || b.updatedAt.localeCompare(a.updatedAt))
+        : rows.slice().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    return sorted.map(toItem);
   },
 
   async get(id) {
