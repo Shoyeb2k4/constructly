@@ -70,6 +70,31 @@ model Company {
   gstin     String?
   /// { poApprovalRequired: boolean, currency: "INR", ... }
   settings  Json     @default("{\"poApprovalRequired\": false, \"currency\": \"INR\"}")
+
+  // ── Company profile (white-labeling). All nullable — companies without
+  //    branding fall back to Constructly defaults (see features/branding). ──
+  legalName String? @map("legal_name")
+  pan       String?
+  cin       String?
+  addressLine String? @map("address_line")
+  city      String?
+  state     String?
+  country   String? @default("India")
+  pincode   String?
+  phone     String?
+  email     String?
+  website   String?
+
+  // ── Branding assets: Supabase Storage object paths ("{companyId}/…"). ──
+  logoPath       String? @map("logo_path")
+  squareLogoPath String? @map("square_logo_path")
+  darkLogoPath   String? @map("dark_logo_path")
+  lightLogoPath  String? @map("light_logo_path")
+  faviconPath    String? @map("favicon_path")
+  stampPath      String? @map("stamp_path")
+  /// { primary, secondary, accent, success, warning, danger } hex strings.
+  brandColors    Json?   @map("brand_colors")
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
@@ -99,6 +124,16 @@ model User {
   fullName  String     @map("full_name")
   role      Role       @default(PROJECT_MANAGER)
   status    UserStatus @default(ACTIVE)
+
+  // ── Personal profile (all nullable; sensible defaults applied in app). ──
+  designation   String?
+  phone         String?
+  photoPath     String? @map("photo_path")
+  signaturePath String? @map("signature_path")
+  theme         String? @default("system")
+  language      String? @default("en")
+  timezone      String? @default("Asia/Kolkata")
+
   createdAt DateTime   @default(now()) @map("created_at")
   updatedAt DateTime   @updatedAt @map("updated_at")
 
