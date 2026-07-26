@@ -4,6 +4,7 @@ import { isDemoMode } from "@/lib/env";
 import { gatherServerDashboard } from "@/features/dashboard/server/gather";
 import { assembleDashboard } from "@/features/dashboard/assemble";
 import { DashboardView } from "@/features/dashboard/components/dashboard-view";
+import { getLayoutBranding } from "@/features/branding/server/layout-branding";
 
 export const metadata: Metadata = { title: "Dashboard" };
 
@@ -21,12 +22,15 @@ export default async function DashboardPage() {
   // present — no post-hydration fetch wave. Demo mode fetches client-side.
   const initialData =
     isDemoMode || !user ? undefined : assembleDashboard(await gatherServerDashboard());
+  const branding = await getLayoutBranding();
   return (
     <DashboardView
       userId={user?.id ?? ""}
       isOwner={user?.role === "OWNER"}
       greeting={greeting()}
       firstName={firstName}
+      companyName={branding.name}
+      logoUrl={branding.logoUrl}
       initialData={initialData}
     />
   );

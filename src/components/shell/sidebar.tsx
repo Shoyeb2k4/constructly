@@ -7,6 +7,12 @@ import { cn } from "@/lib/utils";
 import { Logo } from "./logo";
 import { NavLink } from "./nav-link";
 
+/** Company branding for the shell (resolved server-side; Constructly fallback). */
+export interface ShellBranding {
+  name: string;
+  logoUrl: string | null;
+}
+
 function NavList({
   user,
   onNavigate,
@@ -28,25 +34,27 @@ function NavList({
 
 export function Sidebar({
   user,
+  branding,
   mobileOpen,
   onClose,
 }: {
   user: SessionUser;
+  branding?: ShellBranding;
   mobileOpen: boolean;
   onClose: () => void;
 }) {
+  const logoSrc = branding?.logoUrl ?? null;
+  const brandName = branding?.name ?? user.company.name;
   return (
     <>
       {/* Desktop rail */}
       <aside className="hidden w-60 shrink-0 flex-col border-r border-border bg-surface lg:flex">
         <div className="flex h-14 items-center px-5">
-          <Logo />
+          <Logo src={logoSrc} name={brandName} />
         </div>
         <NavList user={user} />
         <div className="px-5 py-4">
-          <span className="text-xs text-foreground-subtle">
-            {user.company.name}
-          </span>
+          <span className="text-xs text-foreground-subtle">{brandName}</span>
         </div>
       </aside>
 
@@ -71,7 +79,7 @@ export function Sidebar({
           )}
         >
           <div className="flex h-14 items-center justify-between px-5">
-            <Logo />
+            <Logo src={logoSrc} name={brandName} />
             <button
               onClick={onClose}
               aria-label="Close menu"

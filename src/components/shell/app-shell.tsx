@@ -3,15 +3,17 @@
 import * as React from "react";
 import type { SessionUser } from "@/lib/auth/types";
 import { useSync } from "@/lib/sync/use-sync";
-import { Sidebar } from "./sidebar";
+import { Sidebar, type ShellBranding } from "./sidebar";
 import { Topbar } from "./topbar";
 import { CommandPalette } from "./command-palette";
 
 export function AppShell({
   user,
+  branding,
   children,
 }: {
   user: SessionUser;
+  branding?: ShellBranding;
   children: React.ReactNode;
 }) {
   const [mobileOpen, setMobileOpen] = React.useState(false);
@@ -28,6 +30,7 @@ export function AppShell({
       </a>
       <Sidebar
         user={user}
+        branding={branding}
         mobileOpen={mobileOpen}
         onClose={() => setMobileOpen(false)}
       />

@@ -32,12 +32,16 @@ export function DashboardView({
   isOwner,
   greeting,
   firstName,
+  companyName,
+  logoUrl,
   initialData,
 }: {
   userId: string;
   isOwner: boolean;
   greeting: string;
   firstName: string;
+  companyName?: string;
+  logoUrl?: string | null;
   initialData?: DashboardSnapshot;
 }) {
   const { data, isLoading, isError, error, refetch } = useDashboard(userId, isOwner, initialData);
@@ -78,9 +82,25 @@ export function DashboardView({
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">{greeting}, {firstName}</h1>
-          <p className="text-sm text-foreground-muted">Here&apos;s your company at a glance.</p>
+        <div className="flex items-center gap-3">
+          {logoUrl && (
+            // eslint-disable-next-line @next/next/no-img-element -- signed Storage URL
+            <img
+              src={logoUrl}
+              alt={companyName ?? "Company logo"}
+              className="size-11 shrink-0 rounded-lg border border-border object-contain"
+            />
+          )}
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight">{greeting}, {firstName}</h1>
+            <p className="text-sm text-foreground-muted">
+              {companyName ? (
+                <span className="font-medium text-foreground">{companyName}</span>
+              ) : (
+                "Here's your company at a glance."
+              )}
+            </p>
+          </div>
         </div>
         <QuickActions />
       </div>
