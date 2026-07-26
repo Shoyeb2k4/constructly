@@ -1,9 +1,9 @@
 "use client";
 
 import * as XLSX from "xlsx";
-import { jsPDF } from "jspdf";
 import autoTable, { type RowInput, type CellDef } from "jspdf-autotable";
 import { toRupees } from "@/lib/money";
+import { createBrandedPdf } from "@/features/branding/pdf";
 import type { ReportColumn, ReportResult, ReportRow } from "./types";
 
 // jsPDF's built-in fonts lack the ₹ glyph — use "Rs." in exports.
@@ -31,25 +31,18 @@ function safeName(title: string): string {
 
 /* ── PDF ─────────────────────────────────────────────────────────────── */
 
-export function reportToPdf(result: ReportResult): void {
+export async function reportToPdf(result: ReportResult): Promise<void> {
   const landscape = result.columns.length > 5;
-  const doc = new jsPDF(landscape ? { orientation: "landscape" } : {});
-
-  doc.setFontSize(16);
-  doc.setFont("helvetica", "bold");
-  doc.text("Constructly", 14, 16);
-  doc.setFontSize(12);
-  doc.text(result.title, 14, 24);
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(9);
-  doc.setTextColor(120);
-  doc.text(result.subtitle, 14, 30);
-  doc.text(`Generated ${new Date(result.generatedAt).toLocaleString("en-IN")}`, 14, 35);
-  doc.setTextColor(0);
+  const { doc, startY, finalize } = await createBrandedPdf({
+    title: result.title,
+    subtitle: result.subtitle,
+    orientation: landscape ? "landscape" : "portrait",
+  });
 
   // KPI strip.
-  let cursorY = 42;
+  let cursorY = startY;
   if (result.kpis.length) {
+    doc.setFont("helvetica", "normal");
     doc.setFontSize(9);
     const line = result.kpis.map((k) => `${k.label}: ${k.value.replace(/₹/g, "Rs.")}`).join("    ");
     doc.text(line, 14, cursorY);
@@ -80,7 +73,7 @@ export function reportToPdf(result: ReportResult): void {
     },
   });
 
-  doc.save(`${safeName(result.title)}.pdf`);
+  finalize(`${safeName(result.title)}.pdf`);
 }
 
 function rowToPdf(row: ReportRow, columns: ReportColumn[]): RowInput {

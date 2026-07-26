@@ -96,3 +96,27 @@ export interface ProfileInput {
   language?: string | null;
   timezone?: string | null;
 }
+
+/** Company fields printed on PDFs. */
+export interface PdfCompany {
+  name: string;
+  legalName: string | null;
+  gstin: string | null;
+  addressLine: string | null;
+  city: string | null;
+  state: string | null;
+  country: string | null;
+  pincode: string | null;
+  phone: string | null;
+  email: string | null;
+  website: string | null;
+}
+
+/** Everything a branded PDF needs, resolved server-side (URLs still signed). */
+export interface PdfBrandingData {
+  company: PdfCompany;
+  preparedBy: string;
+  logoUrl: string | null;
+  stampUrl: string | null;
+  signatureUrl: string | null;
+}

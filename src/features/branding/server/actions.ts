@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db/prisma";
 import { Prisma } from "@/generated/prisma";
 import { requireUser } from "@/lib/auth/current-user";
 import type { SessionUser } from "@/lib/auth/types";
+import { isDemoMode } from "@/lib/env";
 import { createServerClient } from "@/lib/supabase/server";
 import { companyProfileSchema, brandColorsSchema, profileSchema, assetKindSchema } from "../schema";
 import { ASSET_SPECS } from "../constants";
@@ -14,6 +15,7 @@ import type {
   BrandColors,
   CompanyBranding,
   CompanyProfileInput,
+  PdfBrandingData,
   ProfileInput,
   UserProfile,
 } from "../types";
@@ -278,6 +280,72 @@ export async function getBrandingAssetUrls(): Promise<BrandAssetUrls> {
     lightLogo: await sign("company-logos", c.lightLogoPath),
     favicon: await sign("company-favicons", c.faviconPath),
     stamp: await sign("company-stamps", c.stampPath),
+  };
+}
+
+/**
+ * Everything a branded PDF needs: company fields, "prepared by" (the current
+ * user), and short-lived signed URLs for the logo, company stamp, and the
+ * user's signature. Demo mode / unbranded companies fall back to name-only.
+ */
+export async function getPdfBrandingData(): Promise<PdfBrandingData> {
+  const user = await requireUser();
+  const preparedBy = user.fullName;
+  const empty = {
+    legalName: null,
+    gstin: null,
+    addressLine: null,
+    city: null,
+    state: null,
+    country: null,
+    pincode: null,
+    phone: null,
+    email: null,
+    website: null,
+  };
+  if (isDemoMode) {
+    return {
+      company: { name: user.company.name, ...empty },
+      preparedBy,
+      logoUrl: null,
+      stampUrl: null,
+      signatureUrl: null,
+    };
+  }
+  const [c, u] = await Promise.all([
+    prisma.company.findUniqueOrThrow({
+      where: { id: user.company.id },
+      select: {
+        name: true,
+        legalName: true,
+        gstin: true,
+        addressLine: true,
+        city: true,
+        state: true,
+        country: true,
+        pincode: true,
+        phone: true,
+        email: true,
+        website: true,
+        logoPath: true,
+        stampPath: true,
+      },
+    }),
+    prisma.user.findUniqueOrThrow({ where: { id: user.id }, select: { signaturePath: true } }),
+  ]);
+  const supabase = await createServerClient();
+  const sign = async (bucket: string, path: string | null): Promise<string | null> => {
+    if (!path) return null;
+    const { data } = await supabase.storage.from(bucket).createSignedUrl(path, SIGNED_TTL);
+    return data?.signedUrl ?? null;
+  };
+  const { logoPath, stampPath, ...companyFields } = c;
+  return {
+    company: companyFields,
+    preparedBy,
+    logoUrl: await sign("company-logos", logoPath),
+    stampUrl: await sign("company-stamps", stampPath),
+    signatureUrl: await sign("company-signatures", u.signaturePath),
   };
 }
 

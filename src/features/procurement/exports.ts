@@ -1,9 +1,9 @@
 "use client";
 
 import * as XLSX from "xlsx";
-import { jsPDF } from "jspdf";
 import autoTable, { type RowInput } from "jspdf-autotable";
 import { toRupees } from "@/lib/money";
+import { createBrandedPdf } from "@/features/branding/pdf";
 import { PO_STATUS_LABEL, PO_PAYMENT_STATUS_LABEL } from "./constants";
 import type { PurchaseOrderListItem } from "./types";
 
@@ -72,18 +72,12 @@ export function exportPOsExcel(items: PurchaseOrderListItem[]) {
   XLSX.writeFile(wb, `purchase-orders-${stamp()}.xlsx`);
 }
 
-export function exportPOsPdf(items: PurchaseOrderListItem[]) {
-  const doc = new jsPDF({ orientation: "landscape" });
-  doc.setFontSize(16);
-  doc.setFont("helvetica", "bold");
-  doc.text("Constructly", 14, 16);
-  doc.setFontSize(12);
-  doc.text("Purchase orders", 14, 24);
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(9);
-  doc.setTextColor(120);
-  doc.text(`${items.length} record${items.length === 1 ? "" : "s"} · generated ${new Date().toLocaleString("en-IN")}`, 14, 30);
-  doc.setTextColor(0);
+export async function exportPOsPdf(items: PurchaseOrderListItem[]) {
+  const { doc, startY, finalize } = await createBrandedPdf({
+    title: "Purchase orders",
+    subtitle: `${items.length} record${items.length === 1 ? "" : "s"}`,
+    orientation: "landscape",
+  });
 
   const totalPaise = items.reduce((s, p) => s + p.totalPaise, 0);
   const body: RowInput[] = items.map((p) => [
@@ -99,12 +93,12 @@ export function exportPOsPdf(items: PurchaseOrderListItem[]) {
   ]);
 
   autoTable(doc, {
-    startY: 36,
+    startY,
     head: [["PO #", "Vendor", "Project", "Status", "Purchased", "Expected", "Total", "Paid", "Payment"]],
     body,
     foot: [["", "", "", "", "", "Total", rs(totalPaise), "", ""]],
     styles: { fontSize: 8 },
     headStyles: { fillColor: [46, 91, 255] },
   });
-  doc.save(`purchase-orders-${stamp()}.pdf`);
+  finalize(`purchase-orders-${stamp()}.pdf`);
 }

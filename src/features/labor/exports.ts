@@ -1,34 +1,22 @@
 "use client";
 
 import * as XLSX from "xlsx";
-import { jsPDF } from "jspdf";
 import autoTable, { type RowInput } from "jspdf-autotable";
 import { toRupees } from "@/lib/money";
+import { createBrandedPdf } from "@/features/branding/pdf";
 import { estimateCostPaise } from "./calc";
 import type { AttendanceRecordItem, AttendanceSheet, LabourSummary } from "./types";
 
 // jsPDF's built-in fonts lack the ₹ glyph — use "Rs." in exports.
 const rs = (paise: number) => `Rs. ${toRupees(paise).toLocaleString("en-IN")}`;
 
-function pdfHeader(doc: jsPDF, title: string, subtitle: string) {
-  doc.setFontSize(16);
-  doc.setFont("helvetica", "bold");
-  doc.text("Constructly", 14, 16);
-  doc.setFontSize(12);
-  doc.text(title, 14, 24);
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(9);
-  doc.setTextColor(120);
-  doc.text(subtitle, 14, 30);
-  doc.text(`Generated ${new Date().toLocaleString("en-IN")}`, 14, 35);
-  doc.setTextColor(0);
-}
-
 /* ── Daily sheet (grouped by category) ───────────────────────────────── */
 
-export function exportSheetPdf(sheet: AttendanceSheet, projectName: string) {
-  const doc = new jsPDF();
-  pdfHeader(doc, "Daily labour attendance", `${projectName} · ${sheet.date}`);
+export async function exportSheetPdf(sheet: AttendanceSheet, projectName: string) {
+  const { doc, startY, finalize } = await createBrandedPdf({
+    title: "Daily labour attendance",
+    subtitle: `${projectName} · ${sheet.date}`,
+  });
   const body: RowInput[] = [];
   for (const g of sheet.groups) {
     const rows = g.rows.filter((r) => r.quantity > 0);
@@ -52,14 +40,14 @@ export function exportSheetPdf(sheet: AttendanceSheet, projectName: string) {
     ]);
   }
   autoTable(doc, {
-    startY: 42,
+    startY,
     head: [["Category / Subcategory", "Present", "Day rate", "Est. cost", "Notes"]],
     body,
     foot: [["Grand total", String(sheet.totalPresent), "", rs(sheet.estimatedCostPaise), ""]],
     styles: { fontSize: 9 },
     headStyles: { fillColor: [46, 91, 255] },
   });
-  doc.save(`attendance-${projectName.replace(/\s+/g, "-").toLowerCase()}-${sheet.date}.pdf`);
+  finalize(`attendance-${projectName.replace(/\s+/g, "-").toLowerCase()}-${sheet.date}.pdf`);
 }
 
 export function exportSheetExcel(sheet: AttendanceSheet, projectName: string) {
@@ -100,9 +88,11 @@ export interface RangeExportInput {
   scope: string;
 }
 
-export function exportRangePdf({ records, summary, from, to, scope }: RangeExportInput) {
-  const doc = new jsPDF();
-  pdfHeader(doc, "Labour summary", `${scope} · ${from} → ${to}`);
+export async function exportRangePdf({ records, summary, from, to, scope }: RangeExportInput) {
+  const { doc, startY, finalize } = await createBrandedPdf({
+    title: "Labour summary",
+    subtitle: `${scope} · ${from} → ${to}`,
+  });
   const body: RowInput[] = [];
   for (const c of summary.byCategory) {
     body.push([{ content: c.name, colSpan: 3, styles: { fontStyle: "bold", fillColor: [244, 245, 247] } }]);
@@ -114,7 +104,7 @@ export function exportRangePdf({ records, summary, from, to, scope }: RangeExpor
     ]);
   }
   autoTable(doc, {
-    startY: 42,
+    startY,
     head: [["Category / Subcategory", "Man-days", "Est. cost"]],
     body,
     foot: [["Grand total", String(summary.totalManDays), rs(summary.estimatedCostPaise)]],
@@ -127,7 +117,7 @@ export function exportRangePdf({ records, summary, from, to, scope }: RangeExpor
     styles: { fontSize: 8 },
     headStyles: { fillColor: [46, 91, 255] },
   });
-  doc.save(`labour-summary-${from}-to-${to}.pdf`);
+  finalize(`labour-summary-${from}-to-${to}.pdf`);
 }
 
 export function exportRangeExcel({ records, summary, from, to, scope }: RangeExportInput) {
