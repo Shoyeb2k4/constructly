@@ -73,6 +73,8 @@ export interface PurchaseOrderListItem {
   /** Creator — present on list rows; used by the "Created by" filter. */
   createdBy?: { id: string; name: string } | null;
   createdAt: string;
+  /** Set when archived (approved POs only). Archived POs are hidden by default. */
+  archivedAt?: string | null;
 }
 
 export interface PurchaseOrderDetail extends PurchaseOrderListItem {
@@ -206,6 +208,8 @@ export interface POFilters {
   dateFrom?: string;
   dateTo?: string;
   sort?: POSort;
+  /** Archived view: default/ACTIVE hides archived POs; ARCHIVED shows only them. */
+  archived?: "ACTIVE" | "ARCHIVED";
 }
 
 /* ── Inputs ──────────────────────────────────────────────────────────── */

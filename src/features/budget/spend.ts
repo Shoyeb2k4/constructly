@@ -43,13 +43,15 @@ export function demoSpendByProject(): Map<string, ProjectSpend> {
   for (const a of readStore<{ projectId: string; estimatedCostPaise: number }>(LABOUR_ATT)) {
     get(a.projectId).laborPaise += a.estimatedCostPaise ?? 0;
   }
+  type PoRow = { projectId: string; status: string; totalPaise: number; archivedAt?: string | null };
   const poRows = (() => {
-    const v2 = readStore<{ projectId: string; status: string; totalPaise: number }>(POS);
+    const v2 = readStore<PoRow>(POS);
     if (v2.length) return v2;
     if (typeof window !== "undefined" && localStorage.getItem(POS) != null) return v2;
-    return readStore<{ projectId: string; status: string; totalPaise: number }>(POS_V1);
+    return readStore<PoRow>(POS_V1);
   })();
   for (const po of poRows) {
+    if (po.archivedAt) continue; // archived POs don't count toward budget
     if (poCountsForBudget(po.status as "DRAFT" | "SUBMITTED" | "APPROVED", approval)) {
       get(po.projectId).procurementPaise += po.totalPaise;
     }

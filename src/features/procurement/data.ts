@@ -26,6 +26,8 @@ const serverRepository: ProcurementRepository = {
   revisePurchaseOrder: server.revisePurchaseOrder,
   duplicatePurchaseOrder: server.duplicatePurchaseOrder,
   deletePurchaseOrder: server.deletePurchaseOrder,
+  archivePurchaseOrder: server.archivePurchaseOrder,
+  unarchivePurchaseOrder: server.unarchivePurchaseOrder,
   pendingApprovalCount: server.pendingApprovalCount,
   listPayments: server.listPayments,
   createPayment: server.createPayment,

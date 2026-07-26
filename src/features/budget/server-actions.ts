@@ -32,6 +32,7 @@ export async function projectSpend(projectId: string): Promise<ProjectSpend> {
       where: {
         companyId: user.company.id,
         projectId,
+        archivedAt: null,
         status: approval ? "APPROVED" : { not: "DRAFT" },
       },
       select: { totalPaise: true },
@@ -50,7 +51,11 @@ export async function spendByProject(): Promise<Record<string, ProjectSpend>> {
     labourByProject(user.company.id),
     prisma.purchaseOrder.groupBy({
       by: ["projectId"],
-      where: { companyId: user.company.id, status: approval ? "APPROVED" : { not: "DRAFT" } },
+      where: {
+        companyId: user.company.id,
+        archivedAt: null,
+        status: approval ? "APPROVED" : { not: "DRAFT" },
+      },
       _sum: { totalPaise: true },
     }),
   ]);

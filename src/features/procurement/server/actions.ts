@@ -20,6 +20,7 @@ import {
   type POForRollup,
 } from "../calc";
 import { DEFAULT_MATERIAL_CATEGORIES } from "../constants";
+import { poDeleteAction } from "../deletion";
 import type {
   CreatePaymentInput,
   CreatePOInput,
@@ -449,6 +450,7 @@ type POListRow = {
   id: string; poNumber: string; status: "DRAFT" | "SUBMITTED" | "APPROVED"; purchaseDate: Date;
   expectedDelivery: Date | null; subtotalPaise: bigint; gstPaise: bigint; totalPaise: bigint;
   invoiceNumber: string | null; vendorId: string; projectId: string; createdById: string; createdAt: Date;
+  archivedAt?: Date | null;
   vendor: { businessName: string }; project: { name: string; code: string };
   createdBy?: { id: string; fullName: string } | null;
 };
@@ -471,6 +473,7 @@ function toListItem(p: POListRow, paid: Map<string, number>): PurchaseOrderListI
     project: { id: p.projectId, name: p.project.name, code: p.project.code },
     createdBy: p.createdBy ? { id: p.createdBy.id, name: p.createdBy.fullName } : null,
     createdAt: p.createdAt.toISOString(),
+    archivedAt: p.archivedAt ? p.archivedAt.toISOString() : null,
   };
 }
 
@@ -562,6 +565,8 @@ export async function listPurchaseOrders(filters: POFilters = {}): Promise<Purch
   const rows = await prisma.purchaseOrder.findMany({
     where: {
       companyId: user.company.id,
+      // Archived POs are hidden unless explicitly requested.
+      ...(filters.archived === "ARCHIVED" ? { archivedAt: { not: null } } : { archivedAt: null }),
       ...(user.role !== "OWNER" ? { project: { pmId: user.id } } : {}),
       ...(filters.status && filters.status !== "ALL" ? { status: filters.status } : {}),
       ...(filters.projectId && filters.projectId !== "ALL" ? { projectId: filters.projectId } : {}),
@@ -775,8 +780,79 @@ export async function duplicatePurchaseOrder(id: string): Promise<PurchaseOrderD
 
 export async function deletePurchaseOrder(id: string): Promise<void> {
   const user = await requireUser();
-  assertOwner(user);
+  const po = await prisma.purchaseOrder.findFirst({
+    where: { id, companyId: user.company.id },
+    select: { id: true, poNumber: true, status: true, createdById: true },
+  });
+  if (!po) throw new Error("NOT_FOUND");
+  const action = poDeleteAction(po.status, {
+    isOwner: user.role === "OWNER",
+    isCreator: po.createdById === user.id,
+  });
+  if (action !== "DELETE") throw new Error("FORBIDDEN");
   await prisma.purchaseOrder.delete({ where: { id, companyId: user.company.id } });
+  await prisma.activityLog.create({
+    data: {
+      companyId: user.company.id,
+      actorId: user.id,
+      action: "po.deleted",
+      entityType: "purchase_order",
+      entityId: po.id,
+      summary: `Deleted ${po.poNumber} (${po.status.toLowerCase()})`,
+    },
+  });
+}
+
+/** Archive an APPROVED PO (never hard-deleted). Owner-only, audited. */
+export async function archivePurchaseOrder(id: string): Promise<void> {
+  const user = await requireUser();
+  assertOwner(user);
+  const po = await prisma.purchaseOrder.findFirst({
+    where: { id, companyId: user.company.id },
+    select: { id: true, poNumber: true, archivedAt: true },
+  });
+  if (!po) throw new Error("NOT_FOUND");
+  if (po.archivedAt) return; // already archived — idempotent
+  await prisma.purchaseOrder.update({
+    where: { id, companyId: user.company.id },
+    data: { archivedAt: new Date() },
+  });
+  await prisma.activityLog.create({
+    data: {
+      companyId: user.company.id,
+      actorId: user.id,
+      action: "po.archived",
+      entityType: "purchase_order",
+      entityId: po.id,
+      summary: `Archived ${po.poNumber}`,
+    },
+  });
+}
+
+/** Restore an archived PO. Owner-only, audited. */
+export async function unarchivePurchaseOrder(id: string): Promise<void> {
+  const user = await requireUser();
+  assertOwner(user);
+  const po = await prisma.purchaseOrder.findFirst({
+    where: { id, companyId: user.company.id },
+    select: { id: true, poNumber: true, archivedAt: true },
+  });
+  if (!po) throw new Error("NOT_FOUND");
+  if (!po.archivedAt) return;
+  await prisma.purchaseOrder.update({
+    where: { id, companyId: user.company.id },
+    data: { archivedAt: null },
+  });
+  await prisma.activityLog.create({
+    data: {
+      companyId: user.company.id,
+      actorId: user.id,
+      action: "po.unarchived",
+      entityType: "purchase_order",
+      entityId: po.id,
+      summary: `Restored ${po.poNumber} from archive`,
+    },
+  });
 }
 
 export async function pendingApprovalCount(): Promise<number> {

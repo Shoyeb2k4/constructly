@@ -50,6 +50,8 @@ export interface PORecord {
   approvedByName: string | null;
   approvedAt: string | null;
   revisedFromId: string | null;
+  /** Set when archived (approved POs). Hidden from lists + budget, kept for audit. */
+  archivedAt?: string | null;
   createdAt: string;
   updatedAt: string;
   lineItems: POLineRecord[];

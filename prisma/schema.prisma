@@ -528,6 +528,9 @@ model PurchaseOrder {
   approvedById     String?             @map("approved_by_id") @db.Uuid
   approvedAt       DateTime?           @map("approved_at")
   revisedFromId    String?             @map("revised_from_id") @db.Uuid
+  /// Set when an APPROVED PO is archived (never hard-deleted). Archived POs are
+  /// hidden from normal lists, excluded from budget, kept for audit history.
+  archivedAt       DateTime?           @map("archived_at")
   createdAt        DateTime            @default(now()) @map("created_at")
   updatedAt        DateTime            @updatedAt @map("updated_at")
 
@@ -546,6 +549,7 @@ model PurchaseOrder {
   @@index([companyId, status])
   @@index([companyId, projectId])
   @@index([companyId, vendorId])
+  @@index([companyId, archivedAt])
   @@map("purchase_orders")
 }
 
