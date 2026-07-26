@@ -47,6 +47,7 @@ export function decodePOQuery(sp: URLSearchParams): POQueryState {
     dateFrom: str("from"),
     dateTo: str("to"),
     sort: str("sort") as POSort | undefined,
+    archived: sp.get("archived") === "1" ? "ARCHIVED" : undefined,
   };
   const page = Math.max(1, Math.floor(num("page") ?? 1));
   return { filters, page };
@@ -72,6 +73,7 @@ export function encodePOQuery({ filters, page }: POQueryState): string {
     sp.set("amax", String(Math.round(filters.amountMaxPaise / 100)));
   set("from", filters.dateFrom);
   set("to", filters.dateTo);
+  if (filters.archived === "ARCHIVED") sp.set("archived", "1");
   if (filters.sort && filters.sort !== DEFAULT_SORT) sp.set("sort", filters.sort);
   if (page > 1) sp.set("page", String(page));
   return sp.toString();

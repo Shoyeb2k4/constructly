@@ -7,5 +7,5 @@ export const metadata: Metadata = { title: "Purchase order" };
 export default async function POPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const user = await getCurrentUser();
-  return <PODetailView id={id} isOwner={user?.role === "OWNER"} />;
+  return <PODetailView id={id} isOwner={user?.role === "OWNER"} currentUserId={user?.id ?? null} />;
 }
