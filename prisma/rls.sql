@@ -127,6 +127,17 @@ create policy contractors_tenant on public.contractors
   for all using (company_id = public.current_company_id())
   with check (company_id = public.current_company_id());
 
+-- Contractor ledger + settlements (immutable financial records, tenant-scoped).
+alter table public.contractor_ledger_entries enable row level security;
+create policy contractor_ledger_entries_tenant on public.contractor_ledger_entries
+  for all using (company_id = public.current_company_id())
+  with check (company_id = public.current_company_id());
+
+alter table public.contractor_settlements enable row level security;
+create policy contractor_settlements_tenant on public.contractor_settlements
+  for all using (company_id = public.current_company_id())
+  with check (company_id = public.current_company_id());
+
 alter table public.labour_categories enable row level security;
 create policy labour_categories_tenant on public.labour_categories
   for all using (company_id = public.current_company_id())

@@ -73,18 +73,20 @@ model Company {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  users               User[]
-  projects            Project[]
-  activity            ActivityLog[]
-  contractors         Contractor[]
-  labourCategories    LabourCategory[]
-  labourSubcategories LabourSubcategory[]
-  labourAttendance    LabourAttendance[]
-  vendors             Vendor[]
-  purchaseOrders      PurchaseOrder[]
-  vendorPayments      VendorPayment[]
-  vendorDocuments     VendorDocument[]
-  goodsReceipts       GoodsReceipt[]
+  users                 User[]
+  projects              Project[]
+  activity              ActivityLog[]
+  contractors           Contractor[]
+  contractorLedger      ContractorLedgerEntry[]
+  contractorSettlements ContractorSettlement[]
+  labourCategories      LabourCategory[]
+  labourSubcategories   LabourSubcategory[]
+  labourAttendance      LabourAttendance[]
+  vendors               Vendor[]
+  purchaseOrders        PurchaseOrder[]
+  vendorPayments        VendorPayment[]
+  vendorDocuments       VendorDocument[]
+  goodsReceipts         GoodsReceipt[]
 
   @@map("companies")
 }
@@ -100,16 +102,16 @@ model User {
   createdAt DateTime   @default(now()) @map("created_at")
   updatedAt DateTime   @updatedAt @map("updated_at")
 
-  company                  Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  createdProjects          Project[]         @relation("ProjectCreatedBy")
-  managedProjects          Project[]         @relation("ProjectManager")
-  favorites                ProjectFavorite[]
-  activity                 ActivityLog[]
-  createdPurchaseOrders    PurchaseOrder[]   @relation("POCreatedBy")
-  approvedPurchaseOrders   PurchaseOrder[]   @relation("POApprovedBy")
-  vendorFavorites          VendorFavorite[]
-  vendorPayments           VendorPayment[]   @relation("PaymentCreatedBy")
-  goodsReceipts            GoodsReceipt[]    @relation("GoodsReceiptCreatedBy")
+  company                Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdProjects        Project[]         @relation("ProjectCreatedBy")
+  managedProjects        Project[]         @relation("ProjectManager")
+  favorites              ProjectFavorite[]
+  activity               ActivityLog[]
+  createdPurchaseOrders  PurchaseOrder[]   @relation("POCreatedBy")
+  approvedPurchaseOrders PurchaseOrder[]   @relation("POApprovedBy")
+  vendorFavorites        VendorFavorite[]
+  vendorPayments         VendorPayment[]   @relation("PaymentCreatedBy")
+  goodsReceipts          GoodsReceipt[]    @relation("GoodsReceiptCreatedBy")
 
   @@index([companyId])
   @@map("users")
@@ -145,17 +147,18 @@ model Project {
   createdAt              DateTime     @default(now()) @map("created_at")
   updatedAt              DateTime     @updatedAt @map("updated_at")
 
-  company   Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  pm        User?             @relation("ProjectManager", fields: [pmId], references: [id], onDelete: SetNull)
-  createdBy User              @relation("ProjectCreatedBy", fields: [createdById], references: [id])
-  deadlines        Deadline[]
-  documents        ProjectDocument[]
-  notes            Note[]
-  favorites        ProjectFavorite[]
-  labourAttendance LabourAttendance[]
-  purchaseOrders   PurchaseOrder[]
-  vendorPayments   VendorPayment[]
-  goodsReceipts    GoodsReceipt[]
+  company               Company                @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  pm                    User?                  @relation("ProjectManager", fields: [pmId], references: [id], onDelete: SetNull)
+  createdBy             User                   @relation("ProjectCreatedBy", fields: [createdById], references: [id])
+  deadlines             Deadline[]
+  documents             ProjectDocument[]
+  notes                 Note[]
+  favorites             ProjectFavorite[]
+  labourAttendance      LabourAttendance[]
+  purchaseOrders        PurchaseOrder[]
+  vendorPayments        VendorPayment[]
+  goodsReceipts         GoodsReceipt[]
+  contractorSettlements ContractorSettlement[]
 
   @@unique([companyId, code])
   @@index([companyId, stage])
@@ -254,18 +257,96 @@ enum ContractorStatus {
 /// invoices, advances, and a ledger as NEW tables referencing contractorId —
 /// no redesign of this model required.
 model Contractor {
-  id        String           @id @default(uuid()) @db.Uuid
-  companyId String           @map("company_id") @db.Uuid
-  name      String
-  phone     String?
-  status    ContractorStatus @default(ACTIVE)
-  createdAt DateTime         @default(now()) @map("created_at")
-  updatedAt DateTime         @updatedAt @map("updated_at")
+  id                  String           @id @default(uuid()) @db.Uuid
+  companyId           String           @map("company_id") @db.Uuid
+  name                String
+  phone               String?
+  status              ContractorStatus @default(ACTIVE)
+  /// Opening advance carried in at contractor creation (integer paise). Seeds
+  /// the first ledger entry; the ledger is the authoritative running balance.
+  openingAdvancePaise Int              @default(0) @map("opening_advance_paise")
+  createdAt           DateTime         @default(now()) @map("created_at")
+  updatedAt           DateTime         @updatedAt @map("updated_at")
 
-  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  company     Company                 @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  ledger      ContractorLedgerEntry[]
+  settlements ContractorSettlement[]
+  attendance  LabourAttendance[]
 
   @@index([companyId, status])
   @@map("contractors")
+}
+
+/// Kinds of contractor ledger movements. Sign convention for the advance
+/// balance: OPENING_ADVANCE / ADVANCE increase it; ADJUSTMENT decreases it;
+/// LABOUR_BILL and PAYMENT are informational (no advance-balance effect).
+enum ContractorLedgerType {
+  OPENING_ADVANCE
+  ADVANCE
+  LABOUR_BILL
+  ADJUSTMENT
+  PAYMENT
+}
+
+/// Append-only, immutable contractor ledger. Each entry snapshots the advance
+/// balance AFTER it, so history never needs recomputation (ADR: financial
+/// integrity). Advances and adjustments are company/contractor-scoped; labour
+/// bills and payments arise from a settlement (see settlementId).
+model ContractorLedgerEntry {
+  id                       String               @id @default(uuid()) @db.Uuid
+  companyId                String               @map("company_id") @db.Uuid
+  contractorId             String               @map("contractor_id") @db.Uuid
+  date                     DateTime             @db.Date
+  type                     ContractorLedgerType
+  /// Unsigned magnitude in paise; the sign is implied by `type`.
+  amountPaise              Int                  @map("amount_paise")
+  /// Running advance balance immediately after this entry (integer paise).
+  advanceBalanceAfterPaise Int                  @map("advance_balance_after_paise")
+  notes                    String?
+  settlementId             String?              @map("settlement_id") @db.Uuid
+  createdById              String               @map("created_by_id") @db.Uuid
+  createdAt                DateTime             @default(now()) @map("created_at")
+
+  company    Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  contractor Contractor            @relation(fields: [contractorId], references: [id], onDelete: Cascade)
+  settlement ContractorSettlement? @relation(fields: [settlementId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, contractorId, createdAt])
+  @@index([companyId, settlementId])
+  @@map("contractor_ledger_entries")
+}
+
+/// A weekly contractor settlement for one project + period. Snapshots the
+/// computed labour bill, the advance adjustment applied, the resulting net
+/// cash payment, and the advance balance afterwards. Immutable once created;
+/// it emits LABOUR_BILL, (optional) ADJUSTMENT, and PAYMENT ledger entries.
+model ContractorSettlement {
+  id                       String   @id @default(uuid()) @db.Uuid
+  companyId                String   @map("company_id") @db.Uuid
+  contractorId             String   @map("contractor_id") @db.Uuid
+  projectId                String   @map("project_id") @db.Uuid
+  periodStart              DateTime @map("period_start") @db.Date
+  periodEnd                DateTime @map("period_end") @db.Date
+  /// Σ estimated labour cost for this contractor on this project in the period.
+  labourBillPaise          Int      @map("labour_bill_paise")
+  /// Advance drawn down against the bill (≤ min(outstanding advance, bill)).
+  advanceAdjustmentPaise   Int      @default(0) @map("advance_adjustment_paise")
+  /// Net cash paid = labourBill − advanceAdjustment.
+  netPaymentPaise          Int      @map("net_payment_paise")
+  /// Contractor advance balance after this settlement (integer paise).
+  advanceBalanceAfterPaise Int      @map("advance_balance_after_paise")
+  notes                    String?
+  createdById              String   @map("created_by_id") @db.Uuid
+  createdAt                DateTime @default(now()) @map("created_at")
+
+  company    Company                 @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  contractor Contractor              @relation(fields: [contractorId], references: [id], onDelete: Cascade)
+  project    Project                 @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  ledger     ContractorLedgerEntry[]
+
+  @@index([companyId, contractorId, createdAt])
+  @@index([companyId, projectId])
+  @@map("contractor_settlements")
 }
 
 /// A labour category (trade group), e.g. Carpenter, Electrician, Mason.
@@ -320,6 +401,10 @@ model LabourAttendance {
   projectId              String   @map("project_id") @db.Uuid
   date                   DateTime @db.Date
   labourSubcategoryId    String   @map("labour_subcategory_id") @db.Uuid
+  /// Optional contractor this labour is attributed to. Nullable: legacy rows
+  /// and unattributed labour have none; a contractor's weekly bill sums the
+  /// estimatedCostPaise of their attributed rows in the period.
+  contractorId           String?  @map("contractor_id") @db.Uuid
   /// Headcount present. Float to allow half-day (0.5) increments; 0.5 steps
   /// are exactly representable, and legacy whole-number rows are unaffected.
   quantityPresent        Float    @map("quantity_present")
@@ -336,8 +421,10 @@ model LabourAttendance {
   company     Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
   project     Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
   subcategory LabourSubcategory @relation(fields: [labourSubcategoryId], references: [id], onDelete: Cascade)
+  contractor  Contractor?       @relation(fields: [contractorId], references: [id], onDelete: SetNull)
 
   @@unique([projectId, date, labourSubcategoryId])
+  @@index([companyId, contractorId, date])
   @@index([companyId, projectId, date])
   @@index([companyId, date])
   @@map("labour_attendance")
@@ -358,21 +445,21 @@ enum PurchaseOrderStatus {
 /// balances, and GST reports attach as NEW tables referencing vendorId —
 /// no redesign of this model required.
 model Vendor {
-  id               String       @id @default(uuid()) @db.Uuid
-  companyId        String       @map("company_id") @db.Uuid
-  businessName     String       @map("business_name")
-  contactPerson    String?      @map("contact_person")
-  phone            String?
-  email            String?
-  gstin            String?
-  pan              String?
-  address          String?
-  materialsSupplied String[]    @default([]) @map("materials_supplied")
-  paymentTerms     String?      @map("payment_terms")
-  status           VendorStatus @default(ACTIVE)
-  notes            String?
-  createdAt        DateTime     @default(now()) @map("created_at")
-  updatedAt        DateTime     @updatedAt @map("updated_at")
+  id                String       @id @default(uuid()) @db.Uuid
+  companyId         String       @map("company_id") @db.Uuid
+  businessName      String       @map("business_name")
+  contactPerson     String?      @map("contact_person")
+  phone             String?
+  email             String?
+  gstin             String?
+  pan               String?
+  address           String?
+  materialsSupplied String[]     @default([]) @map("materials_supplied")
+  paymentTerms      String?      @map("payment_terms")
+  status            VendorStatus @default(ACTIVE)
+  notes             String?
+  createdAt         DateTime     @default(now()) @map("created_at")
+  updatedAt         DateTime     @updatedAt @map("updated_at")
 
   company        Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
   purchaseOrders PurchaseOrder[]
@@ -421,38 +508,38 @@ model VendorFavorite {
 /// A purchase order. Approved POs are immutable — changes go through a
 /// "revise" that clones to a new draft linked via revisedFromId (audit trail).
 model PurchaseOrder {
-  id            String              @id @default(uuid()) @db.Uuid
-  companyId     String              @map("company_id") @db.Uuid
-  vendorId      String              @map("vendor_id") @db.Uuid
-  projectId     String              @map("project_id") @db.Uuid
-  poNumber      String              @map("po_number")
-  status        PurchaseOrderStatus @default(DRAFT)
-  invoiceNumber String?             @map("invoice_number")
-  purchaseDate  DateTime            @map("purchase_date") @db.Date
-  expectedDelivery DateTime?        @map("expected_delivery") @db.Date
-  notes         String?
+  id               String              @id @default(uuid()) @db.Uuid
+  companyId        String              @map("company_id") @db.Uuid
+  vendorId         String              @map("vendor_id") @db.Uuid
+  projectId        String              @map("project_id") @db.Uuid
+  poNumber         String              @map("po_number")
+  status           PurchaseOrderStatus @default(DRAFT)
+  invoiceNumber    String?             @map("invoice_number")
+  purchaseDate     DateTime            @map("purchase_date") @db.Date
+  expectedDelivery DateTime?           @map("expected_delivery") @db.Date
+  notes            String?
   /// Denormalized Σ line taxable amounts (integer paise, ex-GST).
-  subtotalPaise BigInt              @default(0) @map("subtotal_paise")
+  subtotalPaise    BigInt              @default(0) @map("subtotal_paise")
   /// Denormalized Σ line GST (integer paise).
-  gstPaise      BigInt              @default(0) @map("gst_paise")
+  gstPaise         BigInt              @default(0) @map("gst_paise")
   /// Grand total = subtotal + GST (integer paise). Budget math uses this.
-  totalPaise    BigInt              @default(0) @map("total_paise")
-  createdById   String              @map("created_by_id") @db.Uuid
-  approvedById  String?             @map("approved_by_id") @db.Uuid
-  approvedAt    DateTime?           @map("approved_at")
-  revisedFromId String?             @map("revised_from_id") @db.Uuid
-  createdAt     DateTime            @default(now()) @map("created_at")
-  updatedAt     DateTime            @updatedAt @map("updated_at")
+  totalPaise       BigInt              @default(0) @map("total_paise")
+  createdById      String              @map("created_by_id") @db.Uuid
+  approvedById     String?             @map("approved_by_id") @db.Uuid
+  approvedAt       DateTime?           @map("approved_at")
+  revisedFromId    String?             @map("revised_from_id") @db.Uuid
+  createdAt        DateTime            @default(now()) @map("created_at")
+  updatedAt        DateTime            @updatedAt @map("updated_at")
 
-  company     Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  vendor      Vendor         @relation(fields: [vendorId], references: [id])
-  project     Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  createdBy   User           @relation("POCreatedBy", fields: [createdById], references: [id])
-  approvedBy  User?          @relation("POApprovedBy", fields: [approvedById], references: [id])
-  revisedFrom PurchaseOrder? @relation("PORevision", fields: [revisedFromId], references: [id])
-  revisions   PurchaseOrder[] @relation("PORevision")
-  lineItems   POLineItem[]
-  payments    VendorPayment[]
+  company       Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  vendor        Vendor          @relation(fields: [vendorId], references: [id])
+  project       Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdBy     User            @relation("POCreatedBy", fields: [createdById], references: [id])
+  approvedBy    User?           @relation("POApprovedBy", fields: [approvedById], references: [id])
+  revisedFrom   PurchaseOrder?  @relation("PORevision", fields: [revisedFromId], references: [id])
+  revisions     PurchaseOrder[] @relation("PORevision")
+  lineItems     POLineItem[]
+  payments      VendorPayment[]
   goodsReceipts GoodsReceipt[]
 
   @@unique([companyId, poNumber])
@@ -550,9 +637,9 @@ model GoodsReceipt {
 }
 
 model GoodsReceiptItem {
-  id             String  @id @default(uuid()) @db.Uuid
-  goodsReceiptId String  @map("goods_receipt_id") @db.Uuid
-  poLineItemId   String  @map("po_line_item_id") @db.Uuid
+  id               String  @id @default(uuid()) @db.Uuid
+  goodsReceiptId   String  @map("goods_receipt_id") @db.Uuid
+  poLineItemId     String  @map("po_line_item_id") @db.Uuid
   quantityReceived Decimal @map("quantity_received") @db.Decimal(12, 3)
 
   goodsReceipt GoodsReceipt @relation(fields: [goodsReceiptId], references: [id], onDelete: Cascade)
