@@ -155,11 +155,13 @@ async function buildSheet(companyId: string, projectId: string, date: string): P
         dailyRatePaise: rec ? rec.dailyRatePaiseSnapshot : s.dailyRatePaise,
         quantity: rec?.quantityPresent ?? 0,
         notes: rec?.notes ?? null,
+        contractorId: rec?.contractorId ?? null,
       };
     });
     return { categoryId: c.id, name: c.name, color: c.color, rows, ...rowTotals(rows) };
   });
-  return { projectId, date, groups, ...sheetTotals(groups) };
+  const contractorId = todays.find((a) => a.contractorId)?.contractorId ?? null;
+  return { projectId, date, groups, contractorId, ...sheetTotals(groups) };
 }
 
 export async function getSheet(projectId: string, date: string): Promise<AttendanceSheet> {
@@ -174,6 +176,7 @@ export async function setQuantity(
   subcategoryId: string,
   quantity: number,
   notes?: string | null,
+  contractorId?: string | null,
 ): Promise<AttendanceSheet> {
   const user = await requireUser();
   await assertProjectAccess(user, projectId);
@@ -205,10 +208,16 @@ export async function setQuantity(
         dailyRatePaiseSnapshot: snapshot,
         estimatedCostPaise,
         notes: notes ?? null,
+        contractorId: contractorId ?? null,
         clientUuid: crypto.randomUUID(),
         clientSeq: BigInt(Date.now()),
       },
-      update: { quantityPresent: quantity, estimatedCostPaise, ...(notes !== undefined ? { notes } : {}) },
+      update: {
+        quantityPresent: quantity,
+        estimatedCostPaise,
+        ...(notes !== undefined ? { notes } : {}),
+        ...(contractorId !== undefined ? { contractorId } : {}),
+      },
     });
   }
   return buildSheet(user.company.id, projectId, date);

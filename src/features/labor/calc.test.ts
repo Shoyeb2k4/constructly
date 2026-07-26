@@ -37,9 +37,9 @@ describe("estimateCostPaise", () => {
 describe("rowTotals", () => {
   it("totals headcount and estimated cost across rows", () => {
     const t = rowTotals([
-      { subcategoryId: "a", name: "Main Carpenter", dailyRatePaise: 90000, quantity: 12, notes: null },
-      { subcategoryId: "b", name: "Carpenter Helper", dailyRatePaise: 55000, quantity: 8, notes: null },
-      { subcategoryId: "c", name: "No-rate", dailyRatePaise: null, quantity: 3, notes: null },
+      { subcategoryId: "a", name: "Main Carpenter", dailyRatePaise: 90000, quantity: 12, notes: null, contractorId: null },
+      { subcategoryId: "b", name: "Carpenter Helper", dailyRatePaise: 55000, quantity: 8, notes: null, contractorId: null },
+      { subcategoryId: "c", name: "No-rate", dailyRatePaise: null, quantity: 3, notes: null, contractorId: null },
     ]);
     expect(t.totalPresent).toBe(23);
     expect(t.estimatedCostPaise).toBe(12 * 90000 + 8 * 55000);

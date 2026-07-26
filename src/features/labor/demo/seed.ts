@@ -26,6 +26,8 @@ export interface LabourAttendanceRecord {
   dailyRatePaiseSnapshot: number | null;
   estimatedCostPaise: number;
   notes: string | null;
+  /** Optional contractor attribution for weekly settlement. */
+  contractorId?: string | null;
   clientUuid: string;
   updatedAt: string;
 }

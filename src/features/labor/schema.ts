@@ -47,5 +47,7 @@ export const labourAttendanceMutationSchema = z.object({
     .max(5000)
     .refine((v) => Number.isInteger(v * 2), "Use 0.5 steps (half day)"),
   notes: z.string().max(300).nullable().optional(),
+  /** Optional contractor this labour is attributed to (for weekly settlement). */
+  contractorId: z.string().uuid().nullable().optional(),
 });
 export type LabourAttendanceMutation = z.infer<typeof labourAttendanceMutationSchema>;

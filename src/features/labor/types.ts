@@ -46,6 +46,7 @@ export interface SheetRow {
   dailyRatePaise: number | null;
   quantity: number;
   notes: string | null;
+  contractorId: string | null;
 }
 
 export interface SheetGroup {
@@ -63,6 +64,8 @@ export interface AttendanceSheet {
   groups: SheetGroup[];
   totalPresent: number;
   estimatedCostPaise: number;
+  /** Contractor attributed for this sheet (first attributed row), if any. */
+  contractorId: string | null;
 }
 
 /* ── Records, filters, summaries ─────────────────────────────────────── */

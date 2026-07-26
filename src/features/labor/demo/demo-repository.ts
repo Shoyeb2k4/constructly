@@ -137,11 +137,13 @@ function buildSheet(
           dailyRatePaise: rec ? rec.dailyRatePaiseSnapshot : s.dailyRatePaise,
           quantity: rec?.quantityPresent ?? 0,
           notes: rec?.notes ?? null,
+          contractorId: rec?.contractorId ?? null,
         };
       });
     return { categoryId: c.id, name: c.name, color: c.color, rows, ...rowTotals(rows) };
   });
-  return { projectId, date, groups, ...sheetTotals(groups) };
+  const contractorId = todays.find((a) => a.contractorId)?.contractorId ?? null;
+  return { projectId, date, groups, contractorId, ...sheetTotals(groups) };
 }
 
 function toItems(records: LabourAttendanceRecord[]): AttendanceRecordItem[] {
@@ -283,7 +285,7 @@ export const demoLaborRepository: LaborRepository = {
     return buildSheet(projectId, date, loadCategories(), loadSubcategories(), loadAttendance());
   },
 
-  async setQuantity(projectId, date, subcategoryId, quantity, notes) {
+  async setQuantity(projectId, date, subcategoryId, quantity, notes, contractorId) {
     const categories = loadCategories();
     const subcategories = loadSubcategories();
     let attendance = loadAttendance();
@@ -297,6 +299,7 @@ export const demoLaborRepository: LaborRepository = {
       existing.quantityPresent = quantity;
       existing.estimatedCostPaise = Math.round((existing.dailyRatePaiseSnapshot ?? 0) * quantity);
       if (notes !== undefined) existing.notes = notes;
+      if (contractorId !== undefined) existing.contractorId = contractorId;
       existing.updatedAt = new Date().toISOString();
     } else {
       const rate = subcategories.find((s) => s.id === subcategoryId)?.dailyRatePaise ?? null;
@@ -309,6 +312,7 @@ export const demoLaborRepository: LaborRepository = {
         dailyRatePaiseSnapshot: rate,
         estimatedCostPaise: Math.round((rate ?? 0) * quantity),
         notes: notes ?? null,
+        contractorId: contractorId ?? null,
         clientUuid: uid(),
         updatedAt: new Date().toISOString(),
       });

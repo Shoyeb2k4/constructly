@@ -79,6 +79,7 @@ async function applyLabourAttendance(clientUuid: string, payload: unknown, user:
       dailyRatePaiseSnapshot: snapshot,
       estimatedCostPaise: Math.round((snapshot ?? 0) * p.quantityPresent),
       notes: p.notes ?? null,
+      contractorId: p.contractorId ?? null,
       clientUuid,
       clientSeq: BigInt(Date.now()),
     },
@@ -86,6 +87,7 @@ async function applyLabourAttendance(clientUuid: string, payload: unknown, user:
       quantityPresent: p.quantityPresent,
       estimatedCostPaise: Math.round((snapshot ?? 0) * p.quantityPresent),
       ...(p.notes !== undefined ? { notes: p.notes } : {}),
+      ...(p.contractorId !== undefined ? { contractorId: p.contractorId } : {}),
     },
   });
 }

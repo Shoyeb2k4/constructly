@@ -45,8 +45,12 @@ export function useSetQuantity(projectId: string, date: string) {
   const qc = useQueryClient();
   const key = laborKeys.sheet(projectId, date);
   return useMutation({
-    mutationFn: (v: { subcategoryId: string; quantity: number; notes?: string | null }) =>
-      laborApi.setQuantity(projectId, date, v.subcategoryId, v.quantity, v.notes),
+    mutationFn: (v: {
+      subcategoryId: string;
+      quantity: number;
+      notes?: string | null;
+      contractorId?: string | null;
+    }) => laborApi.setQuantity(projectId, date, v.subcategoryId, v.quantity, v.notes, v.contractorId),
     onMutate: async (v) => {
       await qc.cancelQueries({ queryKey: key });
       const prev = qc.getQueryData<AttendanceSheet>(key);

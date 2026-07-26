@@ -29,6 +29,7 @@ import { RowsSkeleton } from "@/components/patterns/loading-state";
 import { MoneyText } from "@/components/patterns/money-text";
 import { cn } from "@/lib/utils";
 import { useProjects } from "@/features/projects/hooks";
+import { useContractors } from "@/features/contractors/hooks";
 import { useAttendanceSheet, useSetQuantity, useCopyPreviousDay } from "../../hooks";
 import { getLastProject, setLastProject, todayISO } from "../../last-project";
 // exports.ts (jsPDF + SheetJS) is lazy-loaded on click to keep it out of the
@@ -207,8 +208,38 @@ export function AttendanceView() {
   const projectName = active.find((p) => p.id === projectId)?.name ?? "";
 
   const { data: sheet, isLoading } = useAttendanceSheet(projectId, date);
+  const { data: contractors = [] } = useContractors({ status: "ACTIVE" });
   const setQuantity = useSetQuantity(pid, date);
   const copyPrev = useCopyPreviousDay(pid, date);
+
+  // Sheet-level contractor attribution. Kept in sync with the loaded sheet via
+  // the derive-during-render pattern (no effect) so a fresh project/date or a
+  // server refresh reflects the persisted attribution.
+  const [contractorId, setContractorId] = React.useState<string | null>(null);
+  const attrKey = `${pid}|${date}|${sheet?.contractorId ?? ""}`;
+  const [syncedAttrKey, setSyncedAttrKey] = React.useState(attrKey);
+  if (syncedAttrKey !== attrKey) {
+    setSyncedAttrKey(attrKey);
+    setContractorId(sheet?.contractorId ?? null);
+  }
+
+  function changeContractor(next: string | null) {
+    setContractorId(next);
+    // Re-attribute every already-recorded row to the newly chosen contractor.
+    if (sheet) {
+      for (const g of sheet.groups) {
+        for (const r of g.rows) {
+          if (r.quantity > 0)
+            setQuantity.mutate({
+              subcategoryId: r.subcategoryId,
+              quantity: r.quantity,
+              notes: r.notes,
+              contractorId: next,
+            });
+        }
+      }
+    }
+  }
 
   function selectProject(id: string) {
     setSelectedId(id);
@@ -285,6 +316,22 @@ export function AttendanceView() {
             <CopyPlus />
             Copy yesterday
           </Button>
+          {contractors.length > 0 && (
+            <Select
+              value={contractorId ?? "NONE"}
+              onValueChange={(v) => changeContractor(v === "NONE" ? null : v)}
+            >
+              <SelectTrigger className="w-52" aria-label="Attribute to contractor">
+                <SelectValue placeholder="No contractor" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="NONE">No contractor</SelectItem>
+                {contractors.map((c) => (
+                  <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
           <div className="ml-auto flex items-center gap-2">
             <Button variant="ghost" size="sm" disabled={!sheet || sheet.totalPresent === 0}
               onClick={async () => { if (sheet) (await import("../../exports")).exportSheetPdf(sheet, projectName); }}>
@@ -322,7 +369,7 @@ export function AttendanceView() {
               collapsed={collapsed.has(group.categoryId)}
               onToggle={() => toggleGroup(group.categoryId)}
               onCommit={(subcategoryId, quantity, notes) =>
-                setQuantity.mutate({ subcategoryId, quantity, notes })
+                setQuantity.mutate({ subcategoryId, quantity, notes, contractorId })
               }
             />
           ))}

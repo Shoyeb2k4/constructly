@@ -41,6 +41,7 @@ export interface LaborRepository {
     subcategoryId: string,
     quantity: number,
     notes?: string | null,
+    contractorId?: string | null,
   ): Promise<AttendanceSheet>;
   copyPreviousDay(projectId: string, date: string): Promise<AttendanceSheet>;
 
