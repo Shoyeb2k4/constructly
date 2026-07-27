@@ -55,14 +55,6 @@ describe("URL filter persistence", () => {
     const qs = encodePOQuery({ filters: { status: "ALL", projectId: "ALL", gst: "ALL" }, page: 1 });
     expect(qs).toBe("");
   });
-
-  it("round-trips the archived view flag", () => {
-    expect(encodePOQuery({ filters: { archived: "ARCHIVED" }, page: 1 })).toBe("archived=1");
-    expect(decode("archived=1").filters.archived).toBe("ARCHIVED");
-    expect(decode("").filters.archived).toBeUndefined();
-    // ACTIVE (default) is not serialized
-    expect(encodePOQuery({ filters: { archived: "ACTIVE" }, page: 1 })).toBe("");
-  });
 });
 
 describe("countActiveFilters", () => {

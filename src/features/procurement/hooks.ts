@@ -171,24 +171,8 @@ export function usePOMutations() {
     },
     onError: () => toast.error("Couldn't delete this purchase order"),
   });
-  const archive = useMutation({
-    mutationFn: (id: string) => procurementApi.archivePurchaseOrder(id),
-    onSuccess: () => {
-      invalidateAll();
-      toast.success("Purchase order archived");
-    },
-    onError: () => toast.error("Couldn't archive this purchase order"),
-  });
-  const unarchive = useMutation({
-    mutationFn: (id: string) => procurementApi.unarchivePurchaseOrder(id),
-    onSuccess: () => {
-      invalidateAll();
-      toast.success("Purchase order restored");
-    },
-    onError: () => toast.error("Couldn't restore this purchase order"),
-  });
 
-  return { create, update, submit, approve, revise, duplicate, remove, archive, unarchive };
+  return { create, update, submit, approve, revise, duplicate, remove };
 }
 
 /* ── Payment mutations (invalidate procurement + budget + dashboard) ─── */

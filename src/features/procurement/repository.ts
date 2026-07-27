@@ -53,11 +53,8 @@ export interface ProcurementRepository {
   revisePurchaseOrder(id: string): Promise<PurchaseOrderDetail>;
   /** Clone ANY PO to a fresh unlinked draft dated today (repeat purchases). */
   duplicatePurchaseOrder(id: string): Promise<PurchaseOrderDetail>;
-  /** Enforces the deletion policy (draft/submitted delete; approved must archive). */
+  /** Permanently delete a PO (owner-only, any status; cascades line items). */
   deletePurchaseOrder(id: string): Promise<void>;
-  /** Archive an approved PO (hidden from lists + budget, kept for audit). */
-  archivePurchaseOrder(id: string): Promise<void>;
-  unarchivePurchaseOrder(id: string): Promise<void>;
   pendingApprovalCount(): Promise<number>;
 
   // Payments (PO link optional — advances / on-account / settlements)

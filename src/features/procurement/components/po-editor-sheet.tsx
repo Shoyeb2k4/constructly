@@ -4,7 +4,7 @@ import * as React from "react";
 import { useRouter } from "next/navigation";
 import { useForm, useFieldArray, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Plus, Trash2 } from "lucide-react";
+import { Plus, Trash2, ChevronUp, ChevronDown } from "lucide-react";
 import {
   Sheet,
   SheetContent,
@@ -30,12 +30,13 @@ import { formatPaiseCompact } from "@/lib/money";
 import { useProjects } from "@/features/projects/hooks";
 import { useProjectSpend } from "@/features/budget/hooks";
 import { deriveBudget } from "@/features/budget/calc";
-import { poFormSchema, poFormToInput, type POFormValues } from "../schema";
+import { poFormSchema, poFormToInput, poDetailToForm, type POFormValues } from "../schema";
 import { UNITS } from "../constants";
 import { poTotals } from "../calc";
 import { useVendors, usePOMutations, useMaterialCategories } from "../hooks";
 import { pushRecentVendor } from "../recently-vendors";
 import { getApprovalRequired } from "@/features/settings/demo-settings";
+import type { PurchaseOrderDetail } from "../types";
 
 // GST defaults to 0% — users set the applicable rate per line when needed.
 const EMPTY_LINE = { material: "", category: "", quantity: 1, unit: "nos", rateRupees: 0, gstPercent: 0 };
@@ -50,16 +51,30 @@ export function POEditorSheet({
   open,
   onOpenChange,
   defaultProjectId,
+  editPo,
 }: {
   open: boolean;
   onOpenChange: (o: boolean) => void;
   defaultProjectId?: string;
+  /** When set, the sheet edits this PO instead of creating a new one. */
+  editPo?: PurchaseOrderDetail | null;
 }) {
   const router = useRouter();
-  const { create } = usePOMutations();
+  const { create, update } = usePOMutations();
   const { data: projects = [] } = useProjects({});
   const { data: vendors = [] } = useVendors({ status: "ACTIVE" });
   const { data: categories = [] } = useMaterialCategories();
+  const isEdit = !!editPo;
+
+  const createDefaults = React.useMemo<POFormValues>(
+    () => ({
+      projectId: defaultProjectId ?? "",
+      vendorId: "",
+      purchaseDate: new Date().toISOString().slice(0, 10),
+      lineItems: [{ ...EMPTY_LINE }],
+    }),
+    [defaultProjectId],
+  );
 
   const {
     register,
@@ -70,14 +85,18 @@ export function POEditorSheet({
     formState: { errors },
   } = useForm<POFormValues>({
     resolver: zodResolver(poFormSchema),
-    defaultValues: {
-      projectId: defaultProjectId ?? "",
-      vendorId: "",
-      purchaseDate: new Date().toISOString().slice(0, 10),
-      lineItems: [{ ...EMPTY_LINE }],
-    },
+    defaultValues: createDefaults,
   });
-  const { fields, append, remove } = useFieldArray({ control, name: "lineItems" });
+  const { fields, append, remove, move } = useFieldArray({ control, name: "lineItems" });
+
+  // Load the target's values when the sheet opens (fresh defaults for create).
+  const sessionKey = open ? (editPo?.id ?? "new") : "closed";
+  React.useEffect(() => {
+    if (!open) return;
+    reset(editPo ? poDetailToForm(editPo) : createDefaults);
+    // Only re-seed when the open target changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionKey]);
 
   // RHF's watch() isn't memoizable by React Compiler — expected for live totals.
   // eslint-disable-next-line react-hooks/incompatible-library
@@ -109,9 +128,14 @@ export function POEditorSheet({
     onOpenChange(false);
   }
 
+  const busy = create.isPending || update.isPending;
+
   const onSubmit = handleSubmit(async (values) => {
     const parsed = poFormSchema.parse(values);
-    const po = await create.mutateAsync(poFormToInput(parsed));
+    const input = poFormToInput(parsed);
+    const po = isEdit
+      ? await update.mutateAsync({ id: editPo!.id, input })
+      : await create.mutateAsync(input);
     const v = vendors.find((x) => x.id === parsed.vendorId);
     if (v) pushRecentVendor({ id: v.id, name: v.businessName });
     close();
@@ -122,11 +146,13 @@ export function POEditorSheet({
     <Sheet open={open} onOpenChange={(o) => (o ? onOpenChange(true) : close())}>
       <SheetContent className="sm:max-w-3xl">
         <SheetHeader>
-          <SheetTitle>New purchase order</SheetTitle>
+          <SheetTitle>{isEdit ? `Edit ${editPo!.poNumber}` : "New purchase order"}</SheetTitle>
           <SheetDescription>
-            {getApprovalRequired()
-              ? "Saved as a draft — submit for approval next."
-              : "Approval is off — this PO is final on save."}
+            {isEdit
+              ? "Totals recalculate on save; budgets and reports update automatically."
+              : getApprovalRequired()
+                ? "Saved as a draft — submit for approval next."
+                : "Approval is off — this PO is final on save."}
           </SheetDescription>
         </SheetHeader>
 
@@ -190,11 +216,11 @@ export function POEditorSheet({
             <div className="space-y-2">
               <Label>Line items</Label>
               <div className="rounded-lg border border-border">
-                <div className="hidden grid-cols-[1fr_110px_64px_74px_84px_64px_88px_28px] gap-2 border-b border-border px-3 py-2 text-xs text-foreground-subtle sm:grid">
+                <div className="hidden grid-cols-[1fr_110px_64px_74px_84px_64px_88px_76px] gap-2 border-b border-border px-3 py-2 text-xs text-foreground-subtle sm:grid">
                   <span>Material</span><span>Category</span><span>Qty</span><span>Unit</span><span>Rate ₹</span><span>GST %</span><span className="text-right">Amount</span><span />
                 </div>
                 {fields.map((f, i) => (
-                  <div key={f.id} className="grid grid-cols-2 items-center gap-2 border-b border-border px-3 py-2 last:border-0 sm:grid-cols-[1fr_110px_64px_74px_84px_64px_88px_28px]">
+                  <div key={f.id} className="grid grid-cols-2 items-center gap-2 border-b border-border px-3 py-2 last:border-0 sm:grid-cols-[1fr_110px_64px_74px_84px_64px_88px_76px]">
                     <Input className="h-8" placeholder="OPC Cement" {...register(`lineItems.${i}.material`)} />
                     <Controller
                       control={control}
@@ -238,15 +264,35 @@ export function POEditorSheet({
                     <span className="text-right font-mono text-xs tabular-nums text-foreground-muted">
                       {formatPaiseCompact(toPaise(num(lines?.[i]?.quantity) * num(lines?.[i]?.rateRupees)))}
                     </span>
-                    <button
-                      type="button"
-                      onClick={() => fields.length > 1 && remove(i)}
-                      className="flex size-7 items-center justify-center rounded-md text-foreground-subtle hover:bg-surface-muted disabled:opacity-30"
-                      disabled={fields.length === 1}
-                      aria-label="Remove line"
-                    >
-                      <Trash2 className="size-3.5" />
-                    </button>
+                    <div className="col-span-2 flex items-center justify-end gap-0.5 sm:col-span-1">
+                      <button
+                        type="button"
+                        onClick={() => i > 0 && move(i, i - 1)}
+                        className="flex size-6 items-center justify-center rounded-md text-foreground-subtle hover:bg-surface-muted disabled:opacity-30"
+                        disabled={i === 0}
+                        aria-label="Move line up"
+                      >
+                        <ChevronUp className="size-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => i < fields.length - 1 && move(i, i + 1)}
+                        className="flex size-6 items-center justify-center rounded-md text-foreground-subtle hover:bg-surface-muted disabled:opacity-30"
+                        disabled={i === fields.length - 1}
+                        aria-label="Move line down"
+                      >
+                        <ChevronDown className="size-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => fields.length > 1 && remove(i)}
+                        className="flex size-6 items-center justify-center rounded-md text-foreground-subtle hover:bg-surface-muted disabled:opacity-30"
+                        disabled={fields.length === 1}
+                        aria-label="Remove line"
+                      >
+                        <Trash2 className="size-3.5" />
+                      </button>
+                    </div>
                   </div>
                 ))}
                 {/* Standard GST slabs as quick suggestions; free entry allowed. */}
@@ -299,8 +345,10 @@ export function POEditorSheet({
 
           <SheetFooter>
             <Button type="button" variant="ghost" onClick={close}>Cancel</Button>
-            <Button type="submit" variant="primary" disabled={create.isPending || !vendorId || !projectId}>
-              {create.isPending ? "Creating…" : "Create purchase order"}
+            <Button type="submit" variant="primary" disabled={busy || !vendorId || !projectId}>
+              {busy
+                ? isEdit ? "Saving…" : "Creating…"
+                : isEdit ? "Save changes" : "Create purchase order"}
             </Button>
           </SheetFooter>
         </form>

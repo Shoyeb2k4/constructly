@@ -32,7 +32,6 @@ export async function projectSpend(projectId: string): Promise<ProjectSpend> {
       where: {
         companyId: user.company.id,
         projectId,
-        archivedAt: null,
         status: approval ? "APPROVED" : { not: "DRAFT" },
       },
       select: { totalPaise: true },
@@ -53,7 +52,6 @@ export async function spendByProject(): Promise<Record<string, ProjectSpend>> {
       by: ["projectId"],
       where: {
         companyId: user.company.id,
-        archivedAt: null,
         status: approval ? "APPROVED" : { not: "DRAFT" },
       },
       _sum: { totalPaise: true },

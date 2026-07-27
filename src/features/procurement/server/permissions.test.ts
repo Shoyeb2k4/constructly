@@ -26,17 +26,12 @@ import * as actions from "./actions";
 
 beforeEach(() => { currentUser = OWNER; });
 
-// deletePurchaseOrder is intentionally NOT here: its authorization is
-// data-dependent (a PM may delete their own DRAFT), so it fetches the PO before
-// deciding via poDeleteAction — that policy's role matrix is covered in
-// deletion.test.ts. archive/unarchive remain strict owner-only (assertOwner first).
 const ownerOnly: { name: string; run: () => Promise<unknown> }[] = [
   { name: "createVendor", run: () => actions.createVendor({ businessName: "Acme" }) },
   { name: "updateVendor", run: () => actions.updateVendor("v1", { businessName: "New" }) },
   { name: "setVendorStatus", run: () => actions.setVendorStatus("v1", "INACTIVE") },
   { name: "approvePurchaseOrder", run: () => actions.approvePurchaseOrder("po1") },
-  { name: "archivePurchaseOrder", run: () => actions.archivePurchaseOrder("po1") },
-  { name: "unarchivePurchaseOrder", run: () => actions.unarchivePurchaseOrder("po1") },
+  { name: "deletePurchaseOrder", run: () => actions.deletePurchaseOrder("po1") },
   { name: "deletePayment", run: () => actions.deletePayment("pay1") },
 ];
 

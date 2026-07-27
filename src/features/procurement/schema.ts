@@ -1,6 +1,12 @@
 import { z } from "zod";
-import { toPaise } from "@/lib/money";
-import type { CreatePaymentInput, CreatePOInput, CreateVendorInput, PaymentMode } from "./types";
+import { toPaise, toRupees } from "@/lib/money";
+import type {
+  CreatePaymentInput,
+  CreatePOInput,
+  CreateVendorInput,
+  PaymentMode,
+  PurchaseOrderDetail,
+} from "./types";
 
 const optionalStr = (max = 200) =>
   z.string().trim().max(max).optional().or(z.literal("")).transform((v) => (v ? v : undefined));
@@ -97,6 +103,26 @@ export function poFormToInput(v: z.output<typeof poFormSchema>): CreatePOInput {
       unit: l.unit,
       ratePaise: toPaise(l.rateRupees),
       gstRateBps: Math.round(l.gstPercent * 100),
+    })),
+  };
+}
+
+/** Pre-fill the editor form from an existing PO (edit mode). */
+export function poDetailToForm(po: PurchaseOrderDetail): POFormValues {
+  return {
+    vendorId: po.vendor.id,
+    projectId: po.project.id,
+    purchaseDate: po.purchaseDate,
+    expectedDelivery: po.expectedDelivery ?? "",
+    invoiceNumber: po.invoiceNumber ?? "",
+    notes: po.notes ?? "",
+    lineItems: po.lineItems.map((l) => ({
+      material: l.material,
+      category: l.category ?? "",
+      quantity: l.quantity,
+      unit: l.unit,
+      rateRupees: toRupees(l.ratePaise),
+      gstPercent: l.gstRateBps / 100,
     })),
   };
 }

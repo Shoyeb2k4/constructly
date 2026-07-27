@@ -31,7 +31,6 @@ import {
 } from "../calc";
 import { DEFAULT_MATERIAL_CATEGORIES } from "../constants";
 import { poComparator } from "../sort";
-import { poDeleteAction } from "../deletion";
 import { demoApprovalRequired } from "@/features/budget/spend";
 import {
   DEMO_VENDORS,
@@ -235,7 +234,6 @@ function toListItem(
     project: { id: po.projectId, name: pm?.name ?? "Unknown", code: pm?.code ?? "" },
     createdBy: { id: po.createdByName, name: po.createdByName },
     createdAt: po.createdAt,
-    archivedAt: po.archivedAt ?? null,
   };
 }
 
@@ -461,11 +459,6 @@ export const demoProcurementRepository: ProcurementRepository = {
     const payments = loadPayments();
     const paid = paidByPO(payments);
     let rows = loadPOs();
-    // Archived POs are hidden unless explicitly requested.
-    rows =
-      filters.archived === "ARCHIVED"
-        ? rows.filter((p) => p.archivedAt)
-        : rows.filter((p) => !p.archivedAt);
     if (filters.status && filters.status !== "ALL") rows = rows.filter((p) => p.status === filters.status);
     if (filters.projectId && filters.projectId !== "ALL") rows = rows.filter((p) => p.projectId === filters.projectId);
     if (filters.vendorId && filters.vendorId !== "ALL") rows = rows.filter((p) => p.vendorId === filters.vendorId);
@@ -591,29 +584,21 @@ export const demoProcurementRepository: ProcurementRepository = {
   },
 
   async deletePurchaseOrder(id) {
+    // Demo actor is the owner; permanently remove the PO (line items are
+    // embedded in the record, so they go with it). Linked payments keep the
+    // record with the PO link nulled.
     const pos = loadPOs();
-    const po = pos.find((p) => p.id === id);
-    if (!po) throw new Error("NOT_FOUND");
-    // Demo actor is the owner.
-    const action = poDeleteAction(po.status, { isOwner: true, isCreator: po.createdByName === ACTOR });
-    if (action !== "DELETE") throw new Error("FORBIDDEN");
+    if (!pos.some((p) => p.id === id)) throw new Error("NOT_FOUND");
     write(K.pos, pos.filter((p) => p.id !== id));
-  },
-
-  async archivePurchaseOrder(id) {
-    const pos = loadPOs();
-    const po = pos.find((p) => p.id === id);
-    if (!po) throw new Error("NOT_FOUND");
-    po.archivedAt = new Date().toISOString();
-    write(K.pos, pos);
-  },
-
-  async unarchivePurchaseOrder(id) {
-    const pos = loadPOs();
-    const po = pos.find((p) => p.id === id);
-    if (!po) throw new Error("NOT_FOUND");
-    po.archivedAt = null;
-    write(K.pos, pos);
+    const payments = loadPayments();
+    let touched = false;
+    for (const pay of payments) {
+      if (pay.purchaseOrderId === id) {
+        pay.purchaseOrderId = null;
+        touched = true;
+      }
+    }
+    if (touched) write(K.payments, payments);
   },
 
   async pendingApprovalCount() {

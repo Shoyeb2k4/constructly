@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ChevronRight, Lock, Send, Check, GitBranch, Trash2, ShoppingCart, CopyPlus, IndianRupee, Archive, ArchiveRestore } from "lucide-react";
+import { ChevronRight, Send, Check, Pencil, Trash2, ShoppingCart, CopyPlus, IndianRupee } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -17,26 +17,18 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { formatDate, relativeTime } from "@/features/projects/format";
-import { poDeleteAction } from "../deletion";
+import { formatDate } from "@/features/projects/format";
 import { usePurchaseOrder, usePOMutations } from "../hooks";
 import { CopyableRef, PaymentModeChip, PaymentStatusBadge } from "./payment-bits";
 import { RecordPaymentDialog } from "./record-payment-dialog";
+import { POEditorSheet } from "./po-editor-sheet";
 
-export function PODetailView({
-  id,
-  isOwner,
-  currentUserId = null,
-}: {
-  id: string;
-  isOwner: boolean;
-  currentUserId?: string | null;
-}) {
+export function PODetailView({ id, isOwner }: { id: string; isOwner: boolean }) {
   const router = useRouter();
   const { data: po, isLoading } = usePurchaseOrder(id);
-  const { submit, approve, revise, duplicate, remove, archive, unarchive } = usePOMutations();
+  const { submit, approve, duplicate, remove } = usePOMutations();
   const [confirmDelete, setConfirmDelete] = React.useState(false);
-  const [confirmArchive, setConfirmArchive] = React.useState(false);
+  const [editOpen, setEditOpen] = React.useState(false);
   const [payOpen, setPayOpen] = React.useState(false);
 
   if (isLoading) {
@@ -59,9 +51,8 @@ export function PODetailView({
   }
 
   const approved = po.status === "APPROVED";
-  const archived = !!po.archivedAt;
-  const isCreator = !!currentUserId && po.createdBy?.id === currentUserId;
-  const removeAction = poDeleteAction(po.status, { isOwner, isCreator });
+  // Drafts are editable by anyone with access; the owner may edit any PO.
+  const canEdit = isOwner || po.status === "DRAFT";
 
   return (
     <div className="space-y-6">
@@ -81,44 +72,29 @@ export function PODetailView({
           )}
         </div>
         <div className="flex items-center gap-2">
-          {archived ? (
-            isOwner && (
-              <Button variant="primary" onClick={() => unarchive.mutate(po.id)} disabled={unarchive.isPending}>
-                <ArchiveRestore />
-                Restore
-              </Button>
-            )
-          ) : (
-            <>
-              {po.status === "DRAFT" && (
-                <Button variant="primary" onClick={() => submit.mutate(po.id)} disabled={submit.isPending}>
-                  <Send />
-                  Submit for approval
-                </Button>
-              )}
-              {po.status === "SUBMITTED" && isOwner && (
-                <Button variant="primary" onClick={() => approve.mutate(po.id)} disabled={approve.isPending}>
-                  <Check />
-                  Approve
-                </Button>
-              )}
-              {approved && (
-                <Button
-                  variant="secondary"
-                  onClick={() => revise.mutate(po.id, { onSuccess: (p) => router.push(`/procurement/${p.id}`) })}
-                  disabled={revise.isPending}
-                >
-                  <GitBranch />
-                  Revise
-                </Button>
-              )}
-              {approved && (
-                <Button variant="primary" onClick={() => setPayOpen(true)}>
-                  <IndianRupee />
-                  Record payment
-                </Button>
-              )}
-            </>
+          {po.status === "DRAFT" && (
+            <Button variant="primary" onClick={() => submit.mutate(po.id)} disabled={submit.isPending}>
+              <Send />
+              Submit for approval
+            </Button>
+          )}
+          {po.status === "SUBMITTED" && isOwner && (
+            <Button variant="primary" onClick={() => approve.mutate(po.id)} disabled={approve.isPending}>
+              <Check />
+              Approve
+            </Button>
+          )}
+          {approved && (
+            <Button variant="primary" onClick={() => setPayOpen(true)}>
+              <IndianRupee />
+              Record payment
+            </Button>
+          )}
+          {canEdit && (
+            <Button variant="secondary" onClick={() => setEditOpen(true)}>
+              <Pencil />
+              Edit
+            </Button>
           )}
           <Button
             variant="ghost"
@@ -129,7 +105,7 @@ export function PODetailView({
             <CopyPlus />
             Duplicate
           </Button>
-          {!archived && removeAction === "DELETE" && (
+          {isOwner && (
             <Button
               variant="ghost"
               size="icon"
@@ -141,35 +117,8 @@ export function PODetailView({
               <Trash2 className="size-4" />
             </Button>
           )}
-          {!archived && removeAction === "ARCHIVE" && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="text-foreground-muted"
-              onClick={() => setConfirmArchive(true)}
-              aria-label="Archive"
-              title="Archive"
-            >
-              <Archive className="size-4" />
-            </Button>
-          )}
         </div>
       </div>
-
-      {archived && (
-        <div className="flex items-center gap-2 rounded-lg border border-border bg-surface-muted/60 px-3 py-2 text-sm text-foreground-muted">
-          <Archive className="size-4" />
-          Archived{po.archivedAt ? ` · ${relativeTime(po.archivedAt)}` : ""} — hidden from lists and excluded from budget. Restore to make it active again.
-        </div>
-      )}
-
-      {approved && !archived && (
-        <div className="flex items-center gap-2 rounded-lg border border-success/30 bg-success-subtle/40 px-3 py-2 text-sm text-success-foreground">
-          <Lock className="size-4" />
-          Approved {po.approvedByName ? `by ${po.approvedByName}` : ""}
-          {po.approvedAt ? ` · ${relativeTime(po.approvedAt)}` : ""} — this PO is locked. Use Revise to change it.
-        </div>
-      )}
 
       <div className="grid gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">
@@ -263,12 +212,14 @@ export function PODetailView({
         defaultPurchaseOrderId={po.id}
       />
 
+      <POEditorSheet open={editOpen} onOpenChange={setEditOpen} editPo={po} />
+
       <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Delete {po.poNumber}?</DialogTitle>
             <DialogDescription>
-              This {po.status.toLowerCase()} purchase order will be permanently removed. This can&apos;t be undone.
+              Are you sure you want to permanently delete this Purchase Order? This action cannot be undone.
             </DialogDescription>
           </DialogHeader>
           <div className="flex justify-end gap-2">
@@ -278,29 +229,7 @@ export function PODetailView({
               disabled={remove.isPending}
               onClick={() => remove.mutate(po.id, { onSuccess: () => router.push("/procurement") })}
             >
-              Delete
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={confirmArchive} onOpenChange={setConfirmArchive}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Archive {po.poNumber}?</DialogTitle>
-            <DialogDescription>
-              Approved purchase orders are never deleted. Archiving hides it from lists and removes it
-              from budget, but keeps it in audit history. You can restore it later.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="flex justify-end gap-2">
-            <Button variant="ghost" onClick={() => setConfirmArchive(false)}>Cancel</Button>
-            <Button
-              variant="primary"
-              disabled={archive.isPending}
-              onClick={() => archive.mutate(po.id, { onSuccess: () => setConfirmArchive(false) })}
-            >
-              Archive
+              Delete permanently
             </Button>
           </div>
         </DialogContent>

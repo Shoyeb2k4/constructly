@@ -11,7 +11,6 @@ import {
   ArrowUpDown,
   X,
   Download,
-  Archive,
   ChevronLeft,
   ChevronRight,
 } from "lucide-react";
@@ -205,17 +204,6 @@ export function ProcurementView({ isOwner }: { isOwner: boolean }) {
           <SlidersHorizontal className="size-4" />
           Filters
           {activeCount > 0 && <Badge variant="primary" className="ml-1">{activeCount}</Badge>}
-        </Button>
-
-        <Button
-          variant={filters.archived === "ARCHIVED" ? "primary" : "secondary"}
-          size="sm"
-          aria-pressed={filters.archived === "ARCHIVED"}
-          onClick={() => patch({ archived: filters.archived === "ARCHIVED" ? undefined : "ARCHIVED" })}
-          title="Show archived purchase orders"
-        >
-          <Archive className="size-4" />
-          Archived
         </Button>
 
         <div className="flex items-center gap-1.5">
