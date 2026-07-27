@@ -83,10 +83,13 @@ describe("normalizeBrandColors", () => {
 });
 
 describe("brandColorsCss", () => {
-  it("emits only set colors", () => {
-    expect(brandColorsCss({ primary: "#123456", success: "#0e9f6e" })).toBe(
-      "--primary:#123456;--success:#0e9f6e",
+  it("emits only set colors and derives --primary-hover from a custom primary", () => {
+    expect(brandColorsCss({ primary: "#3366cc", success: "#0e9f6e" })).toBe(
+      "--primary:#3366cc;--primary-hover:#2d5ab4;--success:#0e9f6e",
     );
+  });
+  it("no --primary-hover when primary is unset", () => {
+    expect(brandColorsCss({ accent: "#0ea5e9" })).toBe("--accent:#0ea5e9");
   });
   it("empty when nothing set (falls back to defaults)", () => {
     expect(brandColorsCss(null)).toBe("");

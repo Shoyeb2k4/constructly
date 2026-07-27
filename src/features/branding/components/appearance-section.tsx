@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useCompanyBranding, useBrandingAssetUrls, useUpdateBrandColors } from "../hooks";
 import { effectiveBrandColors } from "../assets";
+import { contrastOnWhite, MIN_CONTRAST, GOOD_CONTRAST } from "../contrast";
 import { CONSTRUCTLY_BRAND_COLORS } from "../constants";
 import type { BrandColors } from "../types";
 import { AssetUploader } from "./asset-uploader";
@@ -62,6 +63,15 @@ export function AppearanceSection({ isOwner }: { isOwner: boolean }) {
   }
   const set = (k: keyof BrandColors) => (v: string) => setColors((c) => ({ ...c, [k]: v }));
   const disabled = !isOwner || update.isPending;
+
+  // Contrast validation: brand colors sit under white text, so check each
+  // against white. Too-light colors block saving; borderline ones warn.
+  const tooLight = COLOR_KEYS.filter(({ key }) => contrastOnWhite(colors[key]) < MIN_CONTRAST);
+  const borderline = COLOR_KEYS.filter(({ key }) => {
+    const r = contrastOnWhite(colors[key]);
+    return r >= MIN_CONTRAST && r < GOOD_CONTRAST;
+  });
+  const blocked = tooLight.length > 0;
 
   return (
     <div className="space-y-6">
@@ -124,6 +134,21 @@ export function AppearanceSection({ isOwner }: { isOwner: boolean }) {
             </div>
           </div>
 
+          {blocked && (
+            <div
+              role="alert"
+              className="rounded-lg border border-danger/40 bg-danger-subtle/40 px-3 py-2 text-xs text-danger-foreground"
+            >
+              {tooLight.map((c) => c.label).join(", ")} {tooLight.length === 1 ? "is" : "are"} too light for
+              white text and would be hard to read. Choose a darker shade to save.
+            </div>
+          )}
+          {!blocked && borderline.length > 0 && (
+            <div className="rounded-lg border border-warning/40 bg-warning-subtle/40 px-3 py-2 text-xs text-warning-foreground">
+              For best readability, consider darker shades for {borderline.map((c) => c.label).join(", ")}.
+            </div>
+          )}
+
           {isOwner ? (
             <div className="flex items-center justify-end gap-2">
               <Button
@@ -134,7 +159,12 @@ export function AppearanceSection({ isOwner }: { isOwner: boolean }) {
               >
                 Reset to Constructly
               </Button>
-              <Button type="button" variant="primary" disabled={disabled} onClick={() => update.mutate(colors)}>
+              <Button
+                type="button"
+                variant="primary"
+                disabled={disabled || blocked}
+                onClick={() => update.mutate(colors)}
+              >
                 Save colors
               </Button>
             </div>

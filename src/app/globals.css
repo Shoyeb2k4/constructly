@@ -23,6 +23,12 @@
   --primary-hover: #2449d6;
   --primary-foreground: #ffffff;
 
+  --secondary: #64748b;
+  --secondary-foreground: #ffffff;
+
+  --accent: #0ea5e9;
+  --accent-foreground: #ffffff;
+
   --success: #0e9f6e;
   --success-subtle: #e1f5ee;
   --success-foreground: #0f6e56;
@@ -58,6 +64,12 @@
   --primary-hover: #6a8fff;
   --primary-foreground: #ffffff;
 
+  --secondary: #94a3b8;
+  --secondary-foreground: #0b0c0f;
+
+  --accent: #38bdf8;
+  --accent-foreground: #0b0c0f;
+
   --success: #1d9e75;
   --success-subtle: #0e2a23;
   --success-foreground: #5dcaa5;
@@ -91,6 +103,12 @@
   --color-primary: var(--primary);
   --color-primary-hover: var(--primary-hover);
   --color-primary-foreground: var(--primary-foreground);
+
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
 
   --color-success: var(--success);
   --color-success-subtle: var(--success-subtle);

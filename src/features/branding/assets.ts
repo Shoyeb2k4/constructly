@@ -68,10 +68,20 @@ export function normalizeBrandColors(input: unknown): BrandColors {
   return out;
 }
 
+/** Darken a #rrggbb by `amount` (0–1) toward black. */
+export function darkenHex(hex: string, amount: number): string {
+  const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
+  if (!m) return hex;
+  const f = Math.max(0, Math.min(1, 1 - amount));
+  const ch = (h: string) => Math.round(parseInt(h, 16) * f).toString(16).padStart(2, "0");
+  return `#${ch(m[1])}${ch(m[2])}${ch(m[3])}`;
+}
+
 /**
  * CSS custom-property declarations overriding the theme with a company's
  * colors. Only set keys are emitted, so an empty/partial palette falls back to
- * the Constructly defaults already in globals.css.
+ * the Constructly defaults already in globals.css. A custom primary also
+ * derives --primary-hover so hover states stay on-brand.
  */
 export function brandColorsCss(colors: BrandColors | null | undefined): string {
   const c = normalizeBrandColors(colors ?? {});
@@ -80,6 +90,7 @@ export function brandColorsCss(colors: BrandColors | null | undefined): string {
     if (value) decls.push(`${name}:${value}`);
   };
   push("--primary", c.primary);
+  if (c.primary) push("--primary-hover", darkenHex(c.primary, 0.12));
   push("--secondary", c.secondary);
   push("--accent", c.accent);
   push("--success", c.success);

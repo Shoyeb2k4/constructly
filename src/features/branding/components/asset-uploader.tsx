@@ -7,8 +7,19 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { ASSET_SPECS } from "../constants";
 import { validateAsset } from "../assets";
+import { optimizeImage, blobToFile } from "../process-image";
 import { useUploadAsset, useRemoveAsset } from "../hooks";
 import type { BrandAssetKind } from "../types";
+import { CropDialog } from "./crop-dialog";
+
+// Square assets get a fixed crop aspect; others crop freely.
+const CROP_ASPECT: Partial<Record<BrandAssetKind, number>> = {
+  photo: 1,
+  squareLogo: 1,
+  favicon: 1,
+};
+// Cap the longest side when re-encoding (favicons stay tiny).
+const MAX_DIM: Partial<Record<BrandAssetKind, number>> = { favicon: 256 };
 
 export function AssetUploader({
   kind,
@@ -30,19 +41,43 @@ export function AssetUploader({
   const remove = useRemoveAsset();
   const inputRef = React.useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = React.useState(false);
+  const [cropFile, setCropFile] = React.useState<File | null>(null);
   const spec = ASSET_SPECS[kind];
   const busy = upload.isPending || remove.isPending;
 
+  async function startUpload(file: File) {
+    let out = file;
+    try {
+      const optimized = await optimizeImage(file, { maxDim: MAX_DIM[kind] });
+      if (optimized !== file) out = blobToFile(optimized, file.name);
+    } catch {
+      /* fall back to the original file */
+    }
+    upload.mutate({ kind, file: out });
+  }
+
   function handleFiles(files: FileList | null) {
     const file = files?.[0];
+    if (inputRef.current) inputRef.current.value = "";
     if (!file) return;
     const err = validateAsset(kind, { type: file.type, size: file.size });
     if (err) {
       toast.error(err);
       return;
     }
-    upload.mutate({ kind, file });
-    if (inputRef.current) inputRef.current.value = "";
+    // Vector images can't be cropped/rasterized — upload as-is. Everything else
+    // opens the crop dialog first.
+    if (file.type === "image/svg+xml") {
+      void startUpload(file);
+    } else {
+      setCropFile(file);
+    }
+  }
+
+  function onCropped(blob: Blob) {
+    const name = cropFile?.name ?? `${kind}.png`;
+    setCropFile(null);
+    void startUpload(blobToFile(blob, name));
   }
 
   return (
@@ -119,6 +154,13 @@ export function AssetUploader({
           {hint ?? `Max ${Math.round(spec.maxBytes / 1024)} KB`}
         </span>
       </div>
+
+      <CropDialog
+        file={cropFile}
+        aspect={CROP_ASPECT[kind]}
+        onCancel={() => setCropFile(null)}
+        onCropped={onCropped}
+      />
     </div>
   );
 }

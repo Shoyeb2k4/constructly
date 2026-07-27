@@ -32,7 +32,7 @@ export function NavLink({
       <Icon
         className={cn(
           "size-[18px] shrink-0 transition-colors",
-          active ? "text-primary" : "text-foreground-subtle group-hover:text-foreground-muted",
+          active ? "text-accent" : "text-foreground-subtle group-hover:text-foreground-muted",
         )}
       />
       {item.label}
