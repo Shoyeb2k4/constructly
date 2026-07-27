@@ -4,8 +4,10 @@ import { prisma } from "@/lib/db/prisma";
 import { Prisma } from "@/generated/prisma";
 import { requireUser } from "@/lib/auth/current-user";
 import type { SessionUser } from "@/lib/auth/types";
+import { revalidateTag } from "next/cache";
 import { isDemoMode } from "@/lib/env";
 import { createServerClient } from "@/lib/supabase/server";
+import { brandingTag } from "../cache-tags";
 import { companyProfileSchema, brandColorsSchema, profileSchema, assetKindSchema } from "../schema";
 import { ASSET_SPECS } from "../constants";
 import { assetPath, validateAsset, normalizeBrandColors } from "../assets";
@@ -111,6 +113,7 @@ export async function updateCompanyProfile(input: CompanyProfileInput): Promise<
     select: companySelect,
   });
   await logActivity(user, "company.updated", "Updated company details");
+  revalidateTag(brandingTag(user.company.id), "max");
   return toBranding(c);
 }
 
@@ -124,6 +127,7 @@ export async function updateBrandColors(colors: BrandColors): Promise<CompanyBra
     select: companySelect,
   });
   await logActivity(user, "company.branding", "Updated brand colors");
+  revalidateTag(brandingTag(user.company.id), "max");
   return toBranding(c);
 }
 
@@ -230,6 +234,7 @@ export async function setBrandingAsset(kindRaw: string, path: string): Promise<v
     await prisma.company.update({ where: { id: user.company.id }, data: companyAssetData(kind, path) });
   }
   await logActivity(user, "branding.asset", `Updated ${spec.label.toLowerCase()}`);
+  if (!spec.perUser) revalidateTag(brandingTag(user.company.id), "max");
 }
 
 export async function removeBrandingAsset(kindRaw: string): Promise<void> {
@@ -251,6 +256,7 @@ export async function removeBrandingAsset(kindRaw: string): Promise<void> {
     await prisma.company.update({ where: { id: user.company.id }, data: companyAssetData(kind, null) });
   }
   await logActivity(user, "branding.asset.removed", `Removed ${spec.label.toLowerCase()}`);
+  if (!spec.perUser) revalidateTag(brandingTag(user.company.id), "max");
 }
 
 /** Short-lived signed URLs for the company's brand assets (null when unset). */
