@@ -23,7 +23,10 @@ export interface ProjectsRepository {
   assignManager(id: string, pmId: string | null): Promise<ProjectListItem>;
   duplicate(id: string): Promise<ProjectDetail>;
   setArchived(id: string, archived: boolean): Promise<ProjectListItem>;
-  remove(id: string): Promise<void>;
+  remove(id: string, confirm: { password: string; reason?: string | null }): Promise<void>;
+  restore(id: string): Promise<ProjectListItem>;
+  getRetention(): Promise<number | null>;
+  setRetention(days: number | null): Promise<number | null>;
   toggleFavorite(id: string): Promise<boolean>;
 
   addDeadline(projectId: string, title: string, dueDate: string): Promise<ProjectDetail>;

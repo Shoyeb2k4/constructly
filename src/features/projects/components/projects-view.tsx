@@ -10,6 +10,7 @@ import {
   Star,
   Plus,
   Clock,
+  Trash2,
 } from "lucide-react";
 import { PageHeader } from "@/components/patterns/page-header";
 import { EmptyState } from "@/components/patterns/empty-state";
@@ -37,13 +38,49 @@ const DEADLINE_LABEL: Record<DeadlineFilter, string> = {
   MONTH: "Due this month",
 };
 const DEADLINE_OPTIONS: DeadlineFilter[] = ["ALL", "OVERDUE", "TODAY", "WEEK", "MONTH"];
-import { useProjects, useManagers } from "../hooks";
+import { useProjects, useManagers, useProjectRetention, useSetProjectRetention } from "../hooks";
+import { RETENTION_OPTIONS } from "../retention";
 import { useRecentProjects } from "../recently-viewed";
 import { ProjectsTable } from "./projects-table";
 import { ProjectsBoard } from "./projects-board";
 import { CreateProjectSheet } from "./create-project-sheet";
 
 type View = "table" | "board";
+
+/** Recycle-bin header: explains soft delete + lets the Owner set the retention
+ *  policy that governs when a deleted project becomes eligible for admin-only
+ *  permanent cleanup. Nothing is ever auto-deleted. */
+function DeletedBanner() {
+  const { data: retention } = useProjectRetention();
+  const setRetention = useSetProjectRetention();
+  const value = retention == null ? "never" : String(retention);
+
+  return (
+    <div className="flex flex-col gap-2 rounded-[var(--radius)] border border-danger/40 bg-danger-subtle px-3.5 py-2.5 text-sm text-danger-foreground sm:flex-row sm:items-center sm:justify-between">
+      <p className="leading-relaxed">
+        Showing deleted projects. Their data is preserved and hidden from the
+        team — use the <span className="font-medium">⋮</span> menu to restore.
+        Permanent deletion is an admin-only cleanup operation.
+      </p>
+      <label className="flex shrink-0 items-center gap-2 whitespace-nowrap">
+        <span className="text-xs font-medium">Retention</span>
+        <Select
+          value={value}
+          onValueChange={(v) => setRetention.mutate(v === "never" ? null : Number(v))}
+        >
+          <SelectTrigger className="h-8 w-40 bg-surface"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            {RETENTION_OPTIONS.map((o) => (
+              <SelectItem key={o.label} value={o.days == null ? "never" : String(o.days)}>
+                {o.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </label>
+    </div>
+  );
+}
 
 function SegToggle({ view, onChange }: { view: View; onChange: (v: View) => void }) {
   return (
@@ -75,14 +112,25 @@ export function ProjectsView({ isOwner }: { isOwner: boolean }) {
   const [pmId, setPmId] = React.useState<string>("ALL");
   const [favoritesOnly, setFavoritesOnly] = React.useState(false);
   const [includeArchived, setIncludeArchived] = React.useState(false);
+  const [includeDeleted, setIncludeDeleted] = React.useState(false);
   const [deadline, setDeadline] = React.useState<DeadlineFilter>("ALL");
   const [sort, setSort] = React.useState<ProjectSort>("RECENT");
   const [createOpen, setCreateOpen] = React.useState(false);
   const searchRef = React.useRef<HTMLInputElement>(null);
 
   const filters: ProjectFilters = React.useMemo(
-    () => ({ search, stage, type, pmId, favoritesOnly, includeArchived, deadline, sort }),
-    [search, stage, type, pmId, favoritesOnly, includeArchived, deadline, sort],
+    () => ({
+      search,
+      stage,
+      type,
+      pmId,
+      favoritesOnly,
+      includeArchived,
+      includeDeleted: isOwner && includeDeleted,
+      deadline,
+      sort,
+    }),
+    [search, stage, type, pmId, favoritesOnly, includeArchived, includeDeleted, isOwner, deadline, sort],
   );
   const { data: projects, isLoading, isError, refetch } = useProjects(filters);
   const { data: managers = [] } = useManagers();
@@ -219,11 +267,24 @@ export function ProjectsView({ isOwner }: { isOwner: boolean }) {
         <Button
           variant={includeArchived ? "secondary" : "ghost"}
           size="sm"
+          disabled={includeDeleted}
           onClick={() => setIncludeArchived((v) => !v)}
         >
           {includeArchived ? "Hide archived" : "Show archived"}
         </Button>
+        {isOwner && (
+          <Button
+            variant={includeDeleted ? "danger" : "ghost"}
+            size="sm"
+            onClick={() => setIncludeDeleted((v) => !v)}
+          >
+            <Trash2 className="size-4" />
+            {includeDeleted ? "Exit deleted" : "Deleted"}
+          </Button>
+        )}
       </div>
+
+      {includeDeleted && <DeletedBanner />}
 
       {/* Content */}
       {isError ? (

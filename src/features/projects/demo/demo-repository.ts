@@ -9,11 +9,19 @@ import type {
 } from "../types";
 import { STAGE_LABEL } from "../constants";
 import { matchesDeadline, byDeadlineAsc, todayISO } from "../deadline";
+import { purgeEligibleAt } from "../retention";
 import { demoSeed, DEMO_MANAGERS } from "./seed";
 import { demoProjectSpend } from "@/features/budget/spend";
 
 const KEY = "constructly.demo.projects.v1";
+const RETENTION_KEY = "constructly.demo.projects.retention.v1";
 const ACTOR = "Aarav Mehta";
+
+function loadRetention(): number | null {
+  if (typeof window === "undefined") return null;
+  const raw = window.localStorage.getItem(RETENTION_KEY);
+  return raw == null || raw === "null" ? null : Number(raw);
+}
 
 function load(): ProjectDetail[] {
   if (typeof window === "undefined") return demoSeed();
@@ -68,6 +76,10 @@ function toItem(p: ProjectDetail): ProjectListItem {
     tags: p.tags,
     isFavorite: p.isFavorite,
     archivedAt: p.archivedAt,
+    deletedAt: p.deletedAt ?? null,
+    deletedReason: p.deletedReason ?? null,
+    deletedByName: p.deletedByName ?? null,
+    purgeEligibleAt: p.purgeEligibleAt ?? null,
     updatedAt: p.updatedAt,
   };
 }
@@ -95,7 +107,12 @@ function mutate<T>(id: string, fn: (p: ProjectDetail, rows: ProjectDetail[]) => 
 export const demoRepository: ProjectsRepository = {
   async list(filters: ProjectFilters = {}) {
     let rows = load();
-    if (!filters.includeArchived) rows = rows.filter((p) => !p.archivedAt);
+    if (filters.includeDeleted) {
+      rows = rows.filter((p) => p.deletedAt);
+    } else {
+      rows = rows.filter((p) => !p.deletedAt);
+      if (!filters.includeArchived) rows = rows.filter((p) => !p.archivedAt);
+    }
     if (filters.favoritesOnly) rows = rows.filter((p) => p.isFavorite);
     if (filters.stage && filters.stage !== "ALL")
       rows = rows.filter((p) => p.stage === filters.stage);
@@ -126,7 +143,14 @@ export const demoRepository: ProjectsRepository = {
             .slice()
             .sort((a, b) => byDeadlineAsc(a, b) || b.updatedAt.localeCompare(a.updatedAt))
         : rows.slice().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-    return sorted.map(toItem);
+    const retention = loadRetention();
+    return sorted.map((p) => {
+      const item = toItem(p);
+      if (filters.includeDeleted) {
+        item.purgeEligibleAt = purgeEligibleAt(p.deletedAt, retention)?.toISOString() ?? null;
+      }
+      return item;
+    });
   },
 
   async get(id) {
@@ -158,6 +182,7 @@ export const demoRepository: ProjectsRepository = {
       tags: input.tags ?? [],
       isFavorite: false,
       archivedAt: null,
+      deletedAt: null,
       updatedAt: nowIso,
       createdAt: nowIso,
       clientName: input.clientName ?? null,
@@ -243,8 +268,36 @@ export const demoRepository: ProjectsRepository = {
     });
   },
 
-  async remove(id) {
-    save(load().filter((p) => p.id !== id));
+  async remove(id, confirm) {
+    // Demo has no real auth to re-verify; mirror prod behaviour with a soft
+    // delete so the recycle bin + restore work end-to-end in the sandbox.
+    mutate(id, (p) => {
+      p.deletedAt = new Date().toISOString();
+      p.deletedReason = (confirm?.reason ?? "").trim() || null;
+      p.deletedByName = ACTOR;
+      log(p, "project.deleted", `deleted project ${p.code} — ${p.name}`);
+    });
+  },
+
+  async restore(id) {
+    return mutate(id, (p) => {
+      p.deletedAt = null;
+      p.deletedReason = null;
+      p.deletedByName = null;
+      log(p, "project.recovered", `restored project ${p.code} — ${p.name}`);
+      return toItem(p);
+    });
+  },
+
+  async getRetention() {
+    return loadRetention();
+  },
+
+  async setRetention(days) {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(RETENTION_KEY, days == null ? "null" : String(days));
+    }
+    return days;
   },
 
   async toggleFavorite(id) {

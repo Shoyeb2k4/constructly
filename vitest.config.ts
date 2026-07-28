@@ -10,6 +10,10 @@ export default defineConfig({
     include: ["src/**/*.test.{ts,tsx}"],
   },
   resolve: {
-    alias: { "@": path.resolve(__dirname, "./src") },
+    alias: {
+      "@": path.resolve(__dirname, "./src"),
+      // `server-only` isn't resolvable under Vitest's export conditions; stub it.
+      "server-only": path.resolve(__dirname, "./src/test/server-only.stub.ts"),
+    },
   },
 });

@@ -19,6 +19,9 @@ const serverRepository: ProjectsRepository = {
   duplicate: server.duplicateProject,
   setArchived: server.setArchived,
   remove: server.removeProject,
+  restore: server.restoreProject,
+  getRetention: server.getProjectRetention,
+  setRetention: server.setProjectRetention,
   toggleFavorite: server.toggleFavorite,
   addDeadline: server.addDeadline,
   toggleDeadline: server.toggleDeadline,
@@ -39,4 +42,5 @@ export const projectKeys = {
   list: (filters?: ProjectFilters) => ["projects", "list", filters ?? {}] as const,
   detail: (id: string) => ["projects", "detail", id] as const,
   managers: ["projects", "managers"] as const,
+  retention: ["projects", "retention"] as const,
 };

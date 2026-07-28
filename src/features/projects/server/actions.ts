@@ -3,6 +3,7 @@
 import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
 import { requireUser } from "@/lib/auth/current-user";
+import { verifyPassword } from "@/lib/auth/verify-password";
 import type { SessionUser } from "@/lib/auth/types";
 import { STAGE_LABEL } from "../constants";
 import { deadlineBounds, todayISO } from "../deadline";
@@ -17,6 +18,7 @@ import type {
 } from "../types";
 import { Prisma } from "@/generated/prisma";
 import { spendByProject, projectSpend } from "@/features/budget/server-actions";
+import { purgeEligibleAt, isValidRetention } from "../retention";
 
 /**
  * Server-side projects API. Every function enforces authorization (role +
@@ -76,8 +78,11 @@ const listSelect = {
   expectedCompletionDate: true,
   tags: true,
   archivedAt: true,
+  deletedAt: true,
+  deletedReason: true,
   updatedAt: true,
   pm: { select: { id: true, fullName: true } },
+  deletedBy: { select: { fullName: true } },
   favorites: { select: { userId: true } },
 } satisfies Prisma.ProjectSelect;
 
@@ -102,6 +107,10 @@ function toItem(row: ListRow, userId: string): ProjectListItem {
     tags: row.tags,
     isFavorite: row.favorites.some((f) => f.userId === userId),
     archivedAt: row.archivedAt ? row.archivedAt.toISOString() : null,
+    deletedAt: row.deletedAt ? row.deletedAt.toISOString() : null,
+    deletedReason: row.deletedReason ?? null,
+    deletedByName: row.deletedBy?.fullName ?? null,
+    purgeEligibleAt: null, // populated by the deleted-view list (retention policy)
     updatedAt: row.updatedAt.toISOString(),
   };
 }
@@ -112,11 +121,15 @@ export async function listProjects(
   const user = await requireUser();
   const today = todayISO();
   const dl = deadlineBounds(filters.deadline ?? "ALL", today);
+  // The "recycle bin" (deleted-only) view is Owner-only; everyone else always
+  // sees just live projects. Deleted rows never leak to project managers.
+  const showDeleted = user.role === "OWNER" && !!filters.includeDeleted;
   const where: Prisma.ProjectWhereInput = {
     companyId: user.company.id,
-    deletedAt: null,
+    ...(showDeleted
+      ? { deletedAt: { not: null } }
+      : { deletedAt: null, ...(filters.includeArchived ? {} : { archivedAt: null }) }),
     ...(user.role !== "OWNER" ? { pmId: user.id } : {}),
-    ...(filters.includeArchived ? {} : { archivedAt: null }),
     // Overdue excludes closed projects (unless an explicit stage filter is set).
     ...(filters.stage && filters.stage !== "ALL"
       ? { stage: filters.stage }
@@ -155,12 +168,61 @@ export async function listProjects(
         : { updatedAt: "desc" },
   });
   const spend = await spendByProject();
+  // In the recycle-bin view, annotate each row with its retention eligibility.
+  const retentionDays = showDeleted ? await getRetentionDays(user.company.id) : null;
   return rows.map((r) => {
     const item = toItem(r, user.id);
     const s = spend[r.id];
     item.usedPaise = s ? s.laborPaise + s.procurementPaise : 0;
+    if (showDeleted) {
+      item.purgeEligibleAt = purgeEligibleAt(r.deletedAt, retentionDays)?.toISOString() ?? null;
+    }
     return item;
   });
+}
+
+async function getRetentionDays(companyId: string): Promise<number | null> {
+  const c = await prisma.company.findUnique({
+    where: { id: companyId },
+    select: { projectRetentionDays: true },
+  });
+  return c?.projectRetentionDays ?? null;
+}
+
+/** Owner-only: read the company's soft-delete retention policy (days, or null =
+ *  keep indefinitely). */
+export async function getProjectRetention(): Promise<number | null> {
+  const user = await requireUser();
+  assertOwner(user);
+  return getRetentionDays(user.company.id);
+}
+
+/** Owner-only: set the retention policy. Accepts null (indefinite) or one of the
+ *  fixed day choices. This only governs when a deleted project becomes ELIGIBLE
+ *  for an admin-reviewed permanent cleanup — it never hard-deletes anything. */
+export async function setProjectRetention(days: number | null): Promise<number | null> {
+  const user = await requireUser();
+  assertOwner(user);
+  if (!isValidRetention(days)) throw new Error("INVALID_RETENTION");
+  await prisma.company.update({
+    where: { id: user.company.id },
+    data: { projectRetentionDays: days },
+  });
+  await prisma.activityLog.create({
+    data: {
+      companyId: user.company.id,
+      actorId: user.id,
+      action: "company.retention_changed",
+      entityType: "company",
+      entityId: user.company.id,
+      summary:
+        days == null
+          ? "set project retention to keep indefinitely"
+          : `set project retention to ${days} days`,
+      meta: { projectRetentionDays: days },
+    },
+  });
+  return days;
 }
 
 export async function getProject(id: string): Promise<ProjectDetail | null> {
@@ -174,6 +236,7 @@ export async function getProject(id: string): Promise<ProjectDetail | null> {
     },
     include: {
       pm: { select: { id: true, fullName: true } },
+      deletedBy: { select: { fullName: true } },
       favorites: { select: { userId: true } },
       deadlines: { orderBy: { dueDate: "asc" } },
       documents: {
@@ -403,11 +466,86 @@ export async function setArchived(
   return toItem(row, user.id);
 }
 
-export async function removeProject(id: string): Promise<void> {
+/**
+ * Permanently-styled delete: a soft delete under the hood (deletedAt/deletedBy/
+ * deletedReason) so procurement, labour, and financial history is preserved and
+ * the Owner can restore. Gated by re-authentication — the caller must re-enter
+ * their account password, verified server-side (never trusting the client). The
+ * name-typing + checkbox are UX guards; this password check is the real gate.
+ */
+export async function removeProject(
+  id: string,
+  confirm: { password: string; reason?: string | null },
+): Promise<void> {
   const user = await requireUser();
   assertOwner(user);
-  await prisma.project.update({ where: { id }, data: { deletedAt: new Date() } });
-  await logActivity(user, id, "project.deleted", "deleted the project");
+
+  const project = await prisma.project.findFirst({
+    where: { id, companyId: user.company.id, deletedAt: null },
+    select: {
+      id: true,
+      code: true,
+      name: true,
+      _count: {
+        select: {
+          purchaseOrders: true,
+          vendorPayments: true,
+          goodsReceipts: true,
+          labourAttendance: true,
+          contractorSettlements: true,
+          documents: true,
+          notes: true,
+        },
+      },
+    },
+  });
+  if (!project) throw new Error("NOT_FOUND");
+
+  const ok = await verifyPassword(user.email, confirm.password ?? "");
+  if (!ok) throw new Error("INVALID_PASSWORD");
+
+  const reason = (confirm.reason ?? "").trim() || null;
+  await prisma.$transaction([
+    prisma.project.update({
+      where: { id },
+      data: { deletedAt: new Date(), deletedById: user.id, deletedReason: reason },
+    }),
+    prisma.activityLog.create({
+      data: {
+        companyId: user.company.id,
+        actorId: user.id,
+        action: "project.deleted",
+        entityType: "project",
+        entityId: id,
+        summary: `deleted project ${project.code} — ${project.name}`,
+        meta: { code: project.code, name: project.name, reason, related: project._count },
+      },
+    }),
+  ]);
+}
+
+/** Owner-only recovery of a soft-deleted project. Clears the deletion metadata
+ *  and records the restore in the audit trail. */
+export async function restoreProject(id: string): Promise<ProjectListItem> {
+  const user = await requireUser();
+  assertOwner(user);
+  const project = await prisma.project.findFirst({
+    where: { id, companyId: user.company.id, deletedAt: { not: null } },
+    select: { id: true, code: true, name: true },
+  });
+  if (!project) throw new Error("NOT_FOUND");
+  await prisma.project.update({
+    where: { id },
+    data: { deletedAt: null, deletedById: null, deletedReason: null },
+  });
+  await logActivity(
+    user,
+    id,
+    "project.recovered",
+    `restored project ${project.code} — ${project.name}`,
+  );
+  const row = await prisma.project.findUniqueOrThrow({ where: { id }, select: listSelect });
+  return toItem(row, user.id);
 }
 
 export async function toggleFavorite(id: string): Promise<boolean> {

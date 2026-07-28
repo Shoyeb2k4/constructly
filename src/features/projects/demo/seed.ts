@@ -26,6 +26,7 @@ function base(
     tags: [],
     isFavorite: false,
     archivedAt: null,
+    deletedAt: null,
     updatedAt: iso(0),
     createdAt: iso(-150),
     clientName: null,

@@ -67,6 +67,18 @@ function Row({
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <span className="truncate text-sm font-medium">{project.name}</span>
+            {project.deletedAt && (
+              <span
+                title={
+                  project.purgeEligibleAt
+                    ? `Eligible for admin cleanup on ${new Date(project.purgeEligibleAt).toLocaleDateString()}`
+                    : "Recoverable indefinitely"
+                }
+                className="shrink-0 rounded-full bg-danger-subtle px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-danger-foreground"
+              >
+                Deleted
+              </span>
+            )}
             {project.tags.slice(0, 1).map((t) => (
               <TagChip key={t} label={t} className="hidden lg:inline-flex" />
             ))}

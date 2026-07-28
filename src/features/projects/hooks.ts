@@ -40,6 +40,28 @@ export function useManagers() {
   });
 }
 
+/** Company soft-delete retention policy (Owner-only view). */
+export function useProjectRetention() {
+  return useQuery({
+    queryKey: projectKeys.retention,
+    queryFn: () => projectsApi.getRetention(),
+    staleTime: 5 * 60_000,
+  });
+}
+
+export function useSetProjectRetention() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (days: number | null) => projectsApi.setRetention(days),
+    onSuccess: (days) => {
+      qc.setQueryData(projectKeys.retention, days);
+      qc.invalidateQueries({ queryKey: projectKeys.lists });
+      toast.success("Retention policy updated");
+    },
+    onError: () => toast.error("Couldn't update the retention policy"),
+  });
+}
+
 /* ── Mutations ───────────────────────────────────────────────────────── */
 
 export function useCreateProject() {
@@ -118,12 +140,25 @@ export function useProjectActions() {
       toast.success(v.archived ? "Project archived" : "Project restored");
     },
   });
+  // Errors (esp. wrong password) are surfaced inline by the delete dialog via
+  // its own onError, so the sheet stays open for a retry — no toast here.
   const remove = useMutation({
-    mutationFn: (id: string) => projectsApi.remove(id),
+    mutationFn: (v: { id: string; password: string; reason?: string | null }) =>
+      projectsApi.remove(v.id, { password: v.password, reason: v.reason ?? null }),
     onSuccess: () => {
       invalidate();
-      toast.success("Project deleted");
+      toast.success("Project deleted", {
+        description: "Moved to Deleted projects — an owner can restore it.",
+      });
     },
+  });
+  const restore = useMutation({
+    mutationFn: (id: string) => projectsApi.restore(id),
+    onSuccess: (p) => {
+      invalidate();
+      toast.success("Project restored", { description: p.name });
+    },
+    onError: () => toast.error("Couldn't restore the project"),
   });
   const assignManager = useMutation({
     mutationFn: ({ id, pmId }: { id: string; pmId: string | null }) =>
@@ -131,7 +166,7 @@ export function useProjectActions() {
     onSuccess: () => invalidate(),
   });
 
-  return { duplicate, setArchived, remove, assignManager };
+  return { duplicate, setArchived, remove, restore, assignManager };
 }
 
 /** Detail-page actions. Methods return the full detail → we write it straight

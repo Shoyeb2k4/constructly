@@ -78,6 +78,13 @@ export interface ProjectListItem {
   tags: string[];
   isFavorite: boolean;
   archivedAt: string | null;
+  /** Soft-delete metadata. deletedAt !== null ⇒ in the Owner's recycle bin. */
+  deletedAt: string | null;
+  deletedReason?: string | null;
+  deletedByName?: string | null;
+  /** When a soft-deleted project becomes eligible for admin cleanup (retention
+   *  policy). null = deleted-but-indefinite, or the project isn't deleted. */
+  purgeEligibleAt?: string | null;
   updatedAt: string;
 }
 
@@ -106,6 +113,8 @@ export interface ProjectFilters {
   pmId?: string | "ALL";
   tag?: string | "ALL";
   includeArchived?: boolean;
+  /** Owner-only: show the soft-deleted "recycle bin" instead of live projects. */
+  includeDeleted?: boolean;
   favoritesOnly?: boolean;
   /** Deadline (expected-completion) window: overdue / today / this week / this month. */
   deadline?: "ALL" | "OVERDUE" | "TODAY" | "WEEK" | "MONTH";

@@ -9,6 +9,7 @@ import {
   Copy,
   Archive,
   ArchiveRestore,
+  RotateCcw,
   Trash2,
   ExternalLink,
 } from "lucide-react";
@@ -20,15 +21,9 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import type { ProjectListItem } from "../types";
 import { useProjectActions, useToggleFavorite } from "../hooks";
+import { ProjectDeleteDialog } from "./project-delete-dialog";
 
 export function ProjectActionsMenu({
   project,
@@ -39,8 +34,34 @@ export function ProjectActionsMenu({
 }) {
   const router = useRouter();
   const favorite = useToggleFavorite();
-  const { duplicate, setArchived, remove } = useProjectActions();
+  const { duplicate, setArchived, restore } = useProjectActions();
   const [confirmDelete, setConfirmDelete] = React.useState(false);
+
+  // A soft-deleted project (Owner's recycle bin) only offers Restore.
+  if (project.deletedAt) {
+    if (!canManage) return null;
+    return (
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-8 text-foreground-subtle"
+            aria-label="Project actions"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <MoreHorizontal className="size-4" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+          <DropdownMenuItem onSelect={() => restore.mutate(project.id)}>
+            <RotateCcw />
+            Restore project
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    );
+  }
 
   return (
     <>
@@ -92,39 +113,18 @@ export function ProjectActionsMenu({
                 className="text-danger-foreground [&_svg]:text-danger-foreground focus:bg-danger-subtle"
               >
                 <Trash2 />
-                Delete
+                Delete permanently
               </DropdownMenuItem>
             </>
           )}
         </DropdownMenuContent>
       </DropdownMenu>
 
-      <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete {project.name}?</DialogTitle>
-            <DialogDescription>
-              This removes the project and its data from your lists. Consider
-              archiving instead if you may need it later.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="flex justify-end gap-2">
-            <Button variant="ghost" onClick={() => setConfirmDelete(false)}>
-              Cancel
-            </Button>
-            <Button
-              variant="danger"
-              onClick={() =>
-                remove.mutate(project.id, {
-                  onSuccess: () => setConfirmDelete(false),
-                })
-              }
-            >
-              Delete project
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+      <ProjectDeleteDialog
+        project={project}
+        open={confirmDelete}
+        onOpenChange={setConfirmDelete}
+      />
     </>
   );
 }

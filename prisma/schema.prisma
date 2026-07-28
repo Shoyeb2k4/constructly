@@ -95,6 +95,13 @@ model Company {
   /// { primary, secondary, accent, success, warning, danger } hex strings.
   brandColors    Json?   @map("brand_colors")
 
+  /// Retention window (days) after which a soft-deleted project becomes
+  /// ELIGIBLE for admin/scheduled permanent cleanup. null = keep indefinitely
+  /// (never auto-eligible). Nothing is ever hard-deleted automatically; this
+  /// only marks eligibility for a reviewed, admin-only purge. See
+  /// features/projects/retention.ts.
+  projectRetentionDays Int? @map("project_retention_days")
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
@@ -141,6 +148,7 @@ model User {
   company                Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
   createdProjects        Project[]         @relation("ProjectCreatedBy")
   managedProjects        Project[]         @relation("ProjectManager")
+  deletedProjects        Project[]         @relation("ProjectDeletedBy")
   favorites              ProjectFavorite[]
   activity               ActivityLog[]
   createdPurchaseOrders  PurchaseOrder[]   @relation("POCreatedBy")
@@ -211,12 +219,16 @@ model Project {
   createdById            String       @map("created_by_id") @db.Uuid
   archivedAt             DateTime?    @map("archived_at")
   deletedAt              DateTime?    @map("deleted_at")
+  /// Who soft-deleted the project and why (audit/recovery). Null unless deleted.
+  deletedById            String?      @map("deleted_by_id") @db.Uuid
+  deletedReason          String?      @map("deleted_reason")
   createdAt              DateTime     @default(now()) @map("created_at")
   updatedAt              DateTime     @updatedAt @map("updated_at")
 
   company               Company                @relation(fields: [companyId], references: [id], onDelete: Cascade)
   pm                    User?                  @relation("ProjectManager", fields: [pmId], references: [id], onDelete: SetNull)
   createdBy             User                   @relation("ProjectCreatedBy", fields: [createdById], references: [id])
+  deletedBy             User?                  @relation("ProjectDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
   deadlines             Deadline[]
   documents             ProjectDocument[]
   notes                 Note[]
