@@ -115,16 +115,25 @@ export async function inviteMember(input: InviteInput): Promise<void> {
     throw new Error("Couldn't send the invitation email. Please try again.");
   }
 
-  await prisma.invitation.create({
-    data: {
-      companyId: user.company.id,
-      email,
-      role,
-      invitedById: user.id,
-      authUserId,
-      expiresAt: new Date(Date.now() + INVITE_TTL_MS),
-    },
-  });
+  try {
+    await prisma.invitation.create({
+      data: {
+        companyId: user.company.id,
+        email,
+        role,
+        invitedById: user.id,
+        authUserId,
+        expiresAt: new Date(Date.now() + INVITE_TTL_MS),
+      },
+    });
+  } catch (e) {
+    // Partial unique index (company_id, email) WHERE status='PENDING' — a
+    // concurrent invite lost the race.
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+      throw new Error("There's already a pending invite for that email — resend or cancel it.");
+    }
+    throw e;
+  }
   await logTeam(user, "team.invited", user.company.id, `Invited ${email} as ${ROLE_LABEL[role]}`, {
     email,
     role,
