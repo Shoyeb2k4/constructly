@@ -21,15 +21,23 @@ export default async function AppLayout({
 }) {
   const user = await getCurrentUser();
   if (!user) {
-    // Authenticated with Supabase but no workspace yet → finish onboarding;
-    // otherwise this is an anonymous visitor → sign in.
     if (!isDemoMode) {
       const { createServerClient } = await import("@/lib/supabase/server");
       const supabase = await createServerClient();
       const {
         data: { user: authUser },
       } = await supabase.auth.getUser();
-      if (authUser) redirect("/onboarding");
+      if (authUser) {
+        // A row exists but getCurrentUser returned null ⇒ the member is
+        // deactivated. No row ⇒ they either have a pending invite to accept or
+        // still need to create a workspace.
+        const { prisma } = await import("@/lib/db/prisma");
+        const row = await prisma.user.findUnique({ where: { id: authUser.id }, select: { id: true } });
+        if (row) redirect("/deactivated");
+        const { getPendingInviteForMe } = await import("@/features/team/server/actions");
+        const invite = await getPendingInviteForMe();
+        redirect(invite ? "/accept-invite" : "/onboarding");
+      }
     }
     redirect("/sign-in");
   }

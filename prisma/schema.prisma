@@ -99,6 +99,7 @@ model Company {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   users                 User[]
+  invitations           Invitation[]
   projects              Project[]
   activity              ActivityLog[]
   contractors           Contractor[]
@@ -147,9 +148,40 @@ model User {
   vendorFavorites        VendorFavorite[]
   vendorPayments         VendorPayment[]   @relation("PaymentCreatedBy")
   goodsReceipts          GoodsReceipt[]    @relation("GoodsReceiptCreatedBy")
+  sentInvitations        Invitation[]      @relation("InvitationInvitedBy")
 
   @@index([companyId])
   @@map("users")
+}
+
+/// A pending/accepted email invitation to join a company with a given role.
+/// Backed by a Supabase auth invite; the app user row is created on accept.
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  REVOKED
+}
+
+model Invitation {
+  id          String           @id @default(uuid()) @db.Uuid
+  companyId   String           @map("company_id") @db.Uuid
+  email       String
+  role        Role             @default(PROJECT_MANAGER)
+  status      InvitationStatus @default(PENDING)
+  /// The Supabase auth user created by the invite (for cleanup on cancel).
+  authUserId  String?          @map("auth_user_id") @db.Uuid
+  invitedById String           @map("invited_by_id") @db.Uuid
+  acceptedAt  DateTime?        @map("accepted_at")
+  expiresAt   DateTime         @map("expires_at")
+  createdAt   DateTime         @default(now()) @map("created_at")
+  updatedAt   DateTime         @updatedAt @map("updated_at")
+
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  invitedBy User    @relation("InvitationInvitedBy", fields: [invitedById], references: [id])
+
+  @@index([companyId, status])
+  @@index([email])
+  @@map("invitations")
 }
 
 /// A construction project — the spine other modules reference.

@@ -11,6 +11,7 @@ import { AppearanceSection } from "@/features/branding/components/appearance-sec
 import { DocumentsSection } from "@/features/branding/components/documents-section";
 import { ProfileSection } from "@/features/branding/components/profile-section";
 import { MaterialCategoriesCard } from "@/features/procurement/components/material-categories-card";
+import { TeamSection } from "@/features/team/components/team-section";
 import { SettingsPreferences } from "./settings-form";
 
 type SectionId = "company" | "profile" | "documents" | "appearance" | "workspace" | "security";
@@ -68,25 +69,28 @@ export function SettingsView({ isOwner, role }: { isOwner: boolean; role: string
               <MaterialCategoriesCard />
             </div>
           )}
-          {active === "security" && (
-            <Card>
-              <CardHeader>
-                <CardTitle>Security</CardTitle>
-                <CardDescription>Users, roles, and sessions.</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-3 text-sm text-foreground-muted">
-                <div className="flex items-center justify-between">
-                  <span>Your role</span>
-                  <Badge variant={isOwner ? "primary" : "neutral"}>
-                    {role === "OWNER" ? "Owner" : "Project Manager"}
-                  </Badge>
-                </div>
-                <p className="text-xs text-foreground-subtle">
-                  Team member management, role changes, and active-session controls appear here in a later update.
-                </p>
-              </CardContent>
-            </Card>
-          )}
+          {active === "security" &&
+            (isOwner ? (
+              <TeamSection />
+            ) : (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Security</CardTitle>
+                  <CardDescription>Team, roles, and sessions.</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-3 text-sm text-foreground-muted">
+                  <div className="flex items-center justify-between">
+                    <span>Your role</span>
+                    <Badge variant="neutral">
+                      {role === "OWNER" ? "Owner" : "Project Manager"}
+                    </Badge>
+                  </div>
+                  <p className="text-xs text-foreground-subtle">
+                    Only owners can manage team members and roles.
+                  </p>
+                </CardContent>
+              </Card>
+            ))}
         </div>
       </div>
     </div>

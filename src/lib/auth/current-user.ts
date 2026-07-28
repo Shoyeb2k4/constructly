@@ -28,7 +28,10 @@ export const getCurrentUser = cache(async (): Promise<SessionUser | null> => {
     where: { id: user.id },
     include: { company: true },
   });
-  if (!appUser) return null;
+  // A missing row means "not onboarded / invited"; a DISABLED row means the
+  // member was deactivated — both resolve to no session here (the app layout
+  // routes them to onboarding / accept-invite / deactivated respectively).
+  if (!appUser || appUser.status === "DISABLED") return null;
 
   return {
     id: appUser.id,

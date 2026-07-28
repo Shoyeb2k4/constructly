@@ -87,9 +87,12 @@ describe("account-recovery flows", () => {
     expect(FILES.some((f) => /reset-password[\\/]page\.tsx$/.test(f))).toBe(true);
   });
 
-  it("has NO team-invite flow yet (F6 — still open)", () => {
-    const hits = grepSrc(/inviteUserByEmail|generateLink|\/invite|acceptInvite/);
-    expect(hits).toEqual([]);
+  it("HAS a team-invite flow (F6 — fixed)", () => {
+    // Owner invites via Supabase; invitee accepts + is provisioned. Regression
+    // guard — fails if the invite or accept half is removed.
+    expect(grepSrc(/inviteUserByEmail/).length).toBeGreaterThan(0);
+    expect(grepSrc(/acceptInvitation/).length).toBeGreaterThan(0);
+    expect(FILES.some((f) => /accept-invite[\\/]page\.tsx$/.test(f))).toBe(true);
   });
 });
 
