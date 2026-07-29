@@ -23,23 +23,24 @@ import {
 } from "@/components/ui/dropdown-menu";
 import type { ProjectListItem } from "../types";
 import { useProjectActions, useToggleFavorite } from "../hooks";
+import { useCan } from "@/features/rbac/permission-context";
 import { ProjectDeleteDialog } from "./project-delete-dialog";
 
-export function ProjectActionsMenu({
-  project,
-  canManage,
-}: {
-  project: ProjectListItem;
-  canManage: boolean;
-}) {
+export function ProjectActionsMenu({ project }: { project: ProjectListItem }) {
   const router = useRouter();
+  const can = useCan();
   const favorite = useToggleFavorite();
   const { duplicate, setArchived, restore } = useProjectActions();
   const [confirmDelete, setConfirmDelete] = React.useState(false);
 
-  // A soft-deleted project (Owner's recycle bin) only offers Restore.
+  const canDuplicate = can("projects.create");
+  const canArchive = can("projects.archive");
+  const canDelete = can("projects.delete");
+  const showManage = canDuplicate || canArchive || canDelete;
+
+  // A soft-deleted project (recycle bin) only offers Restore (delete authority).
   if (project.deletedAt) {
-    if (!canManage) return null;
+    if (!canDelete) return null;
     return (
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
@@ -89,24 +90,28 @@ export function ProjectActionsMenu({
             {project.isFavorite ? <StarOff /> : <Star />}
             {project.isFavorite ? "Unpin" : "Pin to favorites"}
           </DropdownMenuItem>
-          {canManage && (
+          {showManage && <DropdownMenuSeparator />}
+          {canDuplicate && (
+            <DropdownMenuItem onSelect={() => duplicate.mutate(project.id)}>
+              <Copy />
+              Duplicate
+            </DropdownMenuItem>
+          )}
+          {canArchive && (
+            <DropdownMenuItem
+              onSelect={() =>
+                setArchived.mutate({
+                  id: project.id,
+                  archived: !project.archivedAt,
+                })
+              }
+            >
+              {project.archivedAt ? <ArchiveRestore /> : <Archive />}
+              {project.archivedAt ? "Restore" : "Archive"}
+            </DropdownMenuItem>
+          )}
+          {canDelete && (
             <>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onSelect={() => duplicate.mutate(project.id)}>
-                <Copy />
-                Duplicate
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onSelect={() =>
-                  setArchived.mutate({
-                    id: project.id,
-                    archived: !project.archivedAt,
-                  })
-                }
-              >
-                {project.archivedAt ? <ArchiveRestore /> : <Archive />}
-                {project.archivedAt ? "Restore" : "Archive"}
-              </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 onSelect={() => setConfirmDelete(true)}

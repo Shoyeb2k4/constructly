@@ -4,6 +4,7 @@ import { getCurrentUser } from "@/lib/auth/current-user";
 import { isDemoMode } from "@/lib/env";
 import { AppShell } from "@/components/shell/app-shell";
 import { getLayoutBranding } from "@/features/branding/server/layout-branding";
+import { PermissionProvider } from "@/features/rbac/permission-context";
 
 /** Company-aware title + favicon after login (Constructly before). */
 export async function generateMetadata(): Promise<Metadata> {
@@ -52,7 +53,7 @@ export default async function AppLayout({
         <style dangerouslySetInnerHTML={{ __html: `:root{${branding.colorsCss}}` }} />
       )}
       <AppShell user={user} branding={{ name: branding.name, logoUrl: branding.logoUrl }}>
-        {children}
+        <PermissionProvider permissions={user.permissions ?? []}>{children}</PermissionProvider>
       </AppShell>
     </>
   );

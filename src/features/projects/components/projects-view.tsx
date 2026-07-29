@@ -40,6 +40,7 @@ const DEADLINE_LABEL: Record<DeadlineFilter, string> = {
 const DEADLINE_OPTIONS: DeadlineFilter[] = ["ALL", "OVERDUE", "TODAY", "WEEK", "MONTH"];
 import { useProjects, useManagers, useProjectRetention, useSetProjectRetention } from "../hooks";
 import { RETENTION_OPTIONS } from "../retention";
+import { useCan } from "@/features/rbac/permission-context";
 import { useRecentProjects } from "../recently-viewed";
 import { ProjectsTable } from "./projects-table";
 import { ProjectsBoard } from "./projects-board";
@@ -104,7 +105,11 @@ function SegToggle({ view, onChange }: { view: View; onChange: (v: View) => void
   );
 }
 
-export function ProjectsView({ isOwner }: { isOwner: boolean }) {
+export function ProjectsView() {
+  const can = useCan();
+  const canCreate = can("projects.create");
+  const canEdit = can("projects.edit");
+  const canSeeDeleted = can("projects.delete");
   const [view, setView] = React.useState<View>("table");
   const [search, setSearch] = React.useState("");
   const [stage, setStage] = React.useState<ProjectStage | "ALL">("ALL");
@@ -126,11 +131,11 @@ export function ProjectsView({ isOwner }: { isOwner: boolean }) {
       pmId,
       favoritesOnly,
       includeArchived,
-      includeDeleted: isOwner && includeDeleted,
+      includeDeleted: canSeeDeleted && includeDeleted,
       deadline,
       sort,
     }),
-    [search, stage, type, pmId, favoritesOnly, includeArchived, includeDeleted, isOwner, deadline, sort],
+    [search, stage, type, pmId, favoritesOnly, includeArchived, includeDeleted, canSeeDeleted, deadline, sort],
   );
   const { data: projects, isLoading, isError, refetch } = useProjects(filters);
   const { data: managers = [] } = useManagers();
@@ -145,7 +150,7 @@ export function ProjectsView({ isOwner }: { isOwner: boolean }) {
         el instanceof HTMLTextAreaElement ||
         (el as HTMLElement)?.isContentEditable;
       if (typing) return;
-      if (e.key === "c" && isOwner) {
+      if (e.key === "c" && canCreate) {
         e.preventDefault();
         setCreateOpen(true);
       } else if (e.key === "/") {
@@ -155,7 +160,7 @@ export function ProjectsView({ isOwner }: { isOwner: boolean }) {
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [isOwner]);
+  }, [canCreate]);
 
   const hasFilters =
     !!search ||
@@ -174,7 +179,7 @@ export function ProjectsView({ isOwner }: { isOwner: boolean }) {
         actions={
           <div className="flex items-center gap-2">
             <SegToggle view={view} onChange={setView} />
-            {isOwner && (
+            {canCreate && (
               <Button variant="primary" onClick={() => setCreateOpen(true)}>
                 <Plus />
                 New project
@@ -272,7 +277,7 @@ export function ProjectsView({ isOwner }: { isOwner: boolean }) {
         >
           {includeArchived ? "Hide archived" : "Show archived"}
         </Button>
-        {isOwner && (
+        {canSeeDeleted && (
           <Button
             variant={includeDeleted ? "danger" : "ghost"}
             size="sm"
@@ -320,7 +325,7 @@ export function ProjectsView({ isOwner }: { isOwner: boolean }) {
             title="No projects yet"
             description="Create your first project to track budget, deadlines, labor, and procurement in one place."
             action={
-              isOwner ? (
+              canCreate ? (
                 <Button variant="primary" onClick={() => setCreateOpen(true)}>
                   <Plus />
                   Create your first project
@@ -330,9 +335,9 @@ export function ProjectsView({ isOwner }: { isOwner: boolean }) {
           />
         )
       ) : view === "table" ? (
-        <ProjectsTable projects={projects!} canManage={isOwner} />
+        <ProjectsTable projects={projects!} />
       ) : (
-        <ProjectsBoard projects={projects!} canManage />
+        <ProjectsBoard projects={projects!} canDrag={canEdit} />
       )}
 
       <CreateProjectSheet open={createOpen} onOpenChange={setCreateOpen} />

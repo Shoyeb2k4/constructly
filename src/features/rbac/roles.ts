@@ -49,15 +49,16 @@ export const SYSTEM_ROLES: SystemRoleDef[] = [
     permissions: ADMIN_PERMISSIONS,
   },
   {
+    // Matches the legacy PROJECT_MANAGER exactly: can view/edit/archive their
+    // ASSIGNED projects (no create/assign/delete, no *_all broad scope). Broader
+    // capability is granted per-permission via the Roles UI in a later phase.
     key: "project_manager",
     name: "Project Manager",
-    description: "Runs projects: create, edit, archive, and assign members.",
+    description: "Manages their assigned projects: view, edit, and archive.",
     permissions: [
       "projects.view",
-      "projects.create",
       "projects.edit",
       "projects.archive",
-      "projects.assign",
       "attendance.view",
       "attendance.export",
       "vendors.view",

@@ -27,11 +27,9 @@ function initials(name: string) {
 
 function Row({
   project,
-  canManage,
   onOpen,
 }: {
   project: ProjectListItem;
-  canManage: boolean;
   onOpen: (id: string) => void;
 }) {
   const favorite = useToggleFavorite();
@@ -129,19 +127,13 @@ function Row({
       </div>
 
       <div className="flex justify-end">
-        <ProjectActionsMenu project={project} canManage={canManage} />
+        <ProjectActionsMenu project={project} />
       </div>
     </div>
   );
 }
 
-export function ProjectsTable({
-  projects,
-  canManage,
-}: {
-  projects: ProjectListItem[];
-  canManage: boolean;
-}) {
+export function ProjectsTable({ projects }: { projects: ProjectListItem[] }) {
   const router = useRouter();
   const parentRef = React.useRef<HTMLDivElement>(null);
   const onOpen = (id: string) => router.push(`/projects/${id}`);
@@ -190,11 +182,7 @@ export function ProjectsTable({
                 transform: `translateY(${v.start}px)`,
               }}
             >
-              <Row
-                project={projects[v.index]}
-                canManage={canManage}
-                onOpen={onOpen}
-              />
+              <Row project={projects[v.index]} onOpen={onOpen} />
             </div>
           ))}
         </div>

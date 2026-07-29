@@ -95,17 +95,17 @@ function CardBody({ project }: { project: ProjectListItem }) {
 
 function DraggableCard({
   project,
-  canManage,
+  canDrag,
   onOpen,
 }: {
   project: ProjectListItem;
-  canManage: boolean;
+  canDrag: boolean;
   onOpen: (id: string) => void;
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: project.id,
     data: { stage: project.stage },
-    disabled: !canManage,
+    disabled: !canDrag,
   });
 
   return (
@@ -117,7 +117,7 @@ function DraggableCard({
         isDragging && "opacity-40",
       )}
     >
-      {canManage && (
+      {canDrag && (
         <span
           {...listeners}
           {...attributes}
@@ -136,12 +136,12 @@ function DraggableCard({
 function Column({
   stage,
   projects,
-  canManage,
+  canDrag,
   onOpen,
 }: {
   stage: ProjectStage;
   projects: ProjectListItem[];
-  canManage: boolean;
+  canDrag: boolean;
   onOpen: (id: string) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: stage });
@@ -161,7 +161,7 @@ function Column({
         )}
       >
         {projects.map((p) => (
-          <DraggableCard key={p.id} project={p} canManage={canManage} onOpen={onOpen} />
+          <DraggableCard key={p.id} project={p} canDrag={canDrag} onOpen={onOpen} />
         ))}
       </div>
     </div>
@@ -170,10 +170,10 @@ function Column({
 
 export function ProjectsBoard({
   projects,
-  canManage,
+  canDrag,
 }: {
   projects: ProjectListItem[];
-  canManage: boolean;
+  canDrag: boolean;
 }) {
   const router = useRouter();
   const changeStage = useChangeStage();
@@ -216,7 +216,7 @@ export function ProjectsBoard({
             key={stage}
             stage={stage}
             projects={byStage.get(stage) ?? []}
-            canManage={canManage}
+            canDrag={canDrag}
             onOpen={(id) => router.push(`/projects/${id}`)}
           />
         ))}

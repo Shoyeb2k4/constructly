@@ -24,6 +24,9 @@ export const PERMISSION_CATALOG = [
       { key: "projects.archive", label: "Archive" },
       { key: "projects.delete", label: "Delete", danger: true },
       { key: "projects.assign", label: "Assign Members" },
+      // Scope grants: hold projects to the user's assigned set unless granted.
+      { key: "projects.view_all", label: "View All Projects" },
+      { key: "projects.edit_all", label: "Edit Any Project", danger: true },
     ],
   },
   {

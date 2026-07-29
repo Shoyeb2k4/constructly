@@ -14,6 +14,7 @@ import type { ProjectListItem } from "../../types";
 import { useProject, useToggleFavorite, useProjectDetailActions } from "../../hooks";
 import { pushRecent } from "../../recently-viewed";
 import { ProjectActionsMenu } from "../project-actions-menu";
+import { useCan } from "@/features/rbac/permission-context";
 import { StageStepper } from "./stage-stepper";
 import { OverviewTab } from "./overview-tab";
 import { DeadlinesTab } from "./deadlines-tab";
@@ -25,13 +26,12 @@ import { ProjectLabourTab } from "@/features/labor/components/project-labour-tab
 
 export function ProjectDetailView({
   id,
-  isOwner,
   userId,
 }: {
   id: string;
-  isOwner: boolean;
   userId: string;
 }) {
+  const can = useCan();
   const { data: project, isLoading } = useProject(id);
   const favorite = useToggleFavorite();
   const { changeStage } = useProjectDetailActions(id);
@@ -76,7 +76,10 @@ export function ProjectDetailView({
     );
   }
 
-  const canEdit = isOwner || project.pm?.id === userId;
+  // Permission (projects.edit) AND ownership: broad edit_all edits any project,
+  // otherwise only the assigned PM's own project. Server enforces the same.
+  const canEdit =
+    can("projects.edit") && (can("projects.edit_all") || project.pm?.id === userId);
 
   return (
     <div className="space-y-6">
@@ -100,7 +103,7 @@ export function ProjectDetailView({
               </button>
             </div>
           </div>
-          <ProjectActionsMenu project={project as ProjectListItem} canManage={isOwner} />
+          <ProjectActionsMenu project={project as ProjectListItem} />
         </div>
 
         <StageStepper

@@ -1,14 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { SessionUser } from "@/lib/auth/types";
+import { ALL_PERMISSIONS } from "@/features/rbac/permissions";
 
 const OWNER: SessionUser = {
   id: "o1",
   email: "owner@x.com",
   fullName: "Owner",
   role: "OWNER",
+  permissions: [...ALL_PERMISSIONS],
   company: { id: "c1", name: "Co" },
 };
-const PM: SessionUser = { ...OWNER, id: "pm1", role: "PROJECT_MANAGER" };
+// A project manager holds no projects.delete → delete/restore must be forbidden.
+const PM: SessionUser = { ...OWNER, id: "pm1", role: "PROJECT_MANAGER", permissions: [] };
 
 const h = vi.hoisted(() => ({
   user: null as SessionUser | null,
@@ -34,6 +37,7 @@ const liveProject = {
   id: "p1",
   code: "PRJ-0001",
   name: "Riverside Villa",
+  pmId: null,
   _count: {
     purchaseOrders: 3,
     vendorPayments: 2,
@@ -156,7 +160,7 @@ describe("restoreProject", () => {
   });
 
   it("clears the deletion metadata and logs the restore", async () => {
-    h.prisma.project.findFirst.mockResolvedValue({ id: "p1", code: "PRJ-0001", name: "Riverside Villa" });
+    h.prisma.project.findFirst.mockResolvedValue({ id: "p1", code: "PRJ-0001", name: "Riverside Villa", pmId: null });
     await restoreProject("p1");
     // Scoped to a currently-deleted project.
     expect(h.prisma.project.findFirst).toHaveBeenCalledWith(

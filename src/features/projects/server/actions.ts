@@ -2,7 +2,7 @@
 
 import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
-import { requireUser } from "@/lib/auth/current-user";
+import { requirePermission, hasPermission } from "@/lib/auth/permissions";
 import { verifyPassword } from "@/lib/auth/verify-password";
 import type { SessionUser } from "@/lib/auth/types";
 import { STAGE_LABEL } from "../constants";
@@ -21,14 +21,12 @@ import { spendByProject, projectSpend } from "@/features/budget/server-actions";
 import { purgeEligibleAt, isValidRetention } from "../retention";
 
 /**
- * Server-side projects API. Every function enforces authorization (role +
- * assignment) on top of Postgres RLS — defense in depth. Never trusts a
- * client-supplied companyId; it derives from the session.
+ * Server-side projects API. Authorization is RBAC-first: every action requires a
+ * permission (requirePermission) BEFORE any work, and mutations additionally
+ * enforce ownership/assignment scope so `projects.edit` alone never lets a user
+ * touch a project they aren't assigned to (permission ≠ ownership). Company
+ * isolation is always enforced via companyId; never trusts a client companyId.
  */
-
-function assertOwner(user: SessionUser) {
-  if (user.role !== "OWNER") throw new Error("FORBIDDEN");
-}
 
 /** Server-side input validation for project creation (never trust the client). */
 const createProjectInputSchema = z.object({
@@ -38,13 +36,27 @@ const createProjectInputSchema = z.object({
   procurementBudgetPaise: z.number().int().min(0).nullable().optional(),
 });
 
-async function assertCanEdit(user: SessionUser, projectId: string) {
+/**
+ * Require an action permission AND the ownership/assignment scope for a LIVE
+ * project. The broad `projects.edit_all` grant unlocks any project in the
+ * company; otherwise the caller must be the assigned PM. Preserves the legacy
+ * "owner-or-assigned" rule while separating permission (what) from ownership
+ * (which). Company-scoped throughout.
+ */
+async function requireProjectWrite(
+  permission: "projects.edit" | "projects.archive" | "projects.assign",
+  projectId: string,
+): Promise<SessionUser> {
+  const user = await requirePermission(permission);
   const p = await prisma.project.findFirst({
     where: { id: projectId, companyId: user.company.id, deletedAt: null },
     select: { pmId: true },
   });
   if (!p) throw new Error("NOT_FOUND");
-  if (user.role !== "OWNER" && p.pmId !== user.id) throw new Error("FORBIDDEN");
+  if (!hasPermission(user, "projects.edit_all") && p.pmId !== user.id) {
+    throw new Error("FORBIDDEN");
+  }
+  return user;
 }
 
 async function logActivity(
@@ -118,18 +130,21 @@ function toItem(row: ListRow, userId: string): ProjectListItem {
 export async function listProjects(
   filters: ProjectFilters = {},
 ): Promise<ProjectListItem[]> {
-  const user = await requireUser();
+  const user = await requirePermission("projects.view");
   const today = todayISO();
   const dl = deadlineBounds(filters.deadline ?? "ALL", today);
-  // The "recycle bin" (deleted-only) view is Owner-only; everyone else always
-  // sees just live projects. Deleted rows never leak to project managers.
-  const showDeleted = user.role === "OWNER" && !!filters.includeDeleted;
+  // Scope: only holders of projects.view_all see the whole company; everyone
+  // else is limited to their assigned projects (ownership, not just permission).
+  const canViewAll = hasPermission(user, "projects.view_all");
+  // The recycle bin is delete-authority only; it never leaks to viewers who
+  // can't delete (preserves the previous Owner-only behaviour).
+  const showDeleted = hasPermission(user, "projects.delete") && !!filters.includeDeleted;
   const where: Prisma.ProjectWhereInput = {
     companyId: user.company.id,
     ...(showDeleted
       ? { deletedAt: { not: null } }
       : { deletedAt: null, ...(filters.includeArchived ? {} : { archivedAt: null }) }),
-    ...(user.role !== "OWNER" ? { pmId: user.id } : {}),
+    ...(canViewAll ? {} : { pmId: user.id }),
     // Overdue excludes closed projects (unless an explicit stage filter is set).
     ...(filters.stage && filters.stage !== "ALL"
       ? { stage: filters.stage }
@@ -189,20 +204,18 @@ async function getRetentionDays(companyId: string): Promise<number | null> {
   return c?.projectRetentionDays ?? null;
 }
 
-/** Owner-only: read the company's soft-delete retention policy (days, or null =
- *  keep indefinitely). */
+/** Retention policy read — gated by delete authority (who can see the recycle
+ *  bin). Days, or null = keep indefinitely. */
 export async function getProjectRetention(): Promise<number | null> {
-  const user = await requireUser();
-  assertOwner(user);
+  const user = await requirePermission("projects.delete");
   return getRetentionDays(user.company.id);
 }
 
-/** Owner-only: set the retention policy. Accepts null (indefinite) or one of the
- *  fixed day choices. This only governs when a deleted project becomes ELIGIBLE
- *  for an admin-reviewed permanent cleanup — it never hard-deletes anything. */
+/** Set the retention policy (delete authority). Accepts null (indefinite) or one
+ *  of the fixed day choices. This only governs when a deleted project becomes
+ *  ELIGIBLE for an admin-reviewed permanent cleanup — it never hard-deletes. */
 export async function setProjectRetention(days: number | null): Promise<number | null> {
-  const user = await requireUser();
-  assertOwner(user);
+  const user = await requirePermission("projects.delete");
   if (!isValidRetention(days)) throw new Error("INVALID_RETENTION");
   await prisma.company.update({
     where: { id: user.company.id },
@@ -226,13 +239,13 @@ export async function setProjectRetention(days: number | null): Promise<number |
 }
 
 export async function getProject(id: string): Promise<ProjectDetail | null> {
-  const user = await requireUser();
+  const user = await requirePermission("projects.view");
   const p = await prisma.project.findFirst({
     where: {
       id,
       companyId: user.company.id,
       deletedAt: null,
-      ...(user.role !== "OWNER" ? { pmId: user.id } : {}),
+      ...(hasPermission(user, "projects.view_all") ? {} : { pmId: user.id }),
     },
     include: {
       pm: { select: { id: true, fullName: true } },
@@ -311,8 +324,7 @@ async function nextCode(companyId: string): Promise<string> {
 export async function createProject(
   input: CreateProjectInput,
 ): Promise<ProjectDetail> {
-  const user = await requireUser();
-  assertOwner(user);
+  const user = await requirePermission("projects.create");
   createProjectInputSchema.parse(input);
   const created = await prisma.project.create({
     data: {
@@ -349,8 +361,7 @@ export async function updateProject(
   id: string,
   patch: UpdateProjectInput,
 ): Promise<ProjectDetail> {
-  const user = await requireUser();
-  await assertCanEdit(user, id);
+  const user = await requireProjectWrite("projects.edit", id);
   await prisma.project.update({
     where: { id },
     data: {
@@ -394,8 +405,7 @@ export async function changeStage(
   id: string,
   stage: ProjectStage,
 ): Promise<ProjectListItem> {
-  const user = await requireUser();
-  await assertCanEdit(user, id);
+  const user = await requireProjectWrite("projects.edit", id);
   await prisma.project.update({ where: { id }, data: { stage } });
   await logActivity(user, id, "stage.changed", `advanced to ${STAGE_LABEL[stage]}`);
   const row = await prisma.project.findUniqueOrThrow({ where: { id }, select: listSelect });
@@ -406,8 +416,7 @@ export async function assignManager(
   id: string,
   pmId: string | null,
 ): Promise<ProjectListItem> {
-  const user = await requireUser();
-  assertOwner(user);
+  const user = await requireProjectWrite("projects.assign", id);
   await prisma.project.update({ where: { id }, data: { pmId } });
   await logActivity(user, id, "pm.assigned", pmId ? "assigned a manager" : "unassigned manager");
   const row = await prisma.project.findUniqueOrThrow({ where: { id }, select: listSelect });
@@ -415,8 +424,9 @@ export async function assignManager(
 }
 
 export async function duplicateProject(id: string): Promise<ProjectDetail> {
-  const user = await requireUser();
-  assertOwner(user);
+  // Duplicating creates a new project → gated by create. Source must be in the
+  // caller's company (isolation preserved).
+  const user = await requirePermission("projects.create");
   const src = await prisma.project.findFirstOrThrow({
     where: { id, companyId: user.company.id },
   });
@@ -450,8 +460,7 @@ export async function setArchived(
   id: string,
   archived: boolean,
 ): Promise<ProjectListItem> {
-  const user = await requireUser();
-  await assertCanEdit(user, id);
+  const user = await requireProjectWrite("projects.archive", id);
   await prisma.project.update({
     where: { id },
     data: { archivedAt: archived ? new Date() : null },
@@ -477,8 +486,7 @@ export async function removeProject(
   id: string,
   confirm: { password: string; reason?: string | null },
 ): Promise<void> {
-  const user = await requireUser();
-  assertOwner(user);
+  const user = await requirePermission("projects.delete");
 
   const project = await prisma.project.findFirst({
     where: { id, companyId: user.company.id, deletedAt: null },
@@ -486,6 +494,7 @@ export async function removeProject(
       id: true,
       code: true,
       name: true,
+      pmId: true,
       _count: {
         select: {
           purchaseOrders: true,
@@ -500,6 +509,10 @@ export async function removeProject(
     },
   });
   if (!project) throw new Error("NOT_FOUND");
+  // Ownership scope: broad edit_all deletes any; otherwise only assigned.
+  if (!hasPermission(user, "projects.edit_all") && project.pmId !== user.id) {
+    throw new Error("FORBIDDEN");
+  }
 
   const ok = await verifyPassword(user.email, confirm.password ?? "");
   if (!ok) throw new Error("INVALID_PASSWORD");
@@ -527,13 +540,15 @@ export async function removeProject(
 /** Owner-only recovery of a soft-deleted project. Clears the deletion metadata
  *  and records the restore in the audit trail. */
 export async function restoreProject(id: string): Promise<ProjectListItem> {
-  const user = await requireUser();
-  assertOwner(user);
+  const user = await requirePermission("projects.delete");
   const project = await prisma.project.findFirst({
     where: { id, companyId: user.company.id, deletedAt: { not: null } },
-    select: { id: true, code: true, name: true },
+    select: { id: true, code: true, name: true, pmId: true },
   });
   if (!project) throw new Error("NOT_FOUND");
+  if (!hasPermission(user, "projects.edit_all") && project.pmId !== user.id) {
+    throw new Error("FORBIDDEN");
+  }
   await prisma.project.update({
     where: { id },
     data: { deletedAt: null, deletedById: null, deletedReason: null },
@@ -549,7 +564,8 @@ export async function restoreProject(id: string): Promise<ProjectListItem> {
 }
 
 export async function toggleFavorite(id: string): Promise<boolean> {
-  const user = await requireUser();
+  // Personal pin — available to anyone who can view projects.
+  const user = await requirePermission("projects.view");
   const existing = await prisma.projectFavorite.findUnique({
     where: { userId_projectId: { userId: user.id, projectId: id } },
   });
@@ -568,8 +584,7 @@ export async function addDeadline(
   title: string,
   dueDate: string,
 ): Promise<ProjectDetail> {
-  const user = await requireUser();
-  await assertCanEdit(user, projectId);
+  const user = await requireProjectWrite("projects.edit", projectId);
   await prisma.deadline.create({
     data: { companyId: user.company.id, projectId, title, dueDate: new Date(dueDate) },
   });
@@ -581,8 +596,7 @@ export async function toggleDeadline(
   projectId: string,
   deadlineId: string,
 ): Promise<ProjectDetail> {
-  const user = await requireUser();
-  await assertCanEdit(user, projectId);
+  await requireProjectWrite("projects.edit", projectId);
   const d = await prisma.deadline.findUniqueOrThrow({ where: { id: deadlineId } });
   await prisma.deadline.update({
     where: { id: deadlineId },
@@ -595,15 +609,13 @@ export async function removeDeadline(
   projectId: string,
   deadlineId: string,
 ): Promise<ProjectDetail> {
-  const user = await requireUser();
-  await assertCanEdit(user, projectId);
+  await requireProjectWrite("projects.edit", projectId);
   await prisma.deadline.delete({ where: { id: deadlineId } });
   return (await getProject(projectId))!;
 }
 
 export async function addNote(projectId: string, body: string): Promise<ProjectDetail> {
-  const user = await requireUser();
-  await assertCanEdit(user, projectId);
+  const user = await requireProjectWrite("projects.edit", projectId);
   await prisma.note.create({
     data: {
       companyId: user.company.id,
@@ -621,8 +633,7 @@ export async function addDocument(
   projectId: string,
   doc: { filename: string; sizeBytes: number; mimeType: string },
 ): Promise<ProjectDetail> {
-  const user = await requireUser();
-  await assertCanEdit(user, projectId);
+  const user = await requireProjectWrite("projects.edit", projectId);
   const category = doc.mimeType.startsWith("image/")
     ? "PHOTO"
     : doc.mimeType === "application/pdf"
@@ -648,14 +659,14 @@ export async function removeDocument(
   projectId: string,
   docId: string,
 ): Promise<ProjectDetail> {
-  const user = await requireUser();
-  await assertCanEdit(user, projectId);
+  await requireProjectWrite("projects.edit", projectId);
   await prisma.projectDocument.delete({ where: { id: docId } });
   return (await getProject(projectId))!;
 }
 
 export async function listManagers(): Promise<Manager[]> {
-  const user = await requireUser();
+  // Used by the project filter + assignment dropdowns → viewer-level.
+  const user = await requirePermission("projects.view");
   const rows = await prisma.user.findMany({
     where: { companyId: user.company.id, role: "PROJECT_MANAGER", status: "ACTIVE" },
     select: { id: true, fullName: true },
