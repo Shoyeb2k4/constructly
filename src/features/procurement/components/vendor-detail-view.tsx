@@ -4,6 +4,7 @@ import * as React from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
+import { useCan } from "@/features/rbac/permission-context";
 import { procurementKeys } from "../data";
 import {
   ChevronRight,
@@ -60,7 +61,8 @@ function StatTile({ label, children }: { label: string; children: React.ReactNod
   );
 }
 
-export function VendorDetailView({ id, isOwner }: { id: string; isOwner: boolean }) {
+export function VendorDetailView({ id }: { id: string }) {
+  const can = useCan();
   const { data: vendor, isLoading } = useVendor(id);
   const { toggleFavorite, addDocument, removeDocument } = useVendorMutations();
   const qc = useQueryClient();
@@ -273,7 +275,7 @@ export function VendorDetailView({ id, isOwner }: { id: string; isOwner: boolean
                     </div>
                     <CopyableRef value={p.referenceNumber} />
                     <span className="shrink-0 text-xs text-foreground-subtle">{formatDate(p.date)}</span>
-                    {isOwner && (
+                    {can("payments.delete") && (
                       <button
                         onClick={() => setConfirmPaymentId(p.id)}
                         className="text-foreground-subtle hover:text-danger-foreground"

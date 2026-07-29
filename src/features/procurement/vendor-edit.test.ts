@@ -3,6 +3,7 @@
  * Drives the real server action with Prisma + auth mocked (no DB touched).
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { ALL_PERMISSIONS } from "@/features/rbac/permissions";
 
 vi.mock("@/lib/auth/current-user", () => ({
   requireUser: vi.fn(async () => ({
@@ -10,6 +11,7 @@ vi.mock("@/lib/auth/current-user", () => ({
     email: "owner@acme.test",
     fullName: "Owner",
     role: "OWNER",
+    permissions: [...ALL_PERMISSIONS],
     company: { id: "company-A", name: "Acme Builders" },
   })),
 }));

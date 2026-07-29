@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { SessionUser } from "@/lib/auth/types";
+import { ALL_PERMISSIONS } from "@/features/rbac/permissions";
 
 /**
  * Server-side authorization tests. The owner-only guards (`assertOwner`) run
@@ -9,8 +10,9 @@ import type { SessionUser } from "@/lib/auth/types";
  * the third layer, verified separately against Postgres).
  */
 
-const OWNER: SessionUser = { id: "o1", email: "o@x.com", fullName: "Owner", role: "OWNER", company: { id: "c1", name: "Co" } };
-const PM: SessionUser = { id: "p1", email: "p@x.com", fullName: "PM", role: "PROJECT_MANAGER", company: { id: "c1", name: "Co" } };
+const OWNER: SessionUser = { id: "o1", email: "o@x.com", fullName: "Owner", role: "OWNER", permissions: [...ALL_PERMISSIONS], company: { id: "c1", name: "Co" } };
+// A project manager holds none of the owner-scoped permissions below.
+const PM: SessionUser = { id: "p1", email: "p@x.com", fullName: "PM", role: "PROJECT_MANAGER", permissions: [], company: { id: "c1", name: "Co" } };
 
 let currentUser: SessionUser = OWNER;
 vi.mock("@/lib/auth/current-user", () => ({

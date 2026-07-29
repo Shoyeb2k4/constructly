@@ -216,7 +216,7 @@ async function vendorContext(user: SessionUser) {
 }
 
 export async function listVendors(filters: VendorFilters = {}): Promise<Vendor[]> {
-  const user = await requireUser();
+  const user = await requirePermission("vendors.view");
   const [rows, ctx] = await Promise.all([
     prisma.vendor.findMany({
       where: {
@@ -242,7 +242,7 @@ export async function listVendors(filters: VendorFilters = {}): Promise<Vendor[]
 }
 
 export async function getVendor(id: string): Promise<VendorDetail | null> {
-  const user = await requireUser();
+  const user = await requirePermission("vendors.view");
   const v = await prisma.vendor.findFirst({ where: { id, companyId: user.company.id } });
   if (!v) return null;
   const ctx = await vendorContext(user);
@@ -321,8 +321,7 @@ export async function getVendor(id: string): Promise<VendorDetail | null> {
 }
 
 export async function createVendor(input: CreateVendorInput): Promise<Vendor> {
-  const user = await requireUser();
-  assertOwner(user);
+  const user = await requirePermission("vendors.create");
   const v = await prisma.vendor.create({
     data: {
       companyId: user.company.id,
@@ -343,9 +342,13 @@ export async function createVendor(input: CreateVendorInput): Promise<Vendor> {
 }
 
 export async function updateVendor(id: string, patch: UpdateVendorInput): Promise<Vendor> {
-  const user = await requireUser();
-  assertOwner(user);
+  const user = await requirePermission("vendors.edit");
   vendorPatchSchema.parse(patch);
+  // A status change carried in the patch is a lifecycle action — require the
+  // matching archive/restore permission so edit alone can't deactivate a vendor.
+  if (patch.status) {
+    await requirePermission(patch.status === "INACTIVE" ? "vendors.archive" : "vendors.restore");
+  }
   const v = await prisma.vendor.update({ where: { id, companyId: user.company.id }, data: patch });
   await prisma.activityLog.create({
     data: {
@@ -362,12 +365,28 @@ export async function updateVendor(id: string, patch: UpdateVendorInput): Promis
   return toVendor(v, ctx.pos, ctx.payments, ctx.favoriteIds, ctx.approval);
 }
 
+/** Vendor lifecycle: deactivate (archive) / reactivate (restore). Distinct
+ *  permissions from vendors.edit — vendors are long-lived master data, so we
+ *  prefer archive/restore over deletion and gate them separately. */
 export async function setVendorStatus(id: string, status: VendorStatus): Promise<Vendor> {
-  return updateVendor(id, { status });
+  const user = await requirePermission(status === "INACTIVE" ? "vendors.archive" : "vendors.restore");
+  const v = await prisma.vendor.update({ where: { id, companyId: user.company.id }, data: { status } });
+  await prisma.activityLog.create({
+    data: {
+      companyId: user.company.id,
+      actorId: user.id,
+      action: status === "INACTIVE" ? "vendor.archived" : "vendor.restored",
+      entityType: "vendor",
+      entityId: v.id,
+      summary: `${status === "INACTIVE" ? "Deactivated" : "Reactivated"} vendor ${v.businessName}`,
+    },
+  });
+  const ctx = await vendorContext(user);
+  return toVendor(v, ctx.pos, ctx.payments, ctx.favoriteIds, ctx.approval);
 }
 
 export async function toggleVendorFavorite(id: string): Promise<boolean> {
-  const user = await requireUser();
+  const user = await requirePermission("vendors.view");
   const existing = await prisma.vendorFavorite.findUnique({
     where: { userId_vendorId: { userId: user.id, vendorId: id } },
   });
@@ -380,7 +399,7 @@ export async function toggleVendorFavorite(id: string): Promise<boolean> {
 }
 
 export async function listMaterials(): Promise<string[]> {
-  const user = await requireUser();
+  const user = await requirePermission("vendors.view");
   const rows = await prisma.vendor.findMany({ where: { companyId: user.company.id }, select: { materialsSupplied: true } });
   return [...new Set(rows.flatMap((r) => r.materialsSupplied))].sort();
 }
@@ -389,7 +408,9 @@ export async function addVendorDocument(
   vendorId: string,
   doc: { filename: string; sizeBytes: number; mimeType: string },
 ): Promise<VendorDetail> {
-  const user = await requireUser();
+  // Attaching a document is a low-privilege collaborative action, historically
+  // available to any member — keep it at viewer level (not vendors.edit).
+  const user = await requirePermission("vendors.view");
   const category = doc.mimeType.startsWith("image/")
     ? "PHOTO"
     : doc.mimeType === "application/pdf"
@@ -411,7 +432,7 @@ export async function addVendorDocument(
 }
 
 export async function removeVendorDocument(vendorId: string, docId: string): Promise<VendorDetail> {
-  const user = await requireUser();
+  const user = await requirePermission("vendors.view");
   await prisma.vendorDocument.delete({ where: { id: docId, companyId: user.company.id } });
   return (await getVendor(vendorId))!;
 }
@@ -980,7 +1001,7 @@ export async function getProjectProcurement(projectId: string): Promise<ProjectP
 }
 
 export async function vendorAging(vendorId: string, projectId?: string): Promise<AgingBuckets> {
-  const user = await requireUser();
+  const user = await requirePermission("vendors.view");
   const [pos, payments, approval, poNumbers] = await Promise.all([
     fetchRollupPOs(user.company.id),
     fetchRollupPayments(user.company.id),

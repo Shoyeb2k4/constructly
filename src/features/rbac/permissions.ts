@@ -70,11 +70,18 @@ export const PERMISSION_CATALOG = [
   {
     module: "vendors",
     label: "Vendors",
+    // Lifecycle (not just CRUD): vendors are long-lived master data. Prefer
+    // archive/restore; permanent delete + merge are privileged, rare operations.
     actions: [
       { key: "vendors.view", label: "View" },
       { key: "vendors.create", label: "Create" },
       { key: "vendors.edit", label: "Edit" },
-      { key: "vendors.delete", label: "Delete", danger: true },
+      { key: "vendors.archive", label: "Archive (deactivate)" },
+      { key: "vendors.restore", label: "Restore (reactivate)" },
+      { key: "vendors.merge", label: "Merge", danger: true },
+      { key: "vendors.delete", label: "Delete permanently", danger: true },
+      { key: "vendors.view_all", label: "View All Vendors" },
+      { key: "vendors.edit_all", label: "Edit Any Vendor", danger: true },
     ],
   },
   {

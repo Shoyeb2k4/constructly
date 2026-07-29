@@ -29,9 +29,15 @@ import { TagChip } from "@/features/projects/components/tag-chip";
 import type { Vendor, VendorFilters, VendorStatus } from "../types";
 import { useVendors, useMaterials, useVendorMutations } from "../hooks";
 import { useRecentVendors } from "../recently-vendors";
+import { useCan } from "@/features/rbac/permission-context";
 import { AddVendorSheet } from "./add-vendor-sheet";
 
-export function VendorsView({ isOwner }: { isOwner: boolean }) {
+export function VendorsView() {
+  const can = useCan();
+  const canCreate = can("vendors.create");
+  const canEdit = can("vendors.edit");
+  const canArchive = can("vendors.archive");
+  const canRestore = can("vendors.restore");
   const [search, setSearch] = React.useState("");
   const [status, setStatus] = React.useState<VendorStatus | "ALL">("ALL");
   const [material, setMaterial] = React.useState("ALL");
@@ -50,7 +56,7 @@ export function VendorsView({ isOwner }: { isOwner: boolean }) {
       <PageHeader
         title="Vendors"
         description="Your supplier directory and purchase history."
-        actions={isOwner ? <Button variant="primary" onClick={() => setAddOpen(true)}><Plus />Add vendor</Button> : undefined}
+        actions={canCreate ? <Button variant="primary" onClick={() => setAddOpen(true)}><Plus />Add vendor</Button> : undefined}
       />
 
       {recent.length > 0 && (
@@ -96,7 +102,7 @@ export function VendorsView({ isOwner }: { isOwner: boolean }) {
           icon={Truck}
           title="No vendors found"
           description="Add the suppliers you buy from, or adjust your filters."
-          action={isOwner ? <Button variant="primary" size="sm" onClick={() => setAddOpen(true)}><Plus />Add vendor</Button> : undefined}
+          action={canCreate ? <Button variant="primary" size="sm" onClick={() => setAddOpen(true)}><Plus />Add vendor</Button> : undefined}
         />
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -111,20 +117,24 @@ export function VendorsView({ isOwner }: { isOwner: boolean }) {
                   <button onClick={() => toggleFavorite.mutate(v.id)} aria-label="Favorite" className="p-1 text-foreground-subtle hover:text-warning">
                     <Star className={cn("size-4", v.isFavorite && "fill-warning text-warning")} />
                   </button>
-                  {isOwner && (
+                  {(canEdit || (v.status === "ACTIVE" ? canArchive : canRestore)) && (
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
                         <Button variant="ghost" size="icon" className="size-8 text-foreground-subtle" aria-label="Actions"><MoreHorizontal className="size-4" /></Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
-                        <DropdownMenuItem onSelect={() => setEditVendor(v)}>
-                          <Pencil />
-                          Edit
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onSelect={() => setStatusM.mutate({ id: v.id, status: v.status === "ACTIVE" ? "INACTIVE" : "ACTIVE" })}>
-                          {v.status === "ACTIVE" ? <UserX /> : <UserCheck />}
-                          {v.status === "ACTIVE" ? "Deactivate" : "Activate"}
-                        </DropdownMenuItem>
+                        {canEdit && (
+                          <DropdownMenuItem onSelect={() => setEditVendor(v)}>
+                            <Pencil />
+                            Edit
+                          </DropdownMenuItem>
+                        )}
+                        {(v.status === "ACTIVE" ? canArchive : canRestore) && (
+                          <DropdownMenuItem onSelect={() => setStatusM.mutate({ id: v.id, status: v.status === "ACTIVE" ? "INACTIVE" : "ACTIVE" })}>
+                            {v.status === "ACTIVE" ? <UserX /> : <UserCheck />}
+                            {v.status === "ACTIVE" ? "Deactivate" : "Activate"}
+                          </DropdownMenuItem>
+                        )}
                       </DropdownMenuContent>
                     </DropdownMenu>
                   )}
