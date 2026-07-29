@@ -52,14 +52,18 @@ import {
   PO_GST_LABEL,
 } from "../constants";
 import { encodePOQuery, decodePOQuery, countActiveFilters } from "../url-filters";
+import { useCan } from "@/features/rbac/permission-context";
 import { POEditorSheet } from "./po-editor-sheet";
 import { ProcurementFilterSheet } from "./procurement-filter-sheet";
 import { PoTable, PoColumnsMenu, usePoColumns } from "./po-table";
 
 const PAGE_SIZE = 25;
 
-export function ProcurementView({ isOwner }: { isOwner: boolean }) {
+export function ProcurementView() {
   const router = useRouter();
+  const can = useCan();
+  const canCreate = can("purchase_orders.create");
+  const canApprove = can("purchase_orders.approve");
 
   // Read filters from the URL once (client-only) so refresh + shared links work.
   const [{ filters: initFilters, page: initPage }] = React.useState(() =>
@@ -166,14 +170,16 @@ export function ProcurementView({ isOwner }: { isOwner: boolean }) {
         title="Procurement"
         description="Purchase orders, materials, and budget impact."
         actions={
-          <Button variant="primary" onClick={() => setCreateOpen(true)}>
-            <Plus />
-            New purchase order
-          </Button>
+          canCreate ? (
+            <Button variant="primary" onClick={() => setCreateOpen(true)}>
+              <Plus />
+              New purchase order
+            </Button>
+          ) : undefined
         }
       />
 
-      {isOwner && pending > 0 && (
+      {canApprove && pending > 0 && (
         <button
           onClick={() => patch({ status: "SUBMITTED" })}
           className="flex w-full items-center gap-3 rounded-xl border border-warning/40 bg-warning-subtle/40 px-4 py-3 text-left transition-colors hover:bg-warning-subtle/60"
@@ -274,9 +280,9 @@ export function ProcurementView({ isOwner }: { isOwner: boolean }) {
           action={
             activeCount > 0 || filters.search ? (
               <Button variant="secondary" size="sm" onClick={clearAll}>Clear filters</Button>
-            ) : (
+            ) : canCreate ? (
               <Button variant="primary" size="sm" onClick={() => setCreateOpen(true)}><Plus />Create a purchase order</Button>
-            )
+            ) : undefined
           }
         />
       ) : (

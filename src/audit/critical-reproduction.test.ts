@@ -10,6 +10,7 @@
  * Run: npx vitest run src/audit
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { ALL_PERMISSIONS } from "@/features/rbac/permissions";
 
 // ── Mock the data + auth layer (no DB is touched) ──────────────────────────
 vi.mock("@/lib/auth/current-user", () => ({
@@ -18,6 +19,7 @@ vi.mock("@/lib/auth/current-user", () => ({
     email: "owner@acme.test",
     fullName: "Owner",
     role: "OWNER",
+    permissions: [...ALL_PERMISSIONS],
     company: { id: "company-A", name: "Acme Builders" },
   })),
 }));

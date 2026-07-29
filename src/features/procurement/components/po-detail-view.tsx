@@ -19,12 +19,14 @@ import {
 } from "@/components/ui/dialog";
 import { formatDate } from "@/features/projects/format";
 import { usePurchaseOrder, usePOMutations } from "../hooks";
+import { useCan } from "@/features/rbac/permission-context";
 import { CopyableRef, PaymentModeChip, PaymentStatusBadge } from "./payment-bits";
 import { RecordPaymentDialog } from "./record-payment-dialog";
 import { POEditorSheet } from "./po-editor-sheet";
 
-export function PODetailView({ id, isOwner }: { id: string; isOwner: boolean }) {
+export function PODetailView({ id }: { id: string }) {
   const router = useRouter();
+  const can = useCan();
   const { data: po, isLoading } = usePurchaseOrder(id);
   const { submit, approve, duplicate, remove } = usePOMutations();
   const [confirmDelete, setConfirmDelete] = React.useState(false);
@@ -51,8 +53,11 @@ export function PODetailView({ id, isOwner }: { id: string; isOwner: boolean }) 
   }
 
   const approved = po.status === "APPROVED";
-  // Drafts are editable by anyone with access; the owner may edit any PO.
-  const canEdit = isOwner || po.status === "DRAFT";
+  // Permission + status: editing needs purchase_orders.edit; a non-DRAFT PO also
+  // needs the broad purchase_orders.edit_all. (Server enforces the same + project
+  // ownership; the visible set is already scoped to the caller's POs.)
+  const canEditAction = can("purchase_orders.edit");
+  const canEdit = canEditAction && (po.status === "DRAFT" || can("purchase_orders.edit_all"));
 
   return (
     <div className="space-y-6">
@@ -72,13 +77,13 @@ export function PODetailView({ id, isOwner }: { id: string; isOwner: boolean }) 
           )}
         </div>
         <div className="flex items-center gap-2">
-          {po.status === "DRAFT" && (
+          {po.status === "DRAFT" && canEditAction && (
             <Button variant="primary" onClick={() => submit.mutate(po.id)} disabled={submit.isPending}>
               <Send />
               Submit for approval
             </Button>
           )}
-          {po.status === "SUBMITTED" && isOwner && (
+          {po.status === "SUBMITTED" && can("purchase_orders.approve") && (
             <Button variant="primary" onClick={() => approve.mutate(po.id)} disabled={approve.isPending}>
               <Check />
               Approve
@@ -96,16 +101,18 @@ export function PODetailView({ id, isOwner }: { id: string; isOwner: boolean }) 
               Edit
             </Button>
           )}
-          <Button
-            variant="ghost"
-            onClick={() => duplicate.mutate(po.id, { onSuccess: (p) => router.push(`/procurement/${p.id}`) })}
-            disabled={duplicate.isPending}
-            title="Clone as a new draft dated today"
-          >
-            <CopyPlus />
-            Duplicate
-          </Button>
-          {isOwner && (
+          {can("purchase_orders.create") && (
+            <Button
+              variant="ghost"
+              onClick={() => duplicate.mutate(po.id, { onSuccess: (p) => router.push(`/procurement/${p.id}`) })}
+              disabled={duplicate.isPending}
+              title="Clone as a new draft dated today"
+            >
+              <CopyPlus />
+              Duplicate
+            </Button>
+          )}
+          {can("purchase_orders.delete") && (
             <Button
               variant="ghost"
               size="icon"

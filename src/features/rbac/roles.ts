@@ -54,7 +54,7 @@ export const SYSTEM_ROLES: SystemRoleDef[] = [
     // capability is granted per-permission via the Roles UI in a later phase.
     key: "project_manager",
     name: "Project Manager",
-    description: "Manages their assigned projects: view, edit, and archive.",
+    description: "Manages their assigned projects: view, edit, archive; raises POs.",
     permissions: [
       "projects.view",
       "projects.edit",
@@ -62,7 +62,11 @@ export const SYSTEM_ROLES: SystemRoleDef[] = [
       "attendance.view",
       "attendance.export",
       "vendors.view",
+      // Legacy PROJECT_MANAGER could raise + edit draft POs on assigned projects
+      // (no approve/delete, no broad scope).
       "purchase_orders.view",
+      "purchase_orders.create",
+      "purchase_orders.edit",
       "reports.view",
     ],
   },

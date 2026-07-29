@@ -40,6 +40,9 @@ export const PERMISSION_CATALOG = [
       { key: "purchase_orders.reject", label: "Reject" },
       { key: "purchase_orders.archive", label: "Archive" },
       { key: "purchase_orders.delete", label: "Delete", danger: true },
+      // Scope grants: hold POs to the user's assigned projects / draft-only edits.
+      { key: "purchase_orders.view_all", label: "View All POs" },
+      { key: "purchase_orders.edit_all", label: "Edit Any PO", danger: true },
     ],
   },
   {

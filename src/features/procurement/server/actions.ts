@@ -3,6 +3,7 @@
 import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
 import { requireUser } from "@/lib/auth/current-user";
+import { requirePermission, hasPermission } from "@/lib/auth/permissions";
 import type { SessionUser } from "@/lib/auth/types";
 import { Prisma } from "@/generated/prisma";
 import {
@@ -42,13 +43,17 @@ import type { AgingBuckets } from "../calc";
 function assertOwner(user: SessionUser) {
   if (user.role !== "OWNER") throw new Error("FORBIDDEN");
 }
+/** Ownership scope for a project: broad projects.view_all reaches any project in
+ *  the company, otherwise the caller must be the assigned PM. (Behaviour-
+ *  identical to the previous owner-or-assigned rule; shared by PO + payment
+ *  actions.) */
 async function assertProjectAccess(user: SessionUser, projectId: string) {
   const p = await prisma.project.findFirst({
     where: {
       id: projectId,
       companyId: user.company.id,
       deletedAt: null,
-      ...(user.role !== "OWNER" ? { pmId: user.id } : {}),
+      ...(hasPermission(user, "projects.view_all") ? {} : { pmId: user.id }),
     },
     select: { id: true },
   });
@@ -558,11 +563,12 @@ export async function listMembers(): Promise<{ id: string; fullName: string }[]>
 }
 
 export async function listPurchaseOrders(filters: POFilters = {}): Promise<PurchaseOrderListItem[]> {
-  const user = await requireUser();
+  const user = await requirePermission("purchase_orders.view");
   const rows = await prisma.purchaseOrder.findMany({
     where: {
       companyId: user.company.id,
-      ...(user.role !== "OWNER" ? { project: { pmId: user.id } } : {}),
+      // Scope: without purchase_orders.view_all, limited to POs on assigned projects.
+      ...(hasPermission(user, "purchase_orders.view_all") ? {} : { project: { pmId: user.id } }),
       ...(filters.status && filters.status !== "ALL" ? { status: filters.status } : {}),
       ...(filters.projectId && filters.projectId !== "ALL" ? { projectId: filters.projectId } : {}),
       ...(filters.vendorId && filters.vendorId !== "ALL" ? { vendorId: filters.vendorId } : {}),
@@ -612,9 +618,15 @@ export async function listPurchaseOrders(filters: POFilters = {}): Promise<Purch
 }
 
 export async function getPurchaseOrder(id: string): Promise<PurchaseOrderDetail | null> {
-  const user = await requireUser();
+  const user = await requirePermission("purchase_orders.view");
   const p = await prisma.purchaseOrder.findFirst({
-    where: { id, companyId: user.company.id },
+    // Same scope as the list: view_all reaches any PO, otherwise only POs on the
+    // caller's assigned projects (closes a direct-id access gap).
+    where: {
+      id,
+      companyId: user.company.id,
+      ...(hasPermission(user, "purchase_orders.view_all") ? {} : { project: { pmId: user.id } }),
+    },
     include: poInclude,
   });
   return p ? toDetail(p, user.company.id) : null;
@@ -645,7 +657,7 @@ function lineData(input: CreatePOInput) {
 }
 
 export async function createPurchaseOrder(input: CreatePOInput): Promise<PurchaseOrderDetail> {
-  const user = await requireUser();
+  const user = await requirePermission("purchase_orders.create");
   createPOInputSchema.parse(input);
   await assertProjectAccess(user, input.projectId);
   await assertVendorAccess(user, input.vendorId);
@@ -676,15 +688,18 @@ export async function createPurchaseOrder(input: CreatePOInput): Promise<Purchas
 }
 
 export async function updatePurchaseOrder(id: string, input: CreatePOInput): Promise<PurchaseOrderDetail> {
-  const user = await requireUser();
+  const user = await requirePermission("purchase_orders.edit");
   createPOInputSchema.parse(input);
   const existing = await prisma.purchaseOrder.findFirst({ where: { id, companyId: user.company.id }, select: { status: true, projectId: true } });
   if (!existing) throw new Error("NOT_FOUND");
   await assertProjectAccess(user, existing.projectId);
   await assertProjectAccess(user, input.projectId);
   await assertVendorAccess(user, input.vendorId);
-  // Drafts are editable by anyone with access; the owner may edit any PO.
-  if (existing.status !== "DRAFT" && user.role !== "OWNER") throw new Error("IMMUTABLE");
+  // Drafts are editable with purchase_orders.edit + project access; editing a
+  // SUBMITTED/APPROVED PO additionally requires the broad purchase_orders.edit_all.
+  if (existing.status !== "DRAFT" && !hasPermission(user, "purchase_orders.edit_all")) {
+    throw new Error("IMMUTABLE");
+  }
   const totals = poTotals(input.lineItems);
   await prisma.$transaction([
     prisma.pOLineItem.deleteMany({ where: { purchaseOrderId: id } }),
@@ -708,7 +723,14 @@ export async function updatePurchaseOrder(id: string, input: CreatePOInput): Pro
 }
 
 export async function submitPurchaseOrder(id: string): Promise<PurchaseOrderListItem> {
-  const user = await requireUser();
+  // Submitting a draft for approval is an edit action, scoped to project access.
+  const user = await requirePermission("purchase_orders.edit");
+  const existing = await prisma.purchaseOrder.findFirst({
+    where: { id, companyId: user.company.id },
+    select: { projectId: true },
+  });
+  if (!existing) throw new Error("NOT_FOUND");
+  await assertProjectAccess(user, existing.projectId);
   const po = await prisma.purchaseOrder.update({
     where: { id, companyId: user.company.id },
     data: { status: "SUBMITTED" },
@@ -718,8 +740,8 @@ export async function submitPurchaseOrder(id: string): Promise<PurchaseOrderList
 }
 
 export async function approvePurchaseOrder(id: string): Promise<PurchaseOrderListItem> {
-  const user = await requireUser();
-  assertOwner(user);
+  // Dedicated approval authority — never the generic edit permission.
+  const user = await requirePermission("purchase_orders.approve");
   const po = await prisma.purchaseOrder.update({
     where: { id, companyId: user.company.id },
     data: { status: "APPROVED", approvedById: user.id, approvedAt: new Date() },
@@ -729,7 +751,8 @@ export async function approvePurchaseOrder(id: string): Promise<PurchaseOrderLis
 }
 
 async function clonePO(id: string, opts: { linkRevision: boolean }): Promise<PurchaseOrderDetail> {
-  const user = await requireUser();
+  // Revise/duplicate both create a NEW draft PO → gated by create + project access.
+  const user = await requirePermission("purchase_orders.create");
   const src = await prisma.purchaseOrder.findFirstOrThrow({ where: { id, companyId: user.company.id }, include: { lineItems: true } });
   await assertProjectAccess(user, src.projectId);
   const created = await prisma.purchaseOrder.create({
@@ -783,13 +806,16 @@ export async function duplicatePurchaseOrder(id: string): Promise<PurchaseOrderD
  * (the activity log is append-only).
  */
 export async function deletePurchaseOrder(id: string): Promise<void> {
-  const user = await requireUser();
-  assertOwner(user);
+  const user = await requirePermission("purchase_orders.delete");
   const po = await prisma.purchaseOrder.findFirst({
     where: { id, companyId: user.company.id },
-    select: { id: true, poNumber: true, status: true },
+    select: { id: true, poNumber: true, status: true, project: { select: { pmId: true } } },
   });
   if (!po) throw new Error("NOT_FOUND");
+  // Ownership scope: broad edit_all deletes any; otherwise only assigned-project POs.
+  if (!hasPermission(user, "purchase_orders.edit_all") && po.project.pmId !== user.id) {
+    throw new Error("FORBIDDEN");
+  }
   await prisma.$transaction([
     prisma.purchaseOrder.delete({ where: { id, companyId: user.company.id } }),
     prisma.activityLog.create({
@@ -807,7 +833,7 @@ export async function deletePurchaseOrder(id: string): Promise<void> {
 }
 
 export async function pendingApprovalCount(): Promise<number> {
-  const user = await requireUser();
+  const user = await requirePermission("purchase_orders.view");
   return prisma.purchaseOrder.count({ where: { companyId: user.company.id, status: "SUBMITTED" } });
 }
 
