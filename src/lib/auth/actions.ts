@@ -6,6 +6,7 @@ import { createServerClient } from "@/lib/supabase/server";
 import { supabaseUrl } from "@/lib/env";
 import { prisma } from "@/lib/db/prisma";
 import { reportError } from "@/lib/logger";
+import { syncSystemRoles, assignRole } from "@/features/rbac/server/sync-roles";
 
 /* ── Sign-up ───────────────────────────────────────────────────────────
  * Two modes, chosen server-side:
@@ -136,6 +137,10 @@ export async function onboardCompany(
           settings: { poApprovalRequired: false, currency: "INR" },
         },
       });
+      // Seed this company's RBAC roles and assign the founder the Owner role.
+      // Additive — the legacy `role` enum still drives authorization in Phase 1.
+      const roleMap = await syncSystemRoles(tx, company.id);
+      const ownerRoleId = roleMap.get("owner") ?? null;
       await tx.user.create({
         data: {
           id: user.id,
@@ -144,8 +149,17 @@ export async function onboardCompany(
           fullName: parsed.data.fullName,
           role: "OWNER",
           status: "ACTIVE",
+          companyRoleId: ownerRoleId,
         },
       });
+      if (ownerRoleId) {
+        await assignRole(tx, {
+          companyId: company.id,
+          userId: user.id,
+          roleId: ownerRoleId,
+          isPrimary: true,
+        });
+      }
       await tx.activityLog.create({
         data: {
           companyId: company.id,

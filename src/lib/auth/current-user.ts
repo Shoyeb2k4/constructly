@@ -2,6 +2,7 @@ import { cache } from "react";
 import { isDemoMode } from "@/lib/env";
 import { DEMO_USER } from "./demo";
 import type { Role, SessionUser } from "./types";
+import { resolvePermissions } from "@/features/rbac/resolve";
 
 /**
  * Resolve the authenticated user for the current request. In demo mode returns
@@ -26,18 +27,36 @@ export const getCurrentUser = cache(async (): Promise<SessionUser | null> => {
 
   const appUser = await prisma.user.findUnique({
     where: { id: user.id },
-    include: { company: true },
+    include: {
+      company: true,
+      companyRole: true,
+      roleAssignments: { include: { role: true } },
+    },
   });
   // A missing row means "not onboarded / invited"; a DISABLED row means the
   // member was deactivated — both resolve to no session here (the app layout
   // routes them to onboarding / accept-invite / deactivated respectively).
   if (!appUser || appUser.status === "DISABLED") return null;
 
+  // RBAC: resolve permissions from ALL assigned roles (junction) — multi-role
+  // ready. Fall back to the primary role, then the legacy enum, so nothing
+  // regresses during migration. Loaded but not enforced in Phase 1.
+  const assignedRoles = appUser.roleAssignments.map((a) => a.role);
+  const rolesForResolve =
+    assignedRoles.length > 0 ? assignedRoles : appUser.companyRole ? [appUser.companyRole] : [];
+  const permissions = resolvePermissions({
+    roles: rolesForResolve.map((r) => ({ isOwner: r.isOwner, permissions: r.permissions })),
+    legacyRole: appUser.role as "OWNER" | "PROJECT_MANAGER",
+  });
+
   return {
     id: appUser.id,
     email: appUser.email,
     fullName: appUser.fullName,
     role: appUser.role as Role,
+    roleId: appUser.companyRoleId ?? null,
+    roleName: appUser.companyRole?.name,
+    permissions,
     company: { id: appUser.company.id, name: appUser.company.name },
   };
 });

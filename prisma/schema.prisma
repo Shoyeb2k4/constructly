@@ -106,6 +106,8 @@ model Company {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   users                 User[]
+  roles                 CompanyRole[]
+  userRoles             UserRole[]
   invitations           Invitation[]
   projects              Project[]
   activity              ActivityLog[]
@@ -130,8 +132,14 @@ model User {
   companyId String     @map("company_id") @db.Uuid
   email     String     @unique
   fullName  String     @map("full_name")
+  /// Legacy role enum — still authoritative for authorization in Phase 1. The
+  /// RBAC layer (companyRole) runs alongside it until the Phase 2 enforcement
+  /// swap. Do NOT drop this column until every check reads permissions instead.
   role      Role       @default(PROJECT_MANAGER)
   status    UserStatus @default(ACTIVE)
+  /// RBAC: the data-driven company role assigned to this user (nullable during
+  /// migration; the session falls back to `role` when unset).
+  companyRoleId String? @map("role_id") @db.Uuid
 
   // ── Personal profile (all nullable; sensible defaults applied in app). ──
   designation   String?
@@ -157,9 +165,75 @@ model User {
   vendorPayments         VendorPayment[]   @relation("PaymentCreatedBy")
   goodsReceipts          GoodsReceipt[]    @relation("GoodsReceiptCreatedBy")
   sentInvitations        Invitation[]      @relation("InvitationInvitedBy")
+  companyRole            CompanyRole?      @relation("UserCompanyRole", fields: [companyRoleId], references: [id], onDelete: SetNull)
+  roleAssignments        UserRole[]        @relation("UserRoleMember")
+  rolesAssignedByMe      UserRole[]        @relation("UserRoleAssignedBy")
 
   @@index([companyId])
+  @@index([companyRoleId])
   @@map("users")
+}
+
+/// RBAC role — a named, per-company collection of permission keys (see
+/// features/rbac/permissions.ts). Roles are DATA, not code: each company owns
+/// its own set, seeded from SYSTEM_ROLES and extensible with custom roles.
+/// `isOwner` marks the protected all-access role (implicit every permission).
+model CompanyRole {
+  id          String   @id @default(uuid()) @db.Uuid
+  companyId   String   @map("company_id") @db.Uuid
+  /// Stable identifier for a seeded system role ("owner", "admin", …); null for
+  /// custom roles. Unique per company (partial index — see migration).
+  key         String?
+  name        String
+  description String?
+  isSystem    Boolean  @default(false) @map("is_system")
+  isOwner     Boolean  @default(false) @map("is_owner")
+  /// Permission keys granted by this role. Supports concrete keys and wildcards
+  /// ("*", "projects.*"), expanded at resolve time. Ignored for the owner role,
+  /// whose access is implicit. The code catalog is authoritative for valid keys.
+  permissions String[] @default([])
+  /// Optional parent role to inherit permissions from (role hierarchy). Null =
+  /// no parent. Schema-ready for Phase 4; resolution flattening lands with it.
+  parentId    String?  @map("parent_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  company     Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  parent      CompanyRole?  @relation("RoleInheritance", fields: [parentId], references: [id], onDelete: SetNull)
+  children    CompanyRole[] @relation("RoleInheritance")
+  users       User[]        @relation("UserCompanyRole")
+  assignments UserRole[]
+
+  @@unique([companyId, name])
+  @@index([companyId])
+  @@index([parentId])
+  @@map("roles")
+}
+
+/// User↔role junction — the authoritative record of which roles a user holds.
+/// Today every user has exactly one row (mirroring the primary role), but the
+/// many-to-many shape means multiple roles per user need NO future migration:
+/// the session simply unions permissions across all rows. `isPrimary` marks the
+/// user's default/primary role (also denormalised on User.companyRoleId).
+model UserRole {
+  id           String   @id @default(uuid()) @db.Uuid
+  companyId    String   @map("company_id") @db.Uuid
+  userId       String   @map("user_id") @db.Uuid
+  roleId       String   @map("role_id") @db.Uuid
+  isPrimary    Boolean  @default(false) @map("is_primary")
+  /// Who assigned this role (audit provenance); null for system/seed assignment.
+  assignedById String?  @map("assigned_by_id") @db.Uuid
+  assignedAt   DateTime @default(now()) @map("assigned_at")
+
+  company    Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user       User        @relation("UserRoleMember", fields: [userId], references: [id], onDelete: Cascade)
+  role       CompanyRole @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  assignedBy User?       @relation("UserRoleAssignedBy", fields: [assignedById], references: [id], onDelete: SetNull)
+
+  @@unique([userId, roleId])
+  @@index([companyId])
+  @@index([roleId])
+  @@map("user_roles")
 }
 
 /// A pending/accepted email invitation to join a company with a given role.
