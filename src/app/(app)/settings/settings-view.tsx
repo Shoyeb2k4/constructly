@@ -12,6 +12,7 @@ import { DocumentsSection } from "@/features/branding/components/documents-secti
 import { ProfileSection } from "@/features/branding/components/profile-section";
 import { MaterialCategoriesCard } from "@/features/procurement/components/material-categories-card";
 import { TeamSection } from "@/features/team/components/team-section";
+import { useCan } from "@/features/rbac/permission-context";
 import { SettingsPreferences } from "./settings-form";
 
 type SectionId = "company" | "profile" | "documents" | "appearance" | "workspace" | "security";
@@ -27,6 +28,7 @@ const SECTIONS: { id: SectionId; label: string; icon: typeof Building2 }[] = [
 
 export function SettingsView({ isOwner, role }: { isOwner: boolean; role: string }) {
   const [active, setActive] = React.useState<SectionId>("company");
+  const canViewUsers = useCan()("users.view");
 
   return (
     <div className="space-y-6">
@@ -70,7 +72,7 @@ export function SettingsView({ isOwner, role }: { isOwner: boolean; role: string
             </div>
           )}
           {active === "security" &&
-            (isOwner ? (
+            (canViewUsers ? (
               <TeamSection />
             ) : (
               <Card>

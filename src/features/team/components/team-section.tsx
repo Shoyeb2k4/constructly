@@ -43,8 +43,14 @@ import {
   useRemoveMember,
 } from "../hooks";
 import type { TeamMember } from "../types";
+import { useCan } from "@/features/rbac/permission-context";
 
 export function TeamSection() {
+  const can = useCan();
+  const canInvite = can("users.invite");
+  const canAssignRoles = can("roles.assign");
+  const canDisable = can("users.disable");
+  const canDelete = can("users.delete");
   const { data: members = [], isLoading } = useMembers();
   const { data: invitations = [] } = useInvitations();
   const invite = useInviteMember();
@@ -69,6 +75,7 @@ export function TeamSection() {
   return (
     <div className="space-y-6">
       {/* Invite */}
+      {canInvite && (
       <Card>
         <CardHeader>
           <CardTitle>Invite a member</CardTitle>
@@ -104,6 +111,7 @@ export function TeamSection() {
           </form>
         </CardContent>
       </Card>
+      )}
 
       {/* Pending invitations */}
       {invitations.length > 0 && (
@@ -122,22 +130,24 @@ export function TeamSection() {
                     {inv.expired ? " · expired" : ""}
                   </p>
                 </div>
-                <div className="flex items-center gap-1">
-                  <Button variant="ghost" size="sm" onClick={() => resend.mutate(inv.id)} disabled={resend.isPending}>
-                    <RotateCw className="size-3.5" />
-                    Resend
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="text-danger-foreground"
-                    onClick={() => cancel.mutate(inv.id)}
-                    disabled={cancel.isPending}
-                  >
-                    <X className="size-3.5" />
-                    Cancel
-                  </Button>
-                </div>
+                {canInvite && (
+                  <div className="flex items-center gap-1">
+                    <Button variant="ghost" size="sm" onClick={() => resend.mutate(inv.id)} disabled={resend.isPending}>
+                      <RotateCw className="size-3.5" />
+                      Resend
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="text-danger-foreground"
+                      onClick={() => cancel.mutate(inv.id)}
+                      disabled={cancel.isPending}
+                    >
+                      <X className="size-3.5" />
+                      Cancel
+                    </Button>
+                  </div>
+                )}
               </div>
             ))}
           </CardContent>
@@ -174,7 +184,7 @@ export function TeamSection() {
                       <Select
                         value={m.role}
                         onValueChange={(v) => changeRole.mutate({ userId: m.id, role: v as Role })}
-                        disabled={m.isSelf || isLastOwner || changeRole.isPending}
+                        disabled={!canAssignRoles || m.isSelf || isLastOwner || changeRole.isPending}
                       >
                         <SelectTrigger className="h-8 w-40 text-xs" aria-label={`Role for ${m.fullName}`}>
                           <SelectValue />
@@ -185,7 +195,7 @@ export function TeamSection() {
                           ))}
                         </SelectContent>
                       </Select>
-                      {m.isSelf ? (
+                      {m.isSelf || (!canDisable && !canDelete) ? (
                         <div className="size-8" aria-hidden />
                       ) : (
                         <DropdownMenu>
@@ -195,32 +205,35 @@ export function TeamSection() {
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
-                            {disabled ? (
-                              <DropdownMenuItem onSelect={() => setStatus.mutate({ userId: m.id, status: "ACTIVE" })}>
-                                Reactivate
-                              </DropdownMenuItem>
-                            ) : (
+                            {canDisable &&
+                              (disabled ? (
+                                <DropdownMenuItem onSelect={() => setStatus.mutate({ userId: m.id, status: "ACTIVE" })}>
+                                  Reactivate
+                                </DropdownMenuItem>
+                              ) : (
+                                <DropdownMenuItem
+                                  disabled={isLastOwner}
+                                  onSelect={() => setStatus.mutate({ userId: m.id, status: "DISABLED" })}
+                                >
+                                  Deactivate
+                                </DropdownMenuItem>
+                              ))}
+                            {canDelete && (
                               <DropdownMenuItem
                                 disabled={isLastOwner}
-                                onSelect={() => setStatus.mutate({ userId: m.id, status: "DISABLED" })}
+                                onSelect={(e) => {
+                                  e.preventDefault();
+                                  if (isLastOwner) {
+                                    toast.error("You can't remove the last owner.");
+                                    return;
+                                  }
+                                  setConfirmRemove(m);
+                                }}
+                                className="text-danger-foreground"
                               >
-                                Deactivate
+                                Remove
                               </DropdownMenuItem>
                             )}
-                            <DropdownMenuItem
-                              disabled={isLastOwner}
-                              onSelect={(e) => {
-                                e.preventDefault();
-                                if (isLastOwner) {
-                                  toast.error("You can't remove the last owner.");
-                                  return;
-                                }
-                                setConfirmRemove(m);
-                              }}
-                              className="text-danger-foreground"
-                            >
-                              Remove
-                            </DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
                       )}

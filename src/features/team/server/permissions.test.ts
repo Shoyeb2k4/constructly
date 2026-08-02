@@ -1,14 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { SessionUser } from "@/lib/auth/types";
+import { ALL_PERMISSIONS } from "@/features/rbac/permissions";
 
 /**
- * Team-management authorization. Every management action is owner-only and the
- * guard runs before any DB / admin-API access, so mocking the auth layer alone
- * proves PROJECT_MANAGERs are refused even if UI gating is bypassed.
+ * Team-management authorization. Each action requires its users/roles
+ * permission and the guard runs before any DB / admin-API access, so mocking the
+ * auth layer alone proves a PROJECT_MANAGER (holding none of them) is refused
+ * even if UI gating is bypassed.
  */
 
-const OWNER: SessionUser = { id: "o1", email: "o@x.com", fullName: "Owner", role: "OWNER", company: { id: "c1", name: "Co" } };
-const PM: SessionUser = { id: "p1", email: "p@x.com", fullName: "PM", role: "PROJECT_MANAGER", company: { id: "c1", name: "Co" } };
+const OWNER: SessionUser = { id: "o1", email: "o@x.com", fullName: "Owner", role: "OWNER", permissions: [...ALL_PERMISSIONS], company: { id: "c1", name: "Co" } };
+const PM: SessionUser = { id: "p1", email: "p@x.com", fullName: "PM", role: "PROJECT_MANAGER", permissions: [], company: { id: "c1", name: "Co" } };
 
 let currentUser: SessionUser = OWNER;
 vi.mock("@/lib/auth/current-user", () => ({ requireUser: async () => currentUser }));

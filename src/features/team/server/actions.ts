@@ -2,10 +2,11 @@
 
 import { prisma } from "@/lib/db/prisma";
 import { Prisma } from "@/generated/prisma";
-import { requireUser } from "@/lib/auth/current-user";
+import { requirePermission } from "@/lib/auth/permissions";
 import type { Role, SessionUser } from "@/lib/auth/types";
 import { createServerClient } from "@/lib/supabase/server";
 import { adminInviteUser, adminDeleteUser } from "@/lib/supabase/admin";
+import { assertCanAssignRole } from "../authz";
 import { inviteSchema, acceptSchema, roleSchema, ROLE_LABEL } from "../schema";
 import type {
   InviteInput,
@@ -16,10 +17,6 @@ import type {
 } from "../types";
 
 const INVITE_TTL_MS = 7 * 24 * 3600 * 1000;
-
-function assertOwner(user: SessionUser) {
-  if (user.role !== "OWNER") throw new Error("FORBIDDEN");
-}
 
 async function activeOwnerCount(companyId: string): Promise<number> {
   return prisma.user.count({ where: { companyId, role: "OWNER", status: "ACTIVE" } });
@@ -47,8 +44,7 @@ async function logTeam(
 
 // ── Reads ─────────────────────────────────────────────────────────────
 export async function listMembers(): Promise<TeamMember[]> {
-  const user = await requireUser();
-  assertOwner(user);
+  const user = await requirePermission("users.view");
   const rows = await prisma.user.findMany({
     where: { companyId: user.company.id },
     orderBy: [{ role: "asc" }, { fullName: "asc" }],
@@ -65,8 +61,7 @@ export async function listMembers(): Promise<TeamMember[]> {
 }
 
 export async function listInvitations(): Promise<TeamInvitation[]> {
-  const user = await requireUser();
-  assertOwner(user);
+  const user = await requirePermission("users.view");
   const rows = await prisma.invitation.findMany({
     where: { companyId: user.company.id, status: "PENDING" },
     orderBy: { createdAt: "desc" },
@@ -86,9 +81,11 @@ export async function listInvitations(): Promise<TeamInvitation[]> {
 
 // ── Invitations ───────────────────────────────────────────────────────
 export async function inviteMember(input: InviteInput): Promise<void> {
-  const user = await requireUser();
-  assertOwner(user);
+  const user = await requirePermission("users.invite");
   const { email, role } = inviteSchema.parse(input);
+  // No privilege escalation: you can't invite someone into a role whose
+  // permissions you don't hold yourself.
+  assertCanAssignRole(user, role);
 
   const alreadyMember = await prisma.user.findFirst({
     where: { companyId: user.company.id, email },
@@ -141,8 +138,7 @@ export async function inviteMember(input: InviteInput): Promise<void> {
 }
 
 export async function resendInvitation(id: string): Promise<void> {
-  const user = await requireUser();
-  assertOwner(user);
+  const user = await requirePermission("users.invite");
   const inv = await prisma.invitation.findFirst({
     where: { id, companyId: user.company.id, status: "PENDING" },
   });
@@ -161,8 +157,7 @@ export async function resendInvitation(id: string): Promise<void> {
 }
 
 export async function cancelInvitation(id: string): Promise<void> {
-  const user = await requireUser();
-  assertOwner(user);
+  const user = await requirePermission("users.invite");
   const inv = await prisma.invitation.findFirst({ where: { id, companyId: user.company.id } });
   if (!inv) throw new Error("NOT_FOUND");
   if (inv.status === "PENDING" && inv.authUserId) {
@@ -174,9 +169,10 @@ export async function cancelInvitation(id: string): Promise<void> {
 
 // ── Member management ─────────────────────────────────────────────────
 export async function changeMemberRole(userId: string, roleRaw: Role): Promise<void> {
-  const user = await requireUser();
-  assertOwner(user);
+  const user = await requirePermission("roles.assign");
   const role = roleSchema.parse(roleRaw);
+  // No privilege escalation: only assign a role whose permissions you hold.
+  assertCanAssignRole(user, role);
   const target = await prisma.user.findFirst({ where: { id: userId, companyId: user.company.id } });
   if (!target) throw new Error("NOT_FOUND");
   if (target.role === role) return;
@@ -191,8 +187,7 @@ export async function changeMemberRole(userId: string, roleRaw: Role): Promise<v
 }
 
 export async function setMemberStatus(userId: string, status: MemberStatus): Promise<void> {
-  const user = await requireUser();
-  assertOwner(user);
+  const user = await requirePermission("users.disable");
   if (userId === user.id) throw new Error("You can't change your own status.");
   const target = await prisma.user.findFirst({ where: { id: userId, companyId: user.company.id } });
   if (!target) throw new Error("NOT_FOUND");
@@ -209,8 +204,7 @@ export async function setMemberStatus(userId: string, status: MemberStatus): Pro
 }
 
 export async function removeMember(userId: string): Promise<void> {
-  const user = await requireUser();
-  assertOwner(user);
+  const user = await requirePermission("users.delete");
   if (userId === user.id) throw new Error("You can't remove yourself.");
   const target = await prisma.user.findFirst({ where: { id: userId, companyId: user.company.id } });
   if (!target) throw new Error("NOT_FOUND");

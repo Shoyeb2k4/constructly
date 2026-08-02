@@ -139,13 +139,29 @@ export const PERMISSION_CATALOG = [
   },
   {
     module: "users",
-    label: "Users & Roles",
+    label: "Users",
+    // User management only — role management is a separate namespace (below).
     actions: [
-      { key: "users.invite", label: "Invite Users" },
-      { key: "users.edit", label: "Edit Users" },
-      { key: "users.disable", label: "Disable Users", danger: true },
-      { key: "users.create_roles", label: "Create Roles" },
-      { key: "users.manage_permissions", label: "Manage Permissions", danger: true },
+      { key: "users.view", label: "View" },
+      { key: "users.invite", label: "Invite" },
+      { key: "users.edit", label: "Edit" },
+      { key: "users.disable", label: "Disable", danger: true },
+      { key: "users.delete", label: "Delete", danger: true },
+    ],
+  },
+  {
+    module: "roles",
+    label: "Roles",
+    // Role management, distinct from user management. manage_permissions is the
+    // dedicated permission for editing a role's grants; a user can never grant a
+    // permission they don't hold themselves, and the Owner role is protected.
+    actions: [
+      { key: "roles.view", label: "View" },
+      { key: "roles.create", label: "Create" },
+      { key: "roles.edit", label: "Edit" },
+      { key: "roles.delete", label: "Delete", danger: true },
+      { key: "roles.assign", label: "Assign to Users" },
+      { key: "roles.manage_permissions", label: "Manage Permissions", danger: true },
     ],
   },
   {

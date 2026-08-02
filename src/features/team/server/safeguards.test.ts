@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { SessionUser } from "@/lib/auth/types";
+import { ALL_PERMISSIONS } from "@/features/rbac/permissions";
 
-const OWNER: SessionUser = { id: "o1", email: "o@x.com", fullName: "Owner", role: "OWNER", company: { id: "c1", name: "Co" } };
+const OWNER: SessionUser = { id: "o1", email: "o@x.com", fullName: "Owner", role: "OWNER", permissions: [...ALL_PERMISSIONS], company: { id: "c1", name: "Co" } };
 
 vi.mock("@/lib/auth/current-user", () => ({ requireUser: async () => OWNER }));
 vi.mock("@/lib/supabase/server", () => ({
