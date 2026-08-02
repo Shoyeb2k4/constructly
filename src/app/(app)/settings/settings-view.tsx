@@ -26,9 +26,17 @@ const SECTIONS: { id: SectionId; label: string; icon: typeof Building2 }[] = [
   { id: "security", label: "Security", icon: ShieldCheck },
 ];
 
-export function SettingsView({ isOwner, role }: { isOwner: boolean; role: string }) {
-  const [active, setActive] = React.useState<SectionId>("company");
-  const canViewUsers = useCan()("users.view");
+const COMPANY_SECTIONS: SectionId[] = ["company", "documents", "appearance"];
+
+export function SettingsView({ role }: { role: string }) {
+  const can = useCan();
+  const canViewUsers = can("users.view");
+  const canViewCompany = can("company.view");
+  const canEditCompany = can("company.edit");
+  const canBranding = can("company.branding");
+  // Hide the company-config tabs from users without company.view.
+  const sections = SECTIONS.filter((s) => (COMPANY_SECTIONS.includes(s.id) ? canViewCompany : true));
+  const [active, setActive] = React.useState<SectionId>(canViewCompany ? "company" : "profile");
 
   return (
     <div className="space-y-6">
@@ -37,7 +45,7 @@ export function SettingsView({ isOwner, role }: { isOwner: boolean; role: string
       <div className="grid gap-6 lg:grid-cols-[200px_1fr]">
         {/* Section nav */}
         <nav className="flex gap-1 overflow-x-auto lg:flex-col lg:overflow-visible" aria-label="Settings sections">
-          {SECTIONS.map((s) => {
+          {sections.map((s) => {
             const Icon = s.icon;
             const isActive = active === s.id;
             return (
@@ -61,10 +69,12 @@ export function SettingsView({ isOwner, role }: { isOwner: boolean; role: string
 
         {/* Section content */}
         <div className="min-w-0">
-          {active === "company" && <CompanySection isOwner={isOwner} />}
+          {/* `isOwner` prop == "can edit this section" — company.edit for the
+              profile, company.branding for logos/colours/documents. */}
+          {active === "company" && canViewCompany && <CompanySection isOwner={canEditCompany} />}
           {active === "profile" && <ProfileSection />}
-          {active === "documents" && <DocumentsSection isOwner={isOwner} />}
-          {active === "appearance" && <AppearanceSection isOwner={isOwner} />}
+          {active === "documents" && canViewCompany && <DocumentsSection isOwner={canBranding} />}
+          {active === "appearance" && canViewCompany && <AppearanceSection isOwner={canBranding} />}
           {active === "workspace" && (
             <div className="space-y-6">
               <SettingsPreferences />

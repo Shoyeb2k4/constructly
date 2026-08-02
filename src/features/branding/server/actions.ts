@@ -3,6 +3,7 @@
 import { prisma } from "@/lib/db/prisma";
 import { Prisma } from "@/generated/prisma";
 import { requireUser } from "@/lib/auth/current-user";
+import { requirePermission, hasPermission } from "@/lib/auth/permissions";
 import type { SessionUser } from "@/lib/auth/types";
 import { revalidateTag } from "next/cache";
 import { isDemoMode } from "@/lib/env";
@@ -24,8 +25,9 @@ import type {
 
 const SIGNED_TTL = 3600; // 1 hour
 
-function assertOwner(u: SessionUser) {
-  if (u.role !== "OWNER") throw new Error("FORBIDDEN");
+/** Company (non-per-user) branding assets require company.branding. */
+function assertCanEditCompanyAssets(user: SessionUser) {
+  if (!hasPermission(user, "company.branding")) throw new Error("FORBIDDEN");
 }
 
 const companySelect = {
@@ -104,8 +106,7 @@ export async function getCompanyBranding(): Promise<CompanyBranding> {
 }
 
 export async function updateCompanyProfile(input: CompanyProfileInput): Promise<CompanyBranding> {
-  const user = await requireUser();
-  assertOwner(user);
+  const user = await requirePermission("company.edit");
   const data = companyProfileSchema.parse(input);
   const c = await prisma.company.update({
     where: { id: user.company.id },
@@ -118,8 +119,7 @@ export async function updateCompanyProfile(input: CompanyProfileInput): Promise<
 }
 
 export async function updateBrandColors(colors: BrandColors): Promise<CompanyBranding> {
-  const user = await requireUser();
-  assertOwner(user);
+  const user = await requirePermission("company.branding");
   const clean = normalizeBrandColors(brandColorsSchema.parse(colors));
   const c = await prisma.company.update({
     where: { id: user.company.id },
@@ -201,7 +201,7 @@ export async function createBrandingUploadUrl(
   const user = await requireUser();
   const kind = assetKindSchema.parse(kindRaw);
   const spec = ASSET_SPECS[kind];
-  if (!spec.perUser) assertOwner(user);
+  if (!spec.perUser) assertCanEditCompanyAssets(user);
   const err = validateAsset(kind, { type: mime, size });
   if (err) throw new Error(err);
   const path = assetPath(kind, mime, { companyId: user.company.id, userId: user.id });
@@ -216,7 +216,7 @@ export async function setBrandingAsset(kindRaw: string, path: string): Promise<v
   const user = await requireUser();
   const kind = assetKindSchema.parse(kindRaw);
   const spec = ASSET_SPECS[kind];
-  if (!spec.perUser) assertOwner(user); // company assets are owner-only (before any DB access)
+  if (!spec.perUser) assertCanEditCompanyAssets(user); // company.branding (before any DB access)
   if (!path.startsWith(`${user.company.id}/`)) throw new Error("FORBIDDEN");
 
   const prev = await currentAssetPath(user, kind);
@@ -241,7 +241,7 @@ export async function removeBrandingAsset(kindRaw: string): Promise<void> {
   const user = await requireUser();
   const kind = assetKindSchema.parse(kindRaw);
   const spec = ASSET_SPECS[kind];
-  if (!spec.perUser) assertOwner(user); // company assets are owner-only (before any DB access)
+  if (!spec.perUser) assertCanEditCompanyAssets(user); // company.branding (before any DB access)
   const prev = await currentAssetPath(user, kind);
   if (prev) {
     const supabase = await createServerClient();

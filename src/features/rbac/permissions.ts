@@ -167,13 +167,18 @@ export const PERMISSION_CATALOG = [
   {
     module: "company",
     label: "Company Settings",
+    // Organization-wide configuration — each sensitive area (billing,
+    // subscription, API keys, security) is its OWN permission, separate from
+    // general edit.
     actions: [
       { key: "company.view", label: "View" },
       { key: "company.edit", label: "Edit" },
       { key: "company.branding", label: "Branding" },
-      { key: "company.billing", label: "Billing" },
-      { key: "company.subscription", label: "Subscription" },
-      { key: "company.api_keys", label: "API Keys" },
+      { key: "company.billing", label: "Billing", danger: true },
+      { key: "company.subscription", label: "Subscription", danger: true },
+      { key: "company.api_keys", label: "API Keys", danger: true },
+      { key: "company.integrations", label: "Integrations", danger: true },
+      { key: "company.security", label: "Security Settings", danger: true },
     ],
   },
 ] as const;

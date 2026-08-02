@@ -1,16 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { SessionUser } from "@/lib/auth/types";
+import { ALL_PERMISSIONS } from "@/features/rbac/permissions";
 
 /**
- * Branding authorization. Company-level branding mutations are owner-only and
- * the guard runs before any DB/storage access (mocking the auth layer alone
- * proves it). Per-user assets (signature, profile photo) are NOT owner-gated —
- * any member manages their own, and RLS ("{companyId}/{userId}/…") stops them
- * touching anyone else's.
+ * Branding authorization. Company-level branding mutations require company.edit /
+ * company.branding and the guard runs before any DB/storage access (mocking the
+ * auth layer alone proves it). Per-user assets (signature, profile photo) are NOT
+ * company-gated — any member manages their own, and RLS ("{companyId}/{userId}/…")
+ * stops them touching anyone else's.
  */
 
-const OWNER: SessionUser = { id: "o1", email: "o@x.com", fullName: "Owner", role: "OWNER", company: { id: "c1", name: "Co" } };
-const PM: SessionUser = { id: "p1", email: "p@x.com", fullName: "PM", role: "PROJECT_MANAGER", company: { id: "c1", name: "Co" } };
+const OWNER: SessionUser = { id: "o1", email: "o@x.com", fullName: "Owner", role: "OWNER", permissions: [...ALL_PERMISSIONS], company: { id: "c1", name: "Co" } };
+// A project manager holds company.view only — none of the mutation permissions.
+const PM: SessionUser = { id: "p1", email: "p@x.com", fullName: "PM", role: "PROJECT_MANAGER", permissions: ["company.view"], company: { id: "c1", name: "Co" } };
 
 let currentUser: SessionUser = OWNER;
 vi.mock("@/lib/auth/current-user", () => ({

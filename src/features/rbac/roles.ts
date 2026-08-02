@@ -85,6 +85,9 @@ export const SYSTEM_ROLES: SystemRoleDef[] = [
       "reports.view_operational",
       "reports.export",
       "reports.print",
+      // Legacy: everyone could VIEW company settings read-only (edit was
+      // owner-only). No company.edit/branding for PMs.
+      "company.view",
     ],
   },
   {

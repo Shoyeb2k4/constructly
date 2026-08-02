@@ -6,5 +6,5 @@ export const metadata: Metadata = { title: "Settings" };
 
 export default async function SettingsPage() {
   const user = await getCurrentUser();
-  return <SettingsView isOwner={user?.role === "OWNER"} role={user?.role ?? "PROJECT_MANAGER"} />;
+  return <SettingsView role={user?.role ?? "PROJECT_MANAGER"} />;
 }
