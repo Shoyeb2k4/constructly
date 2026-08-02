@@ -73,14 +73,36 @@ export const PERMISSION_CATALOG = [
     ],
   },
   {
+    module: "bills",
+    label: "Bills",
+    // Financial-workflow lifecycle for vendor bills/invoices. Reserved: a
+    // dedicated bills entity is a future feature — permissions are defined now so
+    // roles can be configured ahead of the workflow landing.
+    actions: [
+      { key: "bills.view", label: "View" },
+      { key: "bills.create", label: "Create" },
+      { key: "bills.edit", label: "Edit" },
+      { key: "bills.approve", label: "Approve" },
+      { key: "bills.archive", label: "Archive" },
+      { key: "bills.restore", label: "Restore" },
+    ],
+  },
+  {
     module: "payments",
-    label: "Bills & Payments",
+    label: "Payments",
+    // Financial workflow, not generic CRUD. approve is a DEDICATED permission
+    // (never part of edit); cancel/delete are privileged. Once a payment is
+    // approved/posted, ordinary edit can no longer modify it (see
+    // payment-workflow.ts — prepared for the future maker-checker workflow).
     actions: [
       { key: "payments.view", label: "View" },
       { key: "payments.create", label: "Create" },
       { key: "payments.edit", label: "Edit" },
       { key: "payments.approve", label: "Approve" },
+      { key: "payments.cancel", label: "Cancel" },
       { key: "payments.delete", label: "Delete", danger: true },
+      { key: "payments.export", label: "Export" },
+      { key: "payments.view_all", label: "View All Payments" },
     ],
   },
   {

@@ -89,7 +89,7 @@ export function PODetailView({ id }: { id: string }) {
               Approve
             </Button>
           )}
-          {approved && (
+          {approved && can("payments.create") && (
             <Button variant="primary" onClick={() => setPayOpen(true)}>
               <IndianRupee />
               Record payment

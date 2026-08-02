@@ -20,6 +20,7 @@ import { StatusBadge, PO_STATUS_META } from "@/components/patterns/status-badge"
 import { cn } from "@/lib/utils";
 import { formatDate } from "@/features/projects/format";
 import { useProjectProcurement } from "../hooks";
+import { useCan } from "@/features/rbac/permission-context";
 import { POEditorSheet } from "./po-editor-sheet";
 import { RecordPaymentDialog } from "./record-payment-dialog";
 import { PaymentStatusBadge } from "./payment-bits";
@@ -49,6 +50,7 @@ function SummaryCard({
 }
 
 export function ProjectProcurementTab({ projectId }: { projectId: string }) {
+  const can = useCan();
   const { data, isLoading } = useProjectProcurement(projectId);
   const [poOpen, setPoOpen] = React.useState(false);
   const [payOpen, setPayOpen] = React.useState(false);
@@ -77,14 +79,18 @@ export function ProjectProcurementTab({ projectId }: { projectId: string }) {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-sm font-medium text-foreground-muted">Purchasing center</h3>
         <div className="flex gap-2">
-          <Button variant="secondary" size="sm" onClick={() => setPayOpen(true)}>
-            <IndianRupee />
-            Record payment
-          </Button>
-          <Button variant="primary" size="sm" onClick={() => setPoOpen(true)}>
-            <Plus />
-            New PO
-          </Button>
+          {can("payments.create") && (
+            <Button variant="secondary" size="sm" onClick={() => setPayOpen(true)}>
+              <IndianRupee />
+              Record payment
+            </Button>
+          )}
+          {can("purchase_orders.create") && (
+            <Button variant="primary" size="sm" onClick={() => setPoOpen(true)}>
+              <Plus />
+              New PO
+            </Button>
+          )}
         </div>
       </div>
 

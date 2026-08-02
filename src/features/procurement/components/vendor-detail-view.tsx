@@ -114,10 +114,12 @@ export function VendorDetailView({ id }: { id: string }) {
             {vendor.status === "INACTIVE" && <Badge variant="neutral">Inactive</Badge>}
           </div>
         </div>
-        <Button variant="primary" onClick={() => setPayOpen(true)}>
-          <IndianRupee />
-          Record payment
-        </Button>
+        {can("payments.create") && (
+          <Button variant="primary" onClick={() => setPayOpen(true)}>
+            <IndianRupee />
+            Record payment
+          </Button>
+        )}
       </div>
 
       {filterName && (

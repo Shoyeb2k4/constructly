@@ -40,9 +40,6 @@ import type {
 } from "../types";
 import type { AgingBuckets } from "../calc";
 
-function assertOwner(user: SessionUser) {
-  if (user.role !== "OWNER") throw new Error("FORBIDDEN");
-}
 /** Ownership scope for a project: broad projects.view_all reaches any project in
  *  the company, otherwise the caller must be the assigned PM. (Behaviour-
  *  identical to the previous owner-or-assigned rule; shared by PO + payment
@@ -861,11 +858,12 @@ export async function pendingApprovalCount(): Promise<number> {
 /* ── Payments ────────────────────────────────────────────────────────── */
 
 export async function listPayments(filters: PaymentFilters = {}): Promise<VendorPaymentItem[]> {
-  const user = await requireUser();
+  const user = await requirePermission("payments.view");
   const rows = await prisma.vendorPayment.findMany({
     where: {
       companyId: user.company.id,
-      ...(user.role !== "OWNER" ? { project: { pmId: user.id } } : {}),
+      // Scope: without payments.view_all, limited to the caller's projects.
+      ...(hasPermission(user, "payments.view_all") ? {} : { project: { pmId: user.id } }),
       ...(filters.vendorId && filters.vendorId !== "ALL" ? { vendorId: filters.vendorId } : {}),
       ...(filters.projectId && filters.projectId !== "ALL" ? { projectId: filters.projectId } : {}),
       ...(filters.purchaseOrderId ? { purchaseOrderId: filters.purchaseOrderId } : {}),
@@ -880,7 +878,7 @@ export async function listPayments(filters: PaymentFilters = {}): Promise<Vendor
 }
 
 export async function createPayment(input: CreatePaymentInput): Promise<VendorPaymentItem> {
-  const user = await requireUser();
+  const user = await requirePermission("payments.create");
   createPaymentInputSchema.parse(input);
   await assertProjectAccess(user, input.projectId);
   await assertVendorAccess(user, input.vendorId);
@@ -939,20 +937,31 @@ export async function createPayment(input: CreatePaymentInput): Promise<VendorPa
 }
 
 export async function deletePayment(id: string): Promise<void> {
-  const user = await requireUser();
-  assertOwner(user);
-  const row = await prisma.vendorPayment.delete({ where: { id, companyId: user.company.id } });
-  await prisma.activityLog.create({
-    data: {
-      companyId: user.company.id,
-      actorId: user.id,
-      action: "payment.deleted",
-      entityType: "vendor_payment",
-      entityId: id,
-      summary: "Deleted a vendor payment",
-      meta: { vendorId: row.vendorId, projectId: row.projectId, amountPaise: Number(row.amountPaise) },
-    },
+  const user = await requirePermission("payments.delete");
+  const row = await prisma.vendorPayment.findFirst({
+    where: { id, companyId: user.company.id },
+    select: { id: true, vendorId: true, projectId: true, amountPaise: true, project: { select: { pmId: true } } },
   });
+  if (!row) throw new Error("NOT_FOUND");
+  // Ownership scope: broad payments.view_all deletes any; otherwise only payments
+  // on the caller's assigned projects.
+  if (!hasPermission(user, "payments.view_all") && row.project.pmId !== user.id) {
+    throw new Error("FORBIDDEN");
+  }
+  await prisma.$transaction([
+    prisma.vendorPayment.delete({ where: { id } }),
+    prisma.activityLog.create({
+      data: {
+        companyId: user.company.id,
+        actorId: user.id,
+        action: "payment.deleted",
+        entityType: "vendor_payment",
+        entityId: id,
+        summary: "Deleted a vendor payment",
+        meta: { vendorId: row.vendorId, projectId: row.projectId, amountPaise: Number(row.amountPaise) },
+      },
+    }),
+  ]);
 }
 
 /* ── Project-aware views ─────────────────────────────────────────────── */

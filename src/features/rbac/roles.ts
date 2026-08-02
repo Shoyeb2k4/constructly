@@ -74,6 +74,10 @@ export const SYSTEM_ROLES: SystemRoleDef[] = [
       "purchase_orders.view",
       "purchase_orders.create",
       "purchase_orders.edit",
+      // Legacy: PMs viewed + recorded vendor payments on their assigned projects
+      // (no delete/approve).
+      "payments.view",
+      "payments.create",
       "reports.view",
     ],
   },
