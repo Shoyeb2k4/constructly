@@ -30,8 +30,9 @@ export function assertCanAssignRole(actor: SessionUser, role: Role): void {
   assertCanGrantPermissions(actor, permissionsForLegacyRole(role));
 }
 
-/** The Owner system role is protected: it can never be edited or deleted, and
- *  its permissions can't be stripped. Prepared for the future role-CRUD actions. */
+/** System roles (incl. the all-access Owner) are protected: they can't be edited
+ *  or deleted — clone one to customise. Only company-created custom roles are
+ *  mutable. */
 export function assertRoleMutable(role: { isOwner: boolean; isSystem?: boolean }): void {
-  if (role.isOwner) throw new Error("PROTECTED_ROLE");
+  if (role.isOwner || role.isSystem) throw new Error("PROTECTED_ROLE");
 }

@@ -48,12 +48,15 @@ export async function listMembers(): Promise<TeamMember[]> {
   const rows = await prisma.user.findMany({
     where: { companyId: user.company.id },
     orderBy: [{ role: "asc" }, { fullName: "asc" }],
+    include: { companyRole: { select: { id: true, name: true } } },
   });
   return rows.map((u) => ({
     id: u.id,
     email: u.email,
     fullName: u.fullName,
     role: u.role as Role,
+    roleId: u.companyRoleId ?? null,
+    roleName: u.companyRole?.name ?? null,
     status: u.status === "DISABLED" ? "DISABLED" : "ACTIVE",
     isSelf: u.id === user.id,
     createdAt: u.createdAt.toISOString(),

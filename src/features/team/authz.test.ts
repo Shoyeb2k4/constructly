@@ -52,11 +52,14 @@ describe("assertCanAssignRole — assigning a role hands over its permissions", 
   });
 });
 
-describe("assertRoleMutable — the Owner role is protected", () => {
-  it("throws for the owner role (never editable/deletable)", () => {
+describe("assertRoleMutable — system & Owner roles are protected", () => {
+  it("throws for the owner role", () => {
     expect(() => assertRoleMutable({ isOwner: true, isSystem: true })).toThrow("PROTECTED_ROLE");
   });
-  it("allows a non-owner role", () => {
+  it("throws for a non-owner SYSTEM role (clone to customise)", () => {
+    expect(() => assertRoleMutable({ isOwner: false, isSystem: true })).toThrow("PROTECTED_ROLE");
+  });
+  it("allows a custom role", () => {
     expect(() => assertRoleMutable({ isOwner: false, isSystem: false })).not.toThrow();
   });
 });

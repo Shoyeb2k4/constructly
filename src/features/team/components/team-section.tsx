@@ -38,12 +38,12 @@ import {
   useInviteMember,
   useResendInvitation,
   useCancelInvitation,
-  useChangeMemberRole,
   useSetMemberStatus,
   useRemoveMember,
 } from "../hooks";
 import type { TeamMember } from "../types";
 import { useCan } from "@/features/rbac/permission-context";
+import { useAssignableRoles, useAssignUserRole } from "@/features/rbac/hooks";
 
 export function TeamSection() {
   const can = useCan();
@@ -51,12 +51,13 @@ export function TeamSection() {
   const canAssignRoles = can("roles.assign");
   const canDisable = can("users.disable");
   const canDelete = can("users.delete");
+  const { data: assignableRoles = [] } = useAssignableRoles(canAssignRoles);
+  const assignRole = useAssignUserRole();
   const { data: members = [], isLoading } = useMembers();
   const { data: invitations = [] } = useInvitations();
   const invite = useInviteMember();
   const resend = useResendInvitation();
   const cancel = useCancelInvitation();
-  const changeRole = useChangeMemberRole();
   const setStatus = useSetMemberStatus();
   const removeMut = useRemoveMember();
 
@@ -181,20 +182,24 @@ export function TeamSection() {
                       <p className="truncate text-xs text-foreground-subtle">{m.email}</p>
                     </div>
                     <div className="flex items-center gap-2">
-                      <Select
-                        value={m.role}
-                        onValueChange={(v) => changeRole.mutate({ userId: m.id, role: v as Role })}
-                        disabled={!canAssignRoles || m.isSelf || isLastOwner || changeRole.isPending}
-                      >
-                        <SelectTrigger className="h-8 w-40 text-xs" aria-label={`Role for ${m.fullName}`}>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {ASSIGNABLE_ROLES.map((r) => (
-                            <SelectItem key={r} value={r}>{ROLE_LABEL[r]}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      {canAssignRoles ? (
+                        <Select
+                          value={m.roleId ?? ""}
+                          onValueChange={(v) => assignRole.mutate({ userId: m.id, roleId: v })}
+                          disabled={m.isSelf || isLastOwner || assignRole.isPending}
+                        >
+                          <SelectTrigger className="h-8 w-44 text-xs" aria-label={`Role for ${m.fullName}`}>
+                            <SelectValue placeholder="No role" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {assignableRoles.map((r) => (
+                              <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <span className="text-xs text-foreground-muted">{m.roleName ?? "—"}</span>
+                      )}
                       {m.isSelf || (!canDisable && !canDelete) ? (
                         <div className="size-8" aria-hidden />
                       ) : (

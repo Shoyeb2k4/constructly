@@ -8,6 +8,9 @@ export interface TeamMember {
   email: string;
   fullName: string;
   role: Role;
+  /** Assigned RBAC company role (null only for legacy rows without one). */
+  roleId: string | null;
+  roleName: string | null;
   status: MemberStatus;
   /** True for the signed-in owner viewing the list (self-actions are guarded). */
   isSelf: boolean;

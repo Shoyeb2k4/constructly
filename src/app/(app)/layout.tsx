@@ -52,9 +52,13 @@ export default async function AppLayout({
       {branding.colorsCss && (
         <style dangerouslySetInnerHTML={{ __html: `:root{${branding.colorsCss}}` }} />
       )}
-      <AppShell user={user} branding={{ name: branding.name, logoUrl: branding.logoUrl }}>
-        <PermissionProvider permissions={user.permissions ?? []}>{children}</PermissionProvider>
-      </AppShell>
+      {/* Provider wraps the whole shell so the sidebar (permission-aware nav)
+          and the page content both read the session's permissions. */}
+      <PermissionProvider permissions={user.permissions ?? []}>
+        <AppShell user={user} branding={{ name: branding.name, logoUrl: branding.logoUrl }}>
+          {children}
+        </AppShell>
+      </PermissionProvider>
     </>
   );
 }
