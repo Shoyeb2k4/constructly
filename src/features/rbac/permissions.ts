@@ -125,10 +125,16 @@ export const PERMISSION_CATALOG = [
   {
     module: "reports",
     label: "Reports",
+    // Viewing is distinct from exporting; financial reports need a dedicated
+    // permission separate from operational ones.
     actions: [
       { key: "reports.view", label: "View" },
       { key: "reports.export", label: "Export" },
       { key: "reports.print", label: "Print" },
+      { key: "reports.schedule", label: "Schedule" },
+      { key: "reports.view_financial", label: "View Financial Reports" },
+      { key: "reports.view_operational", label: "View Operational Reports" },
+      { key: "reports.view_all", label: "View All Reports" },
     ],
   },
   {

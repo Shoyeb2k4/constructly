@@ -2,8 +2,11 @@
 
 import * as React from "react";
 import Link from "next/link";
+import { toast } from "sonner";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { ChevronRight, Download, FileSpreadsheet, BarChart3 } from "lucide-react";
+import { useCan } from "@/features/rbac/permission-context";
+import { authorizeReportExport } from "../server/actions";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -29,7 +32,24 @@ const ALL = "__all__";
 
 export function ReportView({ id }: { id: string }) {
   const def = getReport(id);
+  const can = useCan();
+  const canExport = can("reports.export");
   const router = useRouter();
+
+  /** Export is server-gated: the report data never leaves via a download unless
+   *  the caller can both view AND export it. */
+  async function runExport(kind: "excel" | "pdf") {
+    if (!result) return;
+    try {
+      await authorizeReportExport(id);
+    } catch {
+      toast.error("You don't have permission to export this report.");
+      return;
+    }
+    const ex = await import("../exporters");
+    if (kind === "excel") ex.reportToExcel(result);
+    else ex.reportToPdf(result);
+  }
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
@@ -114,26 +134,28 @@ export function ReportView({ id }: { id: string }) {
             </>
           )}
 
-          <div className="ml-auto flex gap-2">
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={!result || result.isEmpty}
-              onClick={async () => { if (result) (await import("../exporters")).reportToExcel(result); }}
-            >
-              <FileSpreadsheet />
-              Excel
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={!result || result.isEmpty}
-              onClick={async () => { if (result) (await import("../exporters")).reportToPdf(result); }}
-            >
-              <Download />
-              PDF
-            </Button>
-          </div>
+          {canExport && (
+            <div className="ml-auto flex gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={!result || result.isEmpty}
+                onClick={() => runExport("excel")}
+              >
+                <FileSpreadsheet />
+                Excel
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={!result || result.isEmpty}
+                onClick={() => runExport("pdf")}
+              >
+                <Download />
+                PDF
+              </Button>
+            </div>
+          )}
         </CardContent>
       </Card>
 

@@ -14,6 +14,8 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { REPORTS } from "../registry";
+import { canViewReport } from "../report-meta";
+import { useCan } from "@/features/rbac/permission-context";
 import type { ReportCategory } from "../types";
 
 const CATEGORY_ICON: Record<ReportCategory, React.ElementType> = {
@@ -29,9 +31,13 @@ const ICON_OVERRIDE: Record<string, React.ElementType> = {
 };
 
 export function ReportHub() {
+  const can = useCan();
+  // Only show reports the user may view — financial reports are hidden without
+  // reports.view_financial (the server page guard enforces the same).
+  const visible = REPORTS.filter((r) => canViewReport(can, r.id));
   return (
     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-      {REPORTS.map((r) => {
+      {visible.map((r) => {
         const Icon = ICON_OVERRIDE[r.id] ?? CATEGORY_ICON[r.category];
         return (
           <Link key={r.id} href={`/reports/${r.id}`} className="group">

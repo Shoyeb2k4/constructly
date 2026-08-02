@@ -78,7 +78,13 @@ export const SYSTEM_ROLES: SystemRoleDef[] = [
       // (no delete/approve).
       "payments.view",
       "payments.create",
+      // Legacy: reports had no gating — any member viewed every report type and
+      // exported. Report DATA is still scoped by the underlying module perms.
       "reports.view",
+      "reports.view_financial",
+      "reports.view_operational",
+      "reports.export",
+      "reports.print",
     ],
   },
   {
