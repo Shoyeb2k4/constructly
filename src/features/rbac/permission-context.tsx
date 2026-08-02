@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import type { Permission } from "./permissions";
+import type { Permission, PermissionModule } from "./permissions";
 
 /**
  * Client-side permission context. The session's resolved permission list is
@@ -27,4 +27,20 @@ export function PermissionProvider({
 export function useCan(): (permission: Permission) => boolean {
   const set = React.useContext(PermissionContext);
   return React.useCallback((permission: Permission) => set.has(permission), [set]);
+}
+
+/**
+ * Returns a `canAccessModule(module)` predicate — true when the user holds ANY
+ * permission within that module. Drives sidebar/module visibility.
+ */
+export function useCanAccessModule(): (module: PermissionModule) => boolean {
+  const set = React.useContext(PermissionContext);
+  return React.useCallback(
+    (module: PermissionModule) => {
+      const prefix = `${module}.`;
+      for (const p of set) if (p.startsWith(prefix)) return true;
+      return false;
+    },
+    [set],
+  );
 }

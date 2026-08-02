@@ -8,22 +8,25 @@ import {
   BarChart3,
   Settings,
 } from "lucide-react";
+import type { PermissionModule } from "@/features/rbac/permissions";
 
 export type NavItem = {
   label: string;
   href: string;
   icon: LucideIcon;
-  /** Roles allowed to see this item. Empty = all authenticated users. */
-  roles?: Array<"OWNER" | "PROJECT_MANAGER">;
+  /** Modules that make this item visible — shown if the user can access ANY of
+   *  them (holds any permission within). Omitted = visible to all. */
+  modules?: PermissionModule[];
 };
 
 /** Primary application navigation. Order defines sidebar order. */
 export const NAV_ITEMS: NavItem[] = [
   { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-  { label: "Projects", href: "/projects", icon: FolderKanban },
-  { label: "Labor", href: "/labor", icon: HardHat },
-  { label: "Vendors", href: "/vendors", icon: Truck },
-  { label: "Procurement", href: "/procurement", icon: ShoppingCart },
-  { label: "Reports", href: "/reports", icon: BarChart3 },
-  { label: "Settings", href: "/settings", icon: Settings, roles: ["OWNER"] },
+  { label: "Projects", href: "/projects", icon: FolderKanban, modules: ["projects"] },
+  { label: "Labor", href: "/labor", icon: HardHat, modules: ["labour", "attendance"] },
+  { label: "Vendors", href: "/vendors", icon: Truck, modules: ["vendors"] },
+  { label: "Procurement", href: "/procurement", icon: ShoppingCart, modules: ["purchase_orders"] },
+  { label: "Reports", href: "/reports", icon: BarChart3, modules: ["reports"] },
+  // Settings is always shown — every user has a personal profile section there.
+  { label: "Settings", href: "/settings", icon: Settings },
 ];

@@ -4,6 +4,7 @@ import { X } from "lucide-react";
 import { NAV_ITEMS } from "@/config/nav";
 import type { SessionUser } from "@/lib/auth/types";
 import { cn } from "@/lib/utils";
+import { useCanAccessModule } from "@/features/rbac/permission-context";
 import { Logo } from "./logo";
 import { NavLink } from "./nav-link";
 
@@ -14,14 +15,14 @@ export interface ShellBranding {
 }
 
 function NavList({
-  user,
   onNavigate,
 }: {
-  user: SessionUser;
   onNavigate?: () => void;
 }) {
+  const canAccessModule = useCanAccessModule();
+  // Show an item when the user can access any of its modules (permission-aware).
   const items = NAV_ITEMS.filter(
-    (item) => !item.roles || item.roles.includes(user.role),
+    (item) => !item.modules || item.modules.some(canAccessModule),
   );
   return (
     <nav className="flex-1 space-y-0.5 px-3 py-4">
@@ -52,7 +53,7 @@ export function Sidebar({
         <div className="flex h-14 items-center px-5">
           <Logo src={logoSrc} name={brandName} />
         </div>
-        <NavList user={user} />
+        <NavList />
         <div className="px-5 py-4">
           <span className="text-xs text-foreground-subtle">{brandName}</span>
         </div>
@@ -88,7 +89,7 @@ export function Sidebar({
               <X className="size-5" />
             </button>
           </div>
-          <NavList user={user} onNavigate={onClose} />
+          <NavList onNavigate={onClose} />
         </aside>
       </div>
     </>
