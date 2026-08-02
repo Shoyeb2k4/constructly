@@ -68,6 +68,7 @@ import {
 import { CATEGORY_COLORS, FALLBACK_COLOR } from "../constants";
 import { useCategories, useHierarchyMutations } from "../hooks";
 import { laborKeys } from "../data";
+import { useCan } from "@/features/rbac/permission-context";
 import type { CategoryWithSubs, LabourCategory, LabourSubcategory } from "../types";
 
 /* ── Dialogs ─────────────────────────────────────────────────────────── */
@@ -255,6 +256,7 @@ function SortableItem({
 
 export function CategoriesView() {
   const qc = useQueryClient();
+  const canCreate = useCan()("labour.create");
   const { data: categories = [], isLoading } = useCategories();
   const { deleteCategory, deleteSubcategory, reorderCategories, reorderSubcategories } = useHierarchyMutations();
 
@@ -297,16 +299,18 @@ export function CategoriesView() {
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-end gap-2">
-        <Button variant="secondary" onClick={() => { setEditingSub(null); setSubDefaultCat(null); setSubDialog(true); }}>
-          <Plus />
-          Add subcategory
-        </Button>
-        <Button variant="primary" onClick={() => { setEditingCat(null); setCatDialog(true); }}>
-          <FolderPlus />
-          Add category
-        </Button>
-      </div>
+      {canCreate && (
+        <div className="flex justify-end gap-2">
+          <Button variant="secondary" onClick={() => { setEditingSub(null); setSubDefaultCat(null); setSubDialog(true); }}>
+            <Plus />
+            Add subcategory
+          </Button>
+          <Button variant="primary" onClick={() => { setEditingCat(null); setCatDialog(true); }}>
+            <FolderPlus />
+            Add category
+          </Button>
+        </div>
+      )}
 
       {isLoading ? (
         <RowsSkeleton rows={5} />
@@ -316,9 +320,11 @@ export function CategoriesView() {
           title="No labour categories"
           description="Add categories like Carpenter and Mason, each with subcategories like Main Carpenter and Carpenter Helper."
           action={
-            <Button variant="primary" size="sm" onClick={() => { setEditingCat(null); setCatDialog(true); }}>
-              <FolderPlus />Add category
-            </Button>
+            canCreate ? (
+              <Button variant="primary" size="sm" onClick={() => { setEditingCat(null); setCatDialog(true); }}>
+                <FolderPlus />Add category
+              </Button>
+            ) : undefined
           }
         />
       ) : (

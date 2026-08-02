@@ -46,14 +46,30 @@ export const PERMISSION_CATALOG = [
     ],
   },
   {
+    module: "labour",
+    label: "Labour",
+    // Master data (categories/subcategories) — kept in its own namespace,
+    // separate from the transactional attendance permissions below.
+    actions: [
+      { key: "labour.view", label: "View" },
+      { key: "labour.create", label: "Create" },
+      { key: "labour.edit", label: "Edit" },
+      { key: "labour.archive", label: "Archive / remove", danger: true },
+    ],
+  },
+  {
     module: "attendance",
     label: "Attendance",
+    // Transactional records — independent namespace. `edit` is required to change
+    // a record in a LOCKED period; lock/unlock gate the locking workflow.
     actions: [
       { key: "attendance.view", label: "View" },
       { key: "attendance.mark", label: "Mark" },
-      { key: "attendance.edit", label: "Edit" },
+      { key: "attendance.edit", label: "Edit locked records" },
       { key: "attendance.lock", label: "Lock" },
+      { key: "attendance.unlock", label: "Unlock" },
       { key: "attendance.export", label: "Export" },
+      { key: "attendance.view_all", label: "View All Attendance" },
     ],
   },
   {

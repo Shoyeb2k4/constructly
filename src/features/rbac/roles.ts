@@ -59,7 +59,14 @@ export const SYSTEM_ROLES: SystemRoleDef[] = [
       "projects.view",
       "projects.edit",
       "projects.archive",
+      // Legacy: any member managed labour master data + marked attendance on
+      // their assigned projects (no view_all, no lock/unlock).
+      "labour.view",
+      "labour.create",
+      "labour.edit",
+      "labour.archive",
       "attendance.view",
+      "attendance.mark",
       "attendance.export",
       "vendors.view",
       // Legacy PROJECT_MANAGER could raise + edit draft POs on assigned projects

@@ -31,6 +31,7 @@ import { cn } from "@/lib/utils";
 import { useProjects } from "@/features/projects/hooks";
 import { useContractors } from "@/features/contractors/hooks";
 import { useAttendanceSheet, useSetQuantity, useCopyPreviousDay } from "../../hooks";
+import { useCan } from "@/features/rbac/permission-context";
 import { getLastProject, setLastProject, todayISO } from "../../last-project";
 // exports.ts (jsPDF + SheetJS) is lazy-loaded on click to keep it out of the
 // route bundle — see the export handlers below.
@@ -42,9 +43,11 @@ import { AttendanceCalendar } from "./attendance-calendar";
 function SubcategoryRow({
   row,
   onCommit,
+  canMark,
 }: {
   row: SheetRow;
   onCommit: (quantity: number, notes?: string | null) => void;
+  canMark: boolean;
 }) {
   const [draft, setDraft] = React.useState(String(row.quantity || ""));
   const [showNote, setShowNote] = React.useState(false);
@@ -105,7 +108,7 @@ function SubcategoryRow({
         <div className="flex items-center overflow-hidden rounded-lg border border-border">
           <button
             onClick={() => step(-0.5)}
-            disabled={row.quantity === 0}
+            disabled={!canMark || row.quantity === 0}
             aria-label={`Half day fewer ${row.name}`}
             className="flex h-11 w-11 items-center justify-center text-foreground-muted transition-colors hover:bg-surface-muted disabled:opacity-30"
           >
@@ -118,16 +121,19 @@ function SubcategoryRow({
             onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
             inputMode="decimal"
             placeholder="0"
+            readOnly={!canMark}
             aria-label={`${row.name} present (0.5 = half day)`}
             className={cn(
               "h-11 w-16 border-x border-border bg-transparent text-center text-base font-semibold tabular-nums outline-none",
               row.quantity > 0 ? "text-foreground" : "text-foreground-subtle",
+              !canMark && "cursor-not-allowed",
             )}
           />
           <button
             onClick={() => step(0.5)}
+            disabled={!canMark}
             aria-label={`Half day more ${row.name}`}
-            className="flex h-11 w-11 items-center justify-center text-foreground-muted transition-colors hover:bg-surface-muted"
+            className="flex h-11 w-11 items-center justify-center text-foreground-muted transition-colors hover:bg-surface-muted disabled:opacity-30"
           >
             <Plus className="size-4" />
           </button>
@@ -154,11 +160,13 @@ function CategoryGroup({
   collapsed,
   onToggle,
   onCommit,
+  canMark,
 }: {
   group: SheetGroup;
   collapsed: boolean;
   onToggle: () => void;
   onCommit: (subcategoryId: string, quantity: number, notes?: string | null) => void;
+  canMark: boolean;
 }) {
   return (
     <div className="border-b border-border last:border-0">
@@ -183,6 +191,7 @@ function CategoryGroup({
           <SubcategoryRow
             key={row.subcategoryId}
             row={row}
+            canMark={canMark}
             onCommit={(qty, notes) => onCommit(row.subcategoryId, qty, notes)}
           />
         ))}
@@ -191,6 +200,9 @@ function CategoryGroup({
 }
 
 export function AttendanceView() {
+  const can = useCan();
+  const canMark = can("attendance.mark");
+  const canExport = can("attendance.export");
   const { data: projects = [] } = useProjects({});
   const active = React.useMemo(
     () => projects.filter((p) => !p.archivedAt && p.stage !== "CLOSED"),
@@ -312,10 +324,12 @@ export function AttendanceView() {
         )}
 
         <div className="flex flex-wrap items-center gap-2">
-          <Button variant="secondary" onClick={() => copyPrev.mutate()} disabled={copyPrev.isPending || !projectId}>
-            <CopyPlus />
-            Copy yesterday
-          </Button>
+          {canMark && (
+            <Button variant="secondary" onClick={() => copyPrev.mutate()} disabled={copyPrev.isPending || !projectId}>
+              <CopyPlus />
+              Copy yesterday
+            </Button>
+          )}
           {contractors.length > 0 && (
             <Select
               value={contractorId ?? "NONE"}
@@ -332,18 +346,20 @@ export function AttendanceView() {
               </SelectContent>
             </Select>
           )}
-          <div className="ml-auto flex items-center gap-2">
-            <Button variant="ghost" size="sm" disabled={!sheet || sheet.totalPresent === 0}
-              onClick={async () => { if (sheet) (await import("../../exports")).exportSheetPdf(sheet, projectName); }}>
-              <FileText />
-              PDF
-            </Button>
-            <Button variant="ghost" size="sm" disabled={!sheet || sheet.totalPresent === 0}
-              onClick={async () => { if (sheet) (await import("../../exports")).exportSheetExcel(sheet, projectName); }}>
-              <FileSpreadsheet />
-              Excel
-            </Button>
-          </div>
+          {canExport && (
+            <div className="ml-auto flex items-center gap-2">
+              <Button variant="ghost" size="sm" disabled={!sheet || sheet.totalPresent === 0}
+                onClick={async () => { if (sheet) (await import("../../exports")).exportSheetPdf(sheet, projectName); }}>
+                <FileText />
+                PDF
+              </Button>
+              <Button variant="ghost" size="sm" disabled={!sheet || sheet.totalPresent === 0}
+                onClick={async () => { if (sheet) (await import("../../exports")).exportSheetExcel(sheet, projectName); }}>
+                <FileSpreadsheet />
+                Excel
+              </Button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -367,6 +383,7 @@ export function AttendanceView() {
               key={group.categoryId}
               group={group}
               collapsed={collapsed.has(group.categoryId)}
+              canMark={canMark}
               onToggle={() => toggleGroup(group.categoryId)}
               onCommit={(subcategoryId, quantity, notes) =>
                 setQuantity.mutate({ subcategoryId, quantity, notes, contractorId })

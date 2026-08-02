@@ -1,7 +1,7 @@
 "use server";
 
 import { prisma } from "@/lib/db/prisma";
-import { requireUser } from "@/lib/auth/current-user";
+import { requirePermission, hasPermission } from "@/lib/auth/permissions";
 import type { SessionUser } from "@/lib/auth/types";
 import { rowTotals, sheetTotals, summarize } from "../calc";
 import type {
@@ -18,17 +18,31 @@ import type {
   UpdateSubcategoryInput,
 } from "../types";
 
+/** Ownership scope: projects.view_all reaches any project, otherwise the caller
+ *  must be the assigned PM. (Behaviour-identical to the old owner-or-assigned
+ *  rule.) */
 async function assertProjectAccess(user: SessionUser, projectId: string) {
   const p = await prisma.project.findFirst({
     where: {
       id: projectId,
       companyId: user.company.id,
       deletedAt: null,
-      ...(user.role !== "OWNER" ? { pmId: user.id } : {}),
+      ...(hasPermission(user, "projects.view_all") ? {} : { pmId: user.id }),
     },
     select: { id: true },
   });
   if (!p) throw new Error("FORBIDDEN");
+}
+
+/**
+ * Whether an attendance period (project + date) is locked. Locking storage/UI is
+ * a future feature; this stub returns false today, so behaviour is unchanged.
+ * When locking ships, a locked period will require attendance.edit to modify
+ * (see setQuantity) — the enforcement path is already wired.
+ */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- params document the intended signature for the future lock feature
+async function isPeriodLocked(companyId: string, projectId: string, date: string): Promise<boolean> {
+  return false;
 }
 
 const toCategory = (c: { id: string; name: string; color: string | null; displayOrder: number }): LabourCategory => ({
@@ -41,7 +55,7 @@ const toSubcategory = (s: { id: string; categoryId: string; name: string; dailyR
 /* ── Hierarchy ───────────────────────────────────────────────────────── */
 
 export async function listCategories(): Promise<CategoryWithSubs[]> {
-  const user = await requireUser();
+  const user = await requirePermission("labour.view");
   const rows = await prisma.labourCategory.findMany({
     where: { companyId: user.company.id },
     orderBy: { displayOrder: "asc" },
@@ -51,7 +65,7 @@ export async function listCategories(): Promise<CategoryWithSubs[]> {
 }
 
 export async function createCategory(input: CreateCategoryInput): Promise<LabourCategory> {
-  const user = await requireUser();
+  const user = await requirePermission("labour.create");
   const count = await prisma.labourCategory.count({ where: { companyId: user.company.id } });
   const c = await prisma.labourCategory.create({
     data: { companyId: user.company.id, name: input.name, color: input.color ?? null, displayOrder: count },
@@ -60,7 +74,7 @@ export async function createCategory(input: CreateCategoryInput): Promise<Labour
 }
 
 export async function updateCategory(id: string, patch: UpdateCategoryInput): Promise<LabourCategory> {
-  const user = await requireUser();
+  const user = await requirePermission("labour.edit");
   const c = await prisma.labourCategory.update({
     where: { id, companyId: user.company.id },
     data: { name: patch.name, ...(patch.color !== undefined ? { color: patch.color ?? null } : {}) },
@@ -69,12 +83,12 @@ export async function updateCategory(id: string, patch: UpdateCategoryInput): Pr
 }
 
 export async function deleteCategory(id: string): Promise<void> {
-  const user = await requireUser();
+  const user = await requirePermission("labour.archive");
   await prisma.labourCategory.delete({ where: { id, companyId: user.company.id } });
 }
 
 export async function reorderCategories(orderedIds: string[]): Promise<void> {
-  const user = await requireUser();
+  const user = await requirePermission("labour.edit");
   await prisma.$transaction(
     orderedIds.map((id, i) =>
       prisma.labourCategory.update({ where: { id, companyId: user.company.id }, data: { displayOrder: i } }),
@@ -83,7 +97,7 @@ export async function reorderCategories(orderedIds: string[]): Promise<void> {
 }
 
 export async function createSubcategory(input: CreateSubcategoryInput): Promise<LabourSubcategory> {
-  const user = await requireUser();
+  const user = await requirePermission("labour.create");
   // Tenant guard: the parent category must belong to the caller's company.
   const category = await prisma.labourCategory.findFirst({
     where: { id: input.categoryId, companyId: user.company.id },
@@ -106,7 +120,7 @@ export async function createSubcategory(input: CreateSubcategoryInput): Promise<
 }
 
 export async function updateSubcategory(id: string, patch: UpdateSubcategoryInput): Promise<LabourSubcategory> {
-  const user = await requireUser();
+  const user = await requirePermission("labour.edit");
   const s = await prisma.labourSubcategory.update({
     where: { id, companyId: user.company.id },
     data: {
@@ -119,12 +133,12 @@ export async function updateSubcategory(id: string, patch: UpdateSubcategoryInpu
 }
 
 export async function deleteSubcategory(id: string): Promise<void> {
-  const user = await requireUser();
+  const user = await requirePermission("labour.archive");
   await prisma.labourSubcategory.delete({ where: { id, companyId: user.company.id } });
 }
 
 export async function reorderSubcategories(categoryId: string, orderedIds: string[]): Promise<void> {
-  const user = await requireUser();
+  const user = await requirePermission("labour.edit");
   await prisma.$transaction(
     orderedIds.map((id, i) =>
       prisma.labourSubcategory.update({
@@ -165,7 +179,7 @@ async function buildSheet(companyId: string, projectId: string, date: string): P
 }
 
 export async function getSheet(projectId: string, date: string): Promise<AttendanceSheet> {
-  const user = await requireUser();
+  const user = await requirePermission("attendance.view");
   await assertProjectAccess(user, projectId);
   return buildSheet(user.company.id, projectId, date);
 }
@@ -178,8 +192,13 @@ export async function setQuantity(
   notes?: string | null,
   contractorId?: string | null,
 ): Promise<AttendanceSheet> {
-  const user = await requireUser();
+  const user = await requirePermission("attendance.mark");
   await assertProjectAccess(user, projectId);
+  // Locked periods can only be modified with the elevated attendance.edit
+  // permission. (isPeriodLocked is a stub today — see its note.)
+  if (await isPeriodLocked(user.company.id, projectId, date)) {
+    await requirePermission("attendance.edit");
+  }
   const key = { projectId, date: new Date(date), labourSubcategoryId: subcategoryId };
   if (quantity <= 0) {
     await prisma.labourAttendance.deleteMany({ where: { ...key, companyId: user.company.id } });
@@ -224,8 +243,11 @@ export async function setQuantity(
 }
 
 export async function copyPreviousDay(projectId: string, date: string): Promise<AttendanceSheet> {
-  const user = await requireUser();
+  const user = await requirePermission("attendance.mark");
   await assertProjectAccess(user, projectId);
+  if (await isPeriodLocked(user.company.id, projectId, date)) {
+    await requirePermission("attendance.edit");
+  }
   const prev = await prisma.labourAttendance.findFirst({
     where: { companyId: user.company.id, projectId, date: { lt: new Date(date) } },
     orderBy: { date: "desc" },
@@ -246,7 +268,8 @@ async function fetchItems(user: SessionUser, filters: AttendanceFilters): Promis
   const rows = await prisma.labourAttendance.findMany({
     where: {
       companyId: user.company.id,
-      ...(user.role !== "OWNER" ? { project: { pmId: user.id } } : {}),
+      // Scope: without attendance.view_all, limited to the caller's projects.
+      ...(hasPermission(user, "attendance.view_all") ? {} : { project: { pmId: user.id } }),
       ...(filters.projectId && filters.projectId !== "ALL" ? { projectId: filters.projectId } : {}),
       ...(filters.from || filters.to
         ? { date: { ...(filters.from ? { gte: new Date(filters.from) } : {}), ...(filters.to ? { lte: new Date(filters.to) } : {}) } }
@@ -276,11 +299,11 @@ async function fetchItems(user: SessionUser, filters: AttendanceFilters): Promis
 }
 
 export async function listAttendance(filters: AttendanceFilters): Promise<AttendanceRecordItem[]> {
-  const user = await requireUser();
+  const user = await requirePermission("attendance.view");
   return fetchItems(user, filters);
 }
 
 export async function summary(filters: AttendanceFilters): Promise<LabourSummary> {
-  const user = await requireUser();
+  const user = await requirePermission("attendance.view");
   return summarize(await fetchItems(user, filters));
 }
