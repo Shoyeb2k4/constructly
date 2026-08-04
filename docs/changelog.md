@@ -4,6 +4,40 @@ _Human-readable log of what changed and when. Newest first. Keep entries short; 
 
 ## [Unreleased]
 
+### 2026-08-04 — RBAC editable system roles + premium money & UI polish
+UI/UX refinement pass on Roles & Permissions and the Dashboard, plus an RBAC
+behavior change. No data-model changes; server-first enforcement preserved.
+- **RBAC — system roles are now editable templates.** Split `assertRoleMutable`
+  into `assertRoleEditable` (locks the **Owner** role only — implicit all-access)
+  and `assertRoleDeletable` (locks Owner **and** system roles — they re-seed). System
+  roles (Admin, Project Manager, Accountant, …) can now have their name, description,
+  and permissions edited but **cannot be deleted**; custom roles remain fully editable
+  **and** deletable; the last-active-Owner guard is intact. Enforcement tests updated.
+- **Roles editor redesign** (`roles-manager.tsx`): sticky role-info header + sticky
+  module rail (icons + grant counts, click-to-jump), effective-permissions meter,
+  clearer badges — **`Owner · Protected`** / **`System · Editable · Non-deletable`** /
+  **`Custom`** (system list icon is a template glyph, not a lock), cleaner permission
+  toggle cards with obvious on/off + danger/lock states, refined search.
+- **Money formatting** (`lib/money.ts`, `money-text.tsx`): new `formatPaiseSmart` is
+  the product-wide default — Indian numbering, **hides a bare `.00`**, keeps exact
+  paise, never rounds; `MoneyText` renders on a single line (`whitespace-nowrap`,
+  tabular figures). Compact `₹37.0L`/`₹1.2Cr` reserved for dense tables (with a
+  full-amount tooltip). Dashboard hero/cards use full values; dense tables stay
+  compact + right-aligned. Fixes the wrapping `₹37,04,725` / `.00` KPI.
+- **Dashboard polish:** KPI cards get stronger hierarchy (value → label → context
+  line, e.g. "34% of budget"), tone-coloured icon chips, softer shadows, hover lift;
+  base `Card` softened (subtler border/elevation) with more padding for consistent,
+  premium spacing across the product.
+- **Ops:** recovered production deploys after the GitHub repo was deleted+recreated —
+  the new repo ID had orphaned the Vercel Git link ("Project Link not found"); fixed
+  by reconnecting the integration (see deploy gotcha #3 in `docs/deployment.md`).
+- **Verified:** typecheck, lint, 390 unit tests; full authenticated production smoke
+  test (all modules, RBAC behaviours, money, light/dark) on `constructly.co.in`.
+- **Follow-ups (non-blocking):** one-time React #418 hydration warning at initial
+  dashboard load (not reproducible in a local prod build — tracked separately);
+  audit whether the lost `fix(access): company-membership visibility` work (orphaned
+  with the deleted repo) needs recovering (tracked separately).
+
 ### 2026-07-19 — v1.0.0 customer acceptance test (PASS) + launch prep
 Full production validation on `next start` from a brand-new empty company through project → labour hierarchy + attendance → vendor → GST purchase order (draft→approved) → partial payment → budgets → dashboard → all six reports → exports → persistence → mobile → dark mode. Every figure verified in exact paise; full report in `PRODUCTION_READINESS.md`.
 - **Fix:** onboarding "Add your crew" card linked to the removed `/labor/workers` route → now `/labor` with category-based copy.
