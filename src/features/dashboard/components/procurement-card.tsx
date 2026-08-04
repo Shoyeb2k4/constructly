@@ -50,14 +50,14 @@ export function ProcurementCard({ procurement }: { procurement: ProcurementWidge
           <>
             {/* Headline metrics + monthly trend */}
             <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]">
-              <div className="grid grid-cols-2 gap-4 self-center sm:grid-cols-4 lg:grid-cols-2">
-                <Metric label="Spend"><MoneyText paise={procurement.spendPaise} compact /></Metric>
-                <Metric label="GST paid"><MoneyText paise={procurement.gstPaidPaise} compact /></Metric>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-5 self-center sm:grid-cols-4 lg:grid-cols-2">
+                <Metric label="Spend"><MoneyText paise={procurement.spendPaise} /></Metric>
+                <Metric label="GST paid"><MoneyText paise={procurement.gstPaidPaise} /></Metric>
                 <Metric
                   label={`Outstanding${procurement.pendingPaymentsCount > 0 ? ` · ${procurement.pendingPaymentsCount}` : ""}`}
                   tone="warning"
                 >
-                  <MoneyText paise={procurement.outstandingPaise} compact />
+                  <MoneyText paise={procurement.outstandingPaise} />
                 </Metric>
                 <Metric label="Recent POs">{procurement.recentPOs.length}</Metric>
               </div>

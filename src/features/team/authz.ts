@@ -30,9 +30,22 @@ export function assertCanAssignRole(actor: SessionUser, role: Role): void {
   assertCanGrantPermissions(actor, permissionsForLegacyRole(role));
 }
 
-/** System roles (incl. the all-access Owner) are protected: they can't be edited
- *  or deleted — clone one to customise. Only company-created custom roles are
- *  mutable. */
-export function assertRoleMutable(role: { isOwner: boolean; isSystem?: boolean }): void {
+/** Only the Owner role is protected from editing: it holds implicit all-access,
+ *  so its permission set is not customisable. Every other role — including the
+ *  seeded system templates (Admin, Project Manager, Accountant, …) — is editable,
+ *  letting companies tailor the defaults to how they actually operate. */
+export function assertRoleEditable(role: { isOwner: boolean; isSystem?: boolean }): void {
+  if (role.isOwner) throw new Error("PROTECTED_ROLE");
+}
+
+/** System roles are default templates and can't be deleted (the app re-seeds
+ *  them per company); the Owner role can never be deleted either. Only bespoke
+ *  custom roles are removable. */
+export function assertRoleDeletable(role: { isOwner: boolean; isSystem?: boolean }): void {
   if (role.isOwner || role.isSystem) throw new Error("PROTECTED_ROLE");
+}
+
+/** @deprecated Use {@link assertRoleEditable} / {@link assertRoleDeletable}. */
+export function assertRoleMutable(role: { isOwner: boolean; isSystem?: boolean }): void {
+  assertRoleDeletable(role);
 }

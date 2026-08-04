@@ -1,12 +1,34 @@
 "use client";
 
 import * as React from "react";
-import { Plus, Copy, Trash2, Search, Shield, Lock, Save, Check } from "lucide-react";
+import {
+  Plus,
+  Copy,
+  Trash2,
+  Search,
+  ShieldCheck,
+  Save,
+  Check,
+  Lock,
+  Layers,
+  FolderKanban,
+  ShoppingCart,
+  HardHat,
+  CalendarCheck,
+  ReceiptText,
+  Wallet,
+  Truck,
+  BarChart3,
+  Users,
+  KeyRound,
+  Building2,
+  type LucideIcon,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -17,12 +39,32 @@ import {
 import { RowsSkeleton } from "@/components/patterns/loading-state";
 import { cn } from "@/lib/utils";
 import { useCan } from "../permission-context";
-import { PERMISSION_CATALOG, ALL_PERMISSIONS, type Permission } from "../permissions";
+import {
+  PERMISSION_CATALOG,
+  ALL_PERMISSIONS,
+  type Permission,
+  type PermissionModule,
+} from "../permissions";
 import { useRoles, useCreateRole, useUpdateRole, useDuplicateRole, useDeleteRole } from "../hooks";
 import type { RoleDTO } from "../server/roles-actions";
 
 /** Local editable copy of a role's grants while the admin is toggling. */
 type Draft = { roleId: string; name: string; description: string; permissions: Set<string> };
+
+/** One icon per module — used sparingly, only in the module rail + section heads. */
+const MODULE_ICON: Record<PermissionModule, LucideIcon> = {
+  projects: FolderKanban,
+  purchase_orders: ShoppingCart,
+  labour: HardHat,
+  attendance: CalendarCheck,
+  bills: ReceiptText,
+  payments: Wallet,
+  vendors: Truck,
+  reports: BarChart3,
+  users: Users,
+  roles: KeyRound,
+  company: Building2,
+};
 
 export function RolesManager() {
   const can = useCan();
@@ -45,8 +87,13 @@ export function RolesManager() {
   const [confirmDelete, setConfirmDelete] = React.useState<RoleDTO | null>(null);
 
   const selected = roles.find((r) => r.id === selectedId) ?? roles[0] ?? null;
-  const protectedRole = !!selected && (selected.isSystem || selected.isOwner);
-  const editable = !!selected && !protectedRole && canManagePerms;
+  const isOwnerRole = !!selected?.isOwner;
+  const isSystemRole = !!selected && selected.isSystem && !selected.isOwner;
+  // Only the Owner role is locked (implicit all-access). System templates + custom
+  // roles are editable, given the manage-permissions grant.
+  const editable = !!selected && !isOwnerRole && canManagePerms;
+  const canEditMeta = !!selected && !isOwnerRole && canEditName;
+  const canDeleteSelected = !!selected && !selected.isSystem && !selected.isOwner && canDelete;
 
   // The permissions the current admin may grant (no privilege escalation).
   const grantable = React.useMemo(() => new Set(ALL_PERMISSIONS.filter((p) => can(p))), [can]);
@@ -64,6 +111,19 @@ export function RolesManager() {
     (draftForSelected.name !== selected.name ||
       draftForSelected.description !== (selected.description ?? "") ||
       !samePerms(draftForSelected.permissions, selected.permissions));
+
+  // Keep the sticky module rail parked just below the sticky role header, whatever
+  // its height (the editable meta inputs change it), so nothing overlaps.
+  const headerRef = React.useRef<HTMLDivElement>(null);
+  const [headerH, setHeaderH] = React.useState(0);
+  React.useLayoutEffect(() => {
+    const el = headerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setHeaderH(el.offsetHeight));
+    ro.observe(el);
+    setHeaderH(el.offsetHeight);
+    return () => ro.disconnect();
+  }, [selected?.id, canEditMeta]);
 
   function beginDraft(role: RoleDTO): Draft {
     return {
@@ -132,70 +192,122 @@ export function RolesManager() {
     );
   }
 
+  function jumpTo(module: PermissionModule) {
+    document.getElementById(`perm-${module}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
   const q = search.trim().toLowerCase();
   const effectiveCount = selected?.isOwner ? ALL_PERMISSIONS.length : currentPerms.size;
+
+  // Per-module grant counts (drives the rail + section pills).
+  const moduleGrant = (mod: (typeof PERMISSION_CATALOG)[number]) =>
+    selected?.isOwner ? mod.actions.length : mod.actions.filter((a) => currentPerms.has(a.key)).length;
+
+  const matchesQuery = (a: { key: string; label: string }) =>
+    !q || a.label.toLowerCase().includes(q) || a.key.toLowerCase().includes(q);
 
   if (isLoading) return <RowsSkeleton rows={6} />;
 
   return (
-    <div className="grid gap-5 lg:grid-cols-[260px_1fr]">
+    <div className="grid gap-6 lg:grid-cols-[248px_minmax(0,1fr)]">
       {/* ── Role list ─────────────────────────────────────────────── */}
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h3 className="text-sm font-medium text-foreground-muted">Roles</h3>
+      <aside className="lg:sticky lg:top-4 lg:self-start">
+        <div className="mb-3 flex items-center justify-between">
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-foreground-subtle">Roles</h3>
           {canCreate && (
-            <Button variant="ghost" size="sm" onClick={() => setCreateOpen(true)}>
+            <Button variant="ghost" size="sm" className="-mr-2 h-8" onClick={() => setCreateOpen(true)}>
               <Plus className="size-4" />
               New
             </Button>
           )}
         </div>
         <div className="space-y-1">
-          {roles.map((r) => (
-            <button
-              key={r.id}
-              onClick={() => setSelectedId(r.id)}
-              className={cn(
-                "flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm transition-colors",
-                selected?.id === r.id ? "bg-primary/10 text-primary" : "hover:bg-surface-muted",
-              )}
-            >
-              {r.isOwner ? <Shield className="size-4 shrink-0" /> : r.isSystem ? <Lock className="size-4 shrink-0 text-foreground-subtle" /> : <span className="size-4 shrink-0" />}
-              <span className="min-w-0 flex-1 truncate font-medium">{r.name}</span>
-              <span className="shrink-0 text-xs text-foreground-subtle">{r.memberCount}</span>
-            </button>
-          ))}
+          {roles.map((r) => {
+            const active = selected?.id === r.id;
+            return (
+              <button
+                key={r.id}
+                onClick={() => setSelectedId(r.id)}
+                aria-current={active ? "true" : undefined}
+                className={cn(
+                  "group flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-sm transition-colors",
+                  active
+                    ? "bg-primary/10 text-primary ring-1 ring-inset ring-primary/20"
+                    : "text-foreground hover:bg-surface-muted",
+                )}
+              >
+                <span
+                  className={cn(
+                    "flex size-6 shrink-0 items-center justify-center rounded-md",
+                    r.isOwner
+                      ? "bg-primary/15 text-primary"
+                      : r.isSystem
+                        ? "bg-surface-muted text-foreground-subtle"
+                        : "bg-surface-muted text-foreground-muted",
+                  )}
+                >
+                  {r.isOwner ? <ShieldCheck className="size-3.5" /> : r.isSystem ? <Layers className="size-3.5" /> : <KeyRound className="size-3.5" />}
+                </span>
+                <span className="min-w-0 flex-1 truncate font-medium">{r.name}</span>
+                <span
+                  className={cn(
+                    "shrink-0 rounded-full px-1.5 py-0.5 text-[11px] tabular-nums",
+                    active ? "bg-primary/15 text-primary" : "bg-surface-muted text-foreground-subtle",
+                  )}
+                >
+                  {r.memberCount}
+                </span>
+              </button>
+            );
+          })}
         </div>
-      </div>
+      </aside>
 
-      {/* ── Permission matrix ─────────────────────────────────────── */}
+      {/* ── Permission editor ─────────────────────────────────────── */}
       {selected && (
-        <Card>
-          <CardHeader className="gap-3">
+        <Card className="overflow-visible p-0">
+          {/* Sticky role information header */}
+          <div
+            ref={headerRef}
+            className="sticky top-0 z-20 space-y-4 rounded-t-xl border-b border-border bg-surface/95 px-6 py-5 backdrop-blur supports-[backdrop-filter]:bg-surface/80"
+          >
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="min-w-0">
-                <CardTitle className="flex items-center gap-2">
-                  {selected.name}
-                  {selected.isOwner && <Badge variant="primary">Owner</Badge>}
-                  {selected.isSystem && !selected.isOwner && <Badge variant="neutral">System</Badge>}
-                </CardTitle>
-                <p className="mt-1 text-sm text-foreground-muted">
-                  {selected.description ?? (protectedRole ? "Protected role — duplicate it to customise." : "Custom role.")}
-                </p>
-                {/* Effective permission preview */}
-                <p className="mt-1 text-xs text-foreground-subtle">
-                  Effective permissions: <span className="font-medium text-foreground-muted">{effectiveCount}</span> of {ALL_PERMISSIONS.length}
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="text-lg font-semibold leading-none tracking-tight">{selected.name}</h2>
+                  {selected.isOwner ? (
+                    <>
+                      <Badge variant="primary">Owner</Badge>
+                      <Badge variant="outline" title="Cannot be deleted or have mandatory permissions removed">Protected</Badge>
+                    </>
+                  ) : selected.isSystem ? (
+                    <>
+                      <Badge variant="neutral" title="A built-in default template">System</Badge>
+                      <Badge variant="success">Editable</Badge>
+                      <Badge variant="outline" title="Built-in template — can be customised but not removed">Non-deletable</Badge>
+                    </>
+                  ) : (
+                    <Badge variant="outline">Custom</Badge>
+                  )}
+                </div>
+                <p className="mt-1.5 max-w-prose text-sm text-foreground-muted">
+                  {selected.description ??
+                    (isOwnerRole
+                      ? "Full, unrestricted access — always holds every permission."
+                      : isSystemRole
+                        ? "A default template you can tailor to how your company works."
+                        : "Custom role.")}
                 </p>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex shrink-0 items-center gap-1.5">
                 {canCreate && (
                   <Button variant="ghost" size="sm" onClick={() => duplicate.mutate(selected.id)} disabled={duplicate.isPending}>
                     <Copy className="size-4" />
                     Duplicate
                   </Button>
                 )}
-                {canDelete && !protectedRole && (
-                  <Button variant="ghost" size="sm" className="text-danger-foreground" onClick={() => setConfirmDelete(selected)}>
+                {canDeleteSelected && (
+                  <Button variant="ghost" size="sm" className="text-danger-foreground hover:bg-danger-subtle" onClick={() => setConfirmDelete(selected)}>
                     <Trash2 className="size-4" />
                     Delete
                   </Button>
@@ -203,8 +315,21 @@ export function RolesManager() {
               </div>
             </div>
 
-            {/* Editable name/description for custom roles */}
-            {editable && canEditName && (
+            {/* Effective permissions meter */}
+            <div className="flex items-center gap-3">
+              <div className="h-1.5 w-40 max-w-full overflow-hidden rounded-full bg-surface-muted">
+                <div
+                  className="h-full rounded-full bg-primary transition-[width] duration-300"
+                  style={{ width: `${Math.round((effectiveCount / ALL_PERMISSIONS.length) * 100)}%` }}
+                />
+              </div>
+              <span className="text-xs text-foreground-subtle">
+                <span className="font-semibold text-foreground">{effectiveCount}</span> of {ALL_PERMISSIONS.length} permissions
+              </span>
+            </div>
+
+            {/* Editable name/description */}
+            {canEditMeta && (
               <div className="grid gap-2 sm:grid-cols-2">
                 <Input
                   aria-label="Role name"
@@ -223,76 +348,149 @@ export function RolesManager() {
 
             {/* Search */}
             <div className="relative">
-              <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-foreground-subtle" />
-              <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search permissions…" className="pl-9" />
+              <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-foreground-subtle" />
+              <Input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search permissions…"
+                className="pl-9"
+              />
             </div>
-          </CardHeader>
+          </div>
 
-          <CardContent className="space-y-5">
-            {protectedRole && (
-              <p className="rounded-[var(--radius)] border border-border bg-surface-muted/40 px-3 py-2 text-xs text-foreground-muted">
-                {selected.isOwner
-                  ? "The Owner role always holds every permission and can't be changed."
-                  : "System roles are read-only. Duplicate this role to create an editable copy."}
-              </p>
-            )}
+          {/* Body: sticky module rail + permission sections */}
+          <div className="grid gap-x-8 gap-y-6 px-6 py-6 lg:grid-cols-[168px_minmax(0,1fr)]">
+            {/* Module rail */}
+            <nav
+              className="hidden self-start lg:block lg:sticky"
+              style={{ top: headerH + 16 }}
+              aria-label="Permission modules"
+            >
+              <ul className="space-y-0.5">
+                {PERMISSION_CATALOG.map((mod) => {
+                  const Icon = MODULE_ICON[mod.module];
+                  const granted = moduleGrant(mod);
+                  const dimmed = q && mod.actions.filter(matchesQuery).length === 0;
+                  return (
+                    <li key={mod.module}>
+                      <button
+                        onClick={() => jumpTo(mod.module)}
+                        className={cn(
+                          "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] transition-colors hover:bg-surface-muted",
+                          dimmed ? "opacity-40" : "text-foreground-muted",
+                        )}
+                      >
+                        <Icon className="size-3.5 shrink-0 text-foreground-subtle" />
+                        <span className="min-w-0 flex-1 truncate">{mod.label}</span>
+                        <span className={cn("shrink-0 text-[11px] tabular-nums", granted > 0 ? "text-primary" : "text-foreground-subtle")}>
+                          {granted}
+                        </span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </nav>
 
-            {PERMISSION_CATALOG.map((mod) => {
-              const actions = mod.actions.filter(
-                (a) => !q || a.label.toLowerCase().includes(q) || a.key.toLowerCase().includes(q),
-              );
-              if (actions.length === 0) return null;
-              const moduleKeys = mod.actions.map((a) => a.key);
-              const allOn = selected.isOwner || moduleKeys.every((k) => currentPerms.has(k));
-              const noneOn = !selected.isOwner && moduleKeys.every((k) => !currentPerms.has(k));
-              return (
-                <div key={mod.module}>
-                  <div className="mb-2 flex items-center justify-between">
-                    <h4 className="text-xs font-semibold uppercase tracking-wide text-foreground-subtle">{mod.label}</h4>
-                    {editable && (
-                      <div className="flex gap-2 text-xs">
-                        <button className="text-primary hover:underline disabled:opacity-40" disabled={allOn} onClick={() => setModule(moduleKeys, true)}>Select all</button>
-                        <span className="text-foreground-subtle">·</span>
-                        <button className="text-primary hover:underline disabled:opacity-40" disabled={noneOn} onClick={() => setModule(moduleKeys, false)}>Clear all</button>
-                      </div>
-                    )}
-                  </div>
-                  <div className="grid gap-1.5 sm:grid-cols-2 lg:grid-cols-3">
-                    {actions.map((a) => {
-                      const on = selected.isOwner || currentPerms.has(a.key);
-                      const disabled = !editable || !grantable.has(a.key);
-                      return (
-                        <button
-                          key={a.key}
-                          type="button"
-                          role="checkbox"
-                          aria-checked={on}
-                          disabled={disabled}
-                          onClick={() => togglePerm(a.key)}
-                          className={cn(
-                            "flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-left text-sm transition-colors",
-                            on ? "border-primary/40 bg-primary/5" : "border-border",
-                            disabled ? "cursor-not-allowed opacity-60" : "hover:border-border-strong",
-                          )}
-                          title={!grantable.has(a.key) && !on ? "You can't grant a permission you don't have" : undefined}
-                        >
-                          <span className={cn("flex size-4 shrink-0 items-center justify-center rounded border", on ? "border-primary bg-primary text-white" : "border-border-strong")}>
-                            {on && <Check className="size-3" />}
-                          </span>
-                          <span className="min-w-0 truncate">{a.label}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              );
-            })}
-          </CardContent>
+            {/* Sections */}
+            <div className="min-w-0 space-y-8">
+              {isOwnerRole && (
+                <p className="rounded-lg border border-info-subtle bg-info-subtle/50 px-3.5 py-2.5 text-xs text-info-foreground">
+                  The Owner role always holds every permission and can’t be edited. Duplicate it to build a custom role.
+                </p>
+              )}
+
+              {PERMISSION_CATALOG.map((mod) => {
+                const actions = mod.actions.filter(matchesQuery);
+                if (actions.length === 0) return null;
+                const Icon = MODULE_ICON[mod.module];
+                const moduleKeys = mod.actions.map((a) => a.key);
+                const granted = moduleGrant(mod);
+                const allOn = selected.isOwner || moduleKeys.every((k) => currentPerms.has(k));
+                const noneOn = !selected.isOwner && moduleKeys.every((k) => !currentPerms.has(k));
+                return (
+                  <section key={mod.module} id={`perm-${mod.module}`} style={{ scrollMarginTop: headerH + 16 }}>
+                    <div className="mb-3 flex items-center gap-2.5">
+                      <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-surface-muted text-foreground-subtle">
+                        <Icon className="size-4" />
+                      </span>
+                      <h3 className="text-sm font-semibold tracking-tight">{mod.label}</h3>
+                      <span className="rounded-full bg-surface-muted px-2 py-0.5 text-[11px] font-medium tabular-nums text-foreground-subtle">
+                        {granted}/{mod.actions.length}
+                      </span>
+                      {editable && (
+                        <div className="ml-auto flex items-center gap-2 text-xs">
+                          <button className="font-medium text-primary hover:underline disabled:opacity-40" disabled={allOn} onClick={() => setModule(moduleKeys, true)}>
+                            Select all
+                          </button>
+                          <span className="text-border-strong">·</span>
+                          <button className="font-medium text-foreground-muted hover:underline disabled:opacity-40" disabled={noneOn} onClick={() => setModule(moduleKeys, false)}>
+                            Clear
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {actions.map((a) => {
+                        const on = selected.isOwner || currentPerms.has(a.key);
+                        const ungrantable = !grantable.has(a.key);
+                        const locked = !editable || ungrantable;
+                        const danger = "danger" in a && a.danger;
+                        return (
+                          <button
+                            key={a.key}
+                            type="button"
+                            role="checkbox"
+                            aria-checked={on}
+                            disabled={locked}
+                            onClick={() => togglePerm(a.key)}
+                            title={ungrantable && !on ? "You can't grant a permission you don't hold" : undefined}
+                            className={cn(
+                              "group flex items-center gap-2.5 rounded-lg border px-3 py-2.5 text-left text-sm transition-all",
+                              on
+                                ? "border-primary/40 bg-primary/5"
+                                : "border-border bg-surface hover:border-border-strong hover:bg-surface-muted/40",
+                              locked && "cursor-not-allowed opacity-55 hover:border-border hover:bg-surface",
+                            )}
+                          >
+                            <span
+                              className={cn(
+                                "flex size-4 shrink-0 items-center justify-center rounded-[5px] border transition-colors",
+                                on ? "border-primary bg-primary text-white" : "border-border-strong bg-surface",
+                              )}
+                            >
+                              {on && <Check className="size-3" strokeWidth={3} />}
+                            </span>
+                            <span className={cn("min-w-0 flex-1 truncate", on ? "font-medium text-foreground" : "text-foreground-muted")}>
+                              {a.label}
+                            </span>
+                            {danger && (
+                              <span
+                                className={cn("size-1.5 shrink-0 rounded-full", on ? "bg-danger" : "bg-border-strong")}
+                                title="Sensitive permission"
+                                aria-hidden
+                              />
+                            )}
+                            {ungrantable && !on && <Lock className="size-3 shrink-0 text-foreground-subtle" aria-hidden />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </section>
+                );
+              })}
+            </div>
+          </div>
 
           {/* Save bar */}
           {editable && (
-            <div className="sticky bottom-0 flex items-center justify-end gap-2 border-t border-border bg-surface/90 px-6 py-3 backdrop-blur">
-              {dirty && <span className="mr-auto text-xs text-foreground-subtle">Unsaved changes</span>}
+            <div className="sticky bottom-0 z-20 flex items-center justify-end gap-2 rounded-b-xl border-t border-border bg-surface/95 px-6 py-3 backdrop-blur supports-[backdrop-filter]:bg-surface/80">
+              {dirty && (
+                <span className="mr-auto flex items-center gap-1.5 text-xs font-medium text-warning-foreground">
+                  <span className="size-1.5 rounded-full bg-warning" />
+                  Unsaved changes
+                </span>
+              )}
               <Button variant="ghost" size="sm" disabled={!dirty} onClick={() => setDraft(null)}>Discard</Button>
               <Button variant="primary" size="sm" disabled={!dirty || update.isPending} onClick={save}>
                 <Save className="size-4" />

@@ -48,11 +48,24 @@ describe("createRole — permission + no escalation", () => {
 });
 
 describe("updateRole — protected roles + manage_permissions", () => {
-  it("refuses to edit a SYSTEM role (clone to customise)", async () => {
+  it("refuses to edit the OWNER role (implicit all-access)", async () => {
     h.user = u([...ALL_PERMISSIONS]);
-    h.prisma.companyRole.findFirst.mockResolvedValue({ id: "r1", isSystem: true, isOwner: false, permissions: [] });
-    await expect(updateRole("r1", { name: "X" })).rejects.toThrow("PROTECTED_ROLE");
+    h.prisma.companyRole.findFirst.mockResolvedValue({ id: "owner", isSystem: true, isOwner: true, permissions: [] });
+    await expect(updateRole("owner", { name: "X" })).rejects.toThrow("PROTECTED_ROLE");
     expect(h.prisma.companyRole.update).not.toHaveBeenCalled();
+  });
+
+  it("allows editing a SYSTEM role — templates are now customisable", async () => {
+    h.user = u([...ALL_PERMISSIONS]);
+    h.prisma.companyRole.findFirst
+      .mockResolvedValueOnce({ id: "r1", isSystem: true, isOwner: false, permissions: [] }) // the role
+      .mockResolvedValueOnce(null); // no name clash
+    h.prisma.companyRole.update.mockResolvedValue({
+      id: "r1", key: "admin", name: "Renamed", description: null,
+      isSystem: true, isOwner: false, permissions: [], _count: { users: 0 },
+    });
+    await expect(updateRole("r1", { name: "Renamed" })).resolves.toMatchObject({ name: "Renamed" });
+    expect(h.prisma.companyRole.update).toHaveBeenCalled();
   });
 
   it("editing permissions requires roles.manage_permissions", async () => {

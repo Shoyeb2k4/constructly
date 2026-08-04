@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db/prisma";
 import { requirePermission } from "@/lib/auth/permissions";
 import type { SessionUser } from "@/lib/auth/types";
 import { ALL_PERMISSIONS, isPermission, type Permission } from "../permissions";
-import { assertCanGrantPermissions, assertRoleMutable } from "@/features/team/authz";
+import { assertCanGrantPermissions, assertRoleEditable, assertRoleDeletable } from "@/features/team/authz";
 
 /**
  * Company role management (Roles & Permissions admin). Every mutation is
@@ -162,8 +162,8 @@ export async function updateRole(
   const user = await requirePermission("roles.edit");
   const role = await prisma.companyRole.findFirst({ where: { id, companyId: user.company.id } });
   if (!role) throw new Error("NOT_FOUND");
-  // System/Owner roles are read-only — clone to customise.
-  assertRoleMutable(role);
+  // Owner is implicit all-access and can't be edited; system templates are editable.
+  assertRoleEditable(role);
 
   const data: { name?: string; description?: string | null; permissions?: Permission[] } = {};
 
@@ -201,7 +201,7 @@ export async function deleteRole(id: string): Promise<void> {
     include: roleInclude,
   });
   if (!role) throw new Error("NOT_FOUND");
-  assertRoleMutable(role); // system/Owner protected
+  assertRoleDeletable(role); // system + Owner templates can't be deleted
   if (role._count.users > 0) {
     throw new Error("Reassign the members of this role before deleting it.");
   }

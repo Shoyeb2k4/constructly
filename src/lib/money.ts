@@ -35,6 +35,19 @@ export function formatPaise(paise: Paise, opts?: { whole?: boolean }): string {
 }
 
 /**
+ * Smart full formatting — the product-wide default for displaying money.
+ * Indian numbering, tabular-friendly, and precision-preserving:
+ *   - never rounds (integer paise → exact rupees),
+ *   - shows the decimal part ONLY when real paise exist (₹37,04,725.50),
+ *   - hides a bare `.00` so whole amounts read cleanly (₹37,04,725).
+ * Prefer this over `formatPaise` anywhere a value is shown to a user.
+ */
+export function formatPaiseSmart(paise: Paise): string {
+  const fmt = paise % 100 === 0 ? INR_WHOLE : INR;
+  return fmt.format(toRupees(paise));
+}
+
+/**
  * Compact Indian formatting using lakh/crore, e.g. ₹92.4L, ₹1.2Cr.
  * Used in dense dashboard widgets where full numbers would crowd the layout.
  */

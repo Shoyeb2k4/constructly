@@ -4,6 +4,7 @@ import {
   toRupees,
   formatPaise,
   formatPaiseCompact,
+  formatPaiseSmart,
   sumPaise,
 } from "./money";
 
@@ -27,6 +28,17 @@ describe("money", () => {
     expect(formatPaiseCompact(toPaise(9_24_00_00))).toBe("₹92.4L");
     expect(formatPaiseCompact(toPaise(1_20_00_000))).toBe("₹1.2Cr");
     expect(formatPaiseCompact(toPaise(500))).toBe("₹500");
+  });
+
+  it("smart-formats: hides a bare .00 but keeps real paise, never rounds", () => {
+    // whole rupees → no decimals
+    expect(formatPaiseSmart(toPaise(37_04_725))).toBe("₹37,04,725");
+    // exact paise preserved to 2 dp
+    expect(formatPaiseSmart(toPaise(37_04_725.5))).toBe("₹37,04,725.50");
+    expect(formatPaiseSmart(toPaise(37_04_725.25))).toBe("₹37,04,725.25");
+    // a single paisa still shows (no rounding away)
+    expect(formatPaiseSmart(1)).toBe("₹0.01");
+    expect(formatPaiseSmart(0)).toBe("₹0");
   });
 
   it("sums paise integer-safely", () => {

@@ -24,8 +24,8 @@ export function LabourCard({ labour }: { labour: LabourWidget }) {
           </div>
           <div className="text-right">
             <p className="text-xs text-foreground-subtle">Est. cost today</p>
-            <p className="text-lg font-medium leading-none">
-              <MoneyText paise={labour.todayCostPaise} compact />
+            <p className="text-lg font-semibold leading-none">
+              <MoneyText paise={labour.todayCostPaise} />
             </p>
           </div>
           <div className="text-right">

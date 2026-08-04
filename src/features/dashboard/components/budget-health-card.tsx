@@ -22,19 +22,19 @@ export function BudgetHealthCard({
         <CardTitle>Budget health</CardTitle>
         <span className="text-xs text-foreground-subtle">{util}% overall</span>
       </CardHeader>
-      <CardContent className="space-y-3">
-        <div className="flex items-baseline justify-between text-sm">
-          <span>
-            <span className="font-semibold"><MoneyText paise={budgetUsedPaise} compact /></span>
-            <span className="text-foreground-subtle"> of <MoneyText paise={budgetTotalPaise} compact /></span>
+      <CardContent className="space-y-4">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 text-sm">
+          <span className="whitespace-nowrap">
+            <span className="font-semibold"><MoneyText paise={budgetUsedPaise} /></span>
+            <span className="text-foreground-subtle"> of <MoneyText paise={budgetTotalPaise} /></span>
           </span>
-          <span className={remaining < 0 ? "text-danger-foreground" : "text-success-foreground"}>
+          <span className={cn("whitespace-nowrap font-medium", remaining < 0 ? "text-danger-foreground" : "text-success-foreground")}>
             {remaining < 0 ? "Over " : ""}
-            <MoneyText paise={Math.abs(remaining)} compact /> {remaining < 0 ? "" : "left"}
+            <MoneyText paise={Math.abs(remaining)} /> {remaining < 0 ? "" : "left"}
           </span>
         </div>
 
-        <div className="space-y-2.5 pt-1">
+        <div className="space-y-3 pt-1">
           {items.slice(0, 5).map((b) => (
             <Link key={b.projectId} href={`/projects/${b.projectId}`} className="block space-y-1">
               <div className="flex items-center justify-between text-xs">

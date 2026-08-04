@@ -13,7 +13,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { StatGridSkeleton } from "@/components/patterns/loading-state";
 import { ErrorState } from "@/components/patterns/error-state";
 import { MoneyText } from "@/components/patterns/money-text";
-import { formatPaiseCompact } from "@/lib/money";
+import { formatPaiseSmart } from "@/lib/money";
 import { useDashboard } from "../hooks";
 import type { DashboardSnapshot } from "../types";
 import { KpiCard } from "./kpi-card";
@@ -78,9 +78,10 @@ export function DashboardView({
   if (data.isEmpty) return <OnboardingDashboard firstName={firstName} />;
 
   const k = data.kpis;
+  const budgetPct = k.budgetTotalPaise > 0 ? Math.round((k.budgetUsedPaise / k.budgetTotalPaise) * 100) : 0;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-3">
           {logoUrl && (
@@ -106,12 +107,12 @@ export function DashboardView({
       </div>
 
       {/* KPI row — every card drills down */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
         <KpiCard label="Active projects" value={k.activeProjects} icon={FolderKanban} href="/projects" />
         <KpiCard label="Upcoming deadlines" value={k.upcomingDeadlines} icon={CalendarClock} href="/projects" tone={k.upcomingDeadlines > 0 ? "warning" : "default"} />
         <KpiCard label="Overdue" value={k.overdue} icon={AlertTriangle} href="/projects" tone={k.overdue > 0 ? "danger" : "default"} />
-        <KpiCard label="Today's labor" value={k.todaysLaborCount} hint={k.todaysWagesPaise > 0 ? `${formatPaiseCompact(k.todaysWagesPaise)} wages` : "Not recorded yet"} icon={HardHat} href="/labor" />
-        <KpiCard label="Budget used" value={<MoneyText paise={k.budgetUsedPaise} compact />} hint={`of ${formatPaiseCompact(k.budgetTotalPaise)}`} icon={Wallet} href="/projects" />
+        <KpiCard label="Today's labor" value={k.todaysLaborCount} hint={k.todaysWagesPaise > 0 ? `${formatPaiseSmart(k.todaysWagesPaise)} wages` : "Not recorded yet"} icon={HardHat} href="/labor" />
+        <KpiCard label="Budget used" value={<MoneyText paise={k.budgetUsedPaise} />} sub={`${budgetPct}% of budget`} hint={<>of <MoneyText paise={k.budgetTotalPaise} className="text-foreground-subtle" /></>} icon={Wallet} href="/projects" />
         <KpiCard label="Pending approvals" value={k.pendingApprovals} icon={Inbox} href="/procurement" tone={k.pendingApprovals > 0 ? "warning" : "default"} />
       </div>
 
