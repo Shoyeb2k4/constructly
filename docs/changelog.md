@@ -4,6 +4,16 @@ _Human-readable log of what changed and when. Newest first. Keep entries short; 
 
 ## [Unreleased]
 
+### 2026-08-04 — Fix: dashboard KPI money overflow at narrow card widths
+Follow-up to the money/UI polish below. The `whitespace-nowrap` that stops the
+`.00` from wrapping meant a full ₹ value could overflow its KPI card once the row
+went 6-across — inside the `max-w-[1200px]` shell a 6-up row is always ~136px per
+card regardless of screen width, too narrow for `₹37,04,725`.
+- **Fix:** KPI grid is now `grid-cols-1 sm:grid-cols-2 lg:grid-cols-3` (was
+  `lg:grid-cols-6`), keeping every card ≥248px so the full 28px value fits with
+  margin at every breakpoint (verified via font metrics: +131px mobile, +76px
+  small, +156px desktop; even ₹10-crore fits). No font/compact changes needed.
+
 ### 2026-08-04 — RBAC editable system roles + premium money & UI polish
 UI/UX refinement pass on Roles & Permissions and the Dashboard, plus an RBAC
 behavior change. No data-model changes; server-first enforcement preserved.

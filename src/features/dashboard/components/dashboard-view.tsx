@@ -107,7 +107,11 @@ export function DashboardView({
       </div>
 
       {/* KPI row — every card drills down */}
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
+      {/* KPI cards stay ≥248px wide at every breakpoint inside the max-w-[1200px]
+          shell, so the full ₹ value never wraps or clips: 1-up on phones, 2-up on
+          small screens, 3-up (2 rows) on desktop. A denser 6-up or 2-up-mobile row
+          forces ~124–136px cards where large amounts overflow. */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <KpiCard label="Active projects" value={k.activeProjects} icon={FolderKanban} href="/projects" />
         <KpiCard label="Upcoming deadlines" value={k.upcomingDeadlines} icon={CalendarClock} href="/projects" tone={k.upcomingDeadlines > 0 ? "warning" : "default"} />
         <KpiCard label="Overdue" value={k.overdue} icon={AlertTriangle} href="/projects" tone={k.overdue > 0 ? "danger" : "default"} />
