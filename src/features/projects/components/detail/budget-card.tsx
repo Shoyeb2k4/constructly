@@ -1,24 +1,30 @@
 "use client";
 
+import * as React from "react";
 import { HardHat, ShoppingCart } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { MoneyText } from "@/components/patterns/money-text";
 import { cn } from "@/lib/utils";
 import { useProjectBudget } from "@/features/budget/hooks";
+import { BudgetEditSheet } from "./budget-edit-sheet";
+import { SectionEditButton } from "./section-edit-sheet";
 
 export function BudgetCard({
   projectId,
   budgetPaise,
   contractValuePaise,
   procurementBudgetPaise,
+  canEdit = false,
 }: {
   projectId: string;
   budgetPaise: number;
   contractValuePaise: number;
   procurementBudgetPaise: number | null;
+  canEdit?: boolean;
 }) {
   const budget = useProjectBudget(projectId, budgetPaise);
+  const [editing, setEditing] = React.useState(false);
   // Procurement is tracked against its own dedicated budget (ADR-0024),
   // independent of the overall project budget.
   const procUsed = budget?.procurementPaise ?? 0;
@@ -30,9 +36,11 @@ export function BudgetCard({
       : 0;
 
   return (
+    <>
     <Card>
-      <CardHeader>
+      <CardHeader className="flex-row items-center justify-between">
         <CardTitle>Budget</CardTitle>
+        {canEdit && <SectionEditButton label="Edit budget" onClick={() => setEditing(true)} />}
       </CardHeader>
       <CardContent className="space-y-5">
         {!budget ? (
@@ -129,6 +137,17 @@ export function BudgetCard({
         )}
       </CardContent>
     </Card>
+    {canEdit && (
+      <BudgetEditSheet
+        projectId={projectId}
+        budgetPaise={budgetPaise}
+        contractValuePaise={contractValuePaise}
+        procurementBudgetPaise={procurementBudgetPaise}
+        open={editing}
+        onOpenChange={setEditing}
+      />
+    )}
+    </>
   );
 }
 

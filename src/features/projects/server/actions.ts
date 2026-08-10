@@ -19,6 +19,7 @@ import type {
 import { Prisma } from "@/generated/prisma";
 import { spendByProject, projectSpend } from "@/features/budget/server-actions";
 import { purgeEligibleAt, isValidRetention } from "../retention";
+import { updateProjectInputSchema } from "../schema";
 
 /**
  * Server-side projects API. Authorization is RBAC-first: every action requires a
@@ -362,39 +363,42 @@ export async function updateProject(
   patch: UpdateProjectInput,
 ): Promise<ProjectDetail> {
   const user = await requireProjectWrite("projects.edit", id);
+  // Validate + normalize the patch (parity with the create form; strips unknown
+  // keys like pmId/code — pmId has its own action). Never trust the client.
+  const input = updateProjectInputSchema.parse(patch);
   await prisma.project.update({
     where: { id },
     data: {
-      name: patch.name,
-      type: patch.type,
-      clientName: patch.clientName,
-      clientContact: patch.clientContact,
-      clientPhone: patch.clientPhone,
-      clientEmail: patch.clientEmail,
-      siteAddress: patch.siteAddress,
-      gpsLat: patch.gpsLat,
-      gpsLng: patch.gpsLng,
-      ...(patch.budgetPaise != null ? { budgetPaise: BigInt(patch.budgetPaise) } : {}),
-      ...(patch.contractValuePaise != null
-        ? { contractValuePaise: BigInt(patch.contractValuePaise) }
+      name: input.name,
+      type: input.type,
+      clientName: input.clientName,
+      clientContact: input.clientContact,
+      clientPhone: input.clientPhone,
+      clientEmail: input.clientEmail,
+      siteAddress: input.siteAddress,
+      gpsLat: input.gpsLat,
+      gpsLng: input.gpsLng,
+      ...(input.budgetPaise != null ? { budgetPaise: BigInt(input.budgetPaise) } : {}),
+      ...(input.contractValuePaise != null
+        ? { contractValuePaise: BigInt(input.contractValuePaise) }
         : {}),
-      ...(patch.procurementBudgetPaise !== undefined
+      ...(input.procurementBudgetPaise !== undefined
         ? {
             procurementBudgetPaise:
-              patch.procurementBudgetPaise != null ? BigInt(patch.procurementBudgetPaise) : null,
+              input.procurementBudgetPaise != null ? BigInt(input.procurementBudgetPaise) : null,
           }
         : {}),
-      ...(patch.startDate !== undefined
-        ? { startDate: patch.startDate ? new Date(patch.startDate) : null }
+      ...(input.startDate !== undefined
+        ? { startDate: input.startDate ? new Date(input.startDate) : null }
         : {}),
-      ...(patch.expectedCompletionDate !== undefined
+      ...(input.expectedCompletionDate !== undefined
         ? {
-            expectedCompletionDate: patch.expectedCompletionDate
-              ? new Date(patch.expectedCompletionDate)
+            expectedCompletionDate: input.expectedCompletionDate
+              ? new Date(input.expectedCompletionDate)
               : null,
           }
         : {}),
-      ...(patch.tags ? { tags: patch.tags } : {}),
+      ...(input.tags ? { tags: input.tags } : {}),
     },
   });
   await logActivity(user, id, "project.updated", "updated project details");

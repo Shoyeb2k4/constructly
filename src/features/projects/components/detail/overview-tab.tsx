@@ -1,3 +1,6 @@
+"use client";
+
+import * as React from "react";
 import {
   MapPin,
   User as UserIcon,
@@ -10,7 +13,10 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { TagChip } from "../tag-chip";
 import { BudgetCard } from "./budget-card";
-import { DeadlineEditor } from "./deadline-editor";
+import { SectionEditButton } from "./section-edit-sheet";
+import { ClientSiteEditSheet } from "./client-site-edit-sheet";
+import { DetailsEditSheet } from "./details-edit-sheet";
+import { LocationEditSheet } from "./location-edit-sheet";
 import type { ProjectDetail } from "../../types";
 import { TYPE_LABEL } from "../../constants";
 import { formatDate, deadlineCountdown } from "../../format";
@@ -35,6 +41,8 @@ function Line({
   );
 }
 
+type Section = "client" | "details" | "location";
+
 export function OverviewTab({
   project,
   canEdit = false,
@@ -43,6 +51,8 @@ export function OverviewTab({
   canEdit?: boolean;
 }) {
   const cd = deadlineCountdown(project.expectedCompletionDate);
+  const [editing, setEditing] = React.useState<Section | null>(null);
+  const toggle = (s: Section) => (o: boolean) => setEditing(o ? s : null);
 
   return (
     <div className="grid gap-6 lg:grid-cols-3">
@@ -52,11 +62,15 @@ export function OverviewTab({
           budgetPaise={project.budgetPaise}
           contractValuePaise={project.contractValuePaise}
           procurementBudgetPaise={project.procurementBudgetPaise}
+          canEdit={canEdit}
         />
 
         <Card>
-          <CardHeader>
+          <CardHeader className="flex-row items-center justify-between">
             <CardTitle>Client &amp; site</CardTitle>
+            {canEdit && (
+              <SectionEditButton label="Edit client & site" onClick={() => setEditing("client")} />
+            )}
           </CardHeader>
           <CardContent className="divide-y divide-border py-0">
             <Line icon={Building2} label="Client" value={project.clientName} />
@@ -70,8 +84,11 @@ export function OverviewTab({
 
       <div className="space-y-6">
         <Card>
-          <CardHeader>
+          <CardHeader className="flex-row items-center justify-between">
             <CardTitle>Details</CardTitle>
+            {canEdit && (
+              <SectionEditButton label="Edit details" onClick={() => setEditing("details")} />
+            )}
           </CardHeader>
           <CardContent className="divide-y divide-border py-0">
             <Line icon={Building2} label="Type" value={TYPE_LABEL[project.type]} />
@@ -86,18 +103,20 @@ export function OverviewTab({
               }
             />
             <Line icon={CalendarDays} label="Start" value={formatDate(project.startDate)} />
-            <DeadlineEditor
-              projectId={project.id}
-              startDate={project.startDate}
-              expectedCompletionDate={project.expectedCompletionDate}
-              canEdit={canEdit}
+            <Line
+              icon={CalendarDays}
+              label="Completion"
+              value={formatDate(project.expectedCompletionDate)}
             />
           </CardContent>
         </Card>
 
         <Card>
-          <CardHeader>
+          <CardHeader className="flex-row items-center justify-between">
             <CardTitle>Location</CardTitle>
+            {canEdit && (
+              <SectionEditButton label="Edit location" onClick={() => setEditing("location")} />
+            )}
           </CardHeader>
           <CardContent>
             {project.gpsLat != null && project.gpsLng != null ? (
@@ -133,6 +152,28 @@ export function OverviewTab({
           </Card>
         )}
       </div>
+
+      {canEdit && (
+        <>
+          <ClientSiteEditSheet
+            project={project}
+            open={editing === "client"}
+            onOpenChange={toggle("client")}
+          />
+          <DetailsEditSheet
+            project={project}
+            open={editing === "details"}
+            onOpenChange={toggle("details")}
+          />
+          <LocationEditSheet
+            projectId={project.id}
+            gpsLat={project.gpsLat}
+            gpsLng={project.gpsLng}
+            open={editing === "location"}
+            onOpenChange={toggle("location")}
+          />
+        </>
+      )}
     </div>
   );
 }

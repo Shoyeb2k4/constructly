@@ -4,6 +4,25 @@ _Human-readable log of what changed and when. Newest first. Keep entries short; 
 
 ## [Unreleased]
 
+### 2026-08-04 — Editable project-detail sections (Budget · Client & site · Details · Location)
+The four project Overview cards were read-only (only the completion date + stage were
+editable). Authorized users (Owner included) can now edit each section via an Edit pencil in
+the card header that opens a focused side panel pre-filled with just that section's fields.
+- **UI:** four per-section edit panels — Budget (project/contract/procurement amounts),
+  Client & site (name, contact, phone, email, address), Details (type, manager, start,
+  completion), Location (GPS lat/lng). Built on the existing `Sheet` + `react-hook-form`
+  pattern; the shared `Field` helper was extracted for reuse. The standalone inline
+  `DeadlineEditor` was retired — completion editing now lives in the Details panel.
+- **Reuse:** all four panels save through the existing `updateProject` action + `update`
+  mutation (optimistic cache write). Manager reassignment uses the dedicated `assignManager`
+  action and only appears with `projects.assign`. Edit affordances reuse the existing
+  `canEdit` gate (`projects.edit` + PM/`edit_all`), matching the server rule.
+- **Server hardening:** `updateProject` now validates every patch with a new
+  `updateProjectInputSchema` (non-negative integer paise, GPS ranges both-or-neither,
+  email/Indian-phone formats, completion ≥ start) — previously it trusted the client patch.
+- **Tests:** +9 schema tests (399 total). Verified live end-to-end (save → persist through
+  reload → clear; invalid single-coordinate blocked with an inline error).
+
 ### 2026-08-04 — Fix: dashboard KPI money overflow at narrow card widths
 Follow-up to the money/UI polish below. The `whitespace-nowrap` that stops the
 `.00` from wrapping meant a full ₹ value could overflow its KPI card once the row

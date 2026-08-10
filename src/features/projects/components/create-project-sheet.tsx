@@ -15,7 +15,6 @@ import {
 } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -23,30 +22,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { cn } from "@/lib/utils";
 import { projectFormSchema, formToInput, type ProjectFormValues } from "../schema";
 import { PROJECT_TYPES, TYPE_LABEL } from "../constants";
 import { useCreateProject, useManagers } from "../hooks";
-
-function Field({
-  label,
-  error,
-  children,
-  className,
-}: {
-  label: string;
-  error?: string;
-  children: React.ReactNode;
-  className?: string;
-}) {
-  return (
-    <div className={cn("space-y-1.5", className)}>
-      <Label>{label}</Label>
-      {children}
-      {error && <p className="text-xs text-danger-foreground">{error}</p>}
-    </div>
-  );
-}
+import { Field } from "./field";
 
 export function CreateProjectSheet({
   open,

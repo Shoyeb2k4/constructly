@@ -32,11 +32,12 @@ export function useProject(id: string) {
   });
 }
 
-export function useManagers() {
+export function useManagers(enabled = true) {
   return useQuery({
     queryKey: projectKeys.managers,
     queryFn: () => projectsApi.listManagers(),
     staleTime: 5 * 60_000,
+    enabled,
   });
 }
 
