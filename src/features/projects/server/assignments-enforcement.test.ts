@@ -1,7 +1,8 @@
 /**
- * Server-side enforcement for project ↔ contractor assignments: RBAC + ownership
- * gate on writes, company-ownership validation (cross-company rejection), and
- * deduping. Mirrors the mocking style of projects-enforcement.test.ts.
+ * Server-side enforcement for the contractor-first project config: RBAC +
+ * ownership gate on writes, company-ownership validation (cross-company
+ * rejection), and deduping of contractors + labour types. Mirrors the mocking
+ * style of projects-enforcement.test.ts.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { SessionUser } from "@/lib/auth/types";
@@ -29,12 +30,13 @@ const h = vi.hoisted(() => ({
   prisma: {
     project: { findFirst: vi.fn(), create: vi.fn() },
     contractor: { count: vi.fn() },
-    labourCategory: { count: vi.fn() },
-    projectContractorAssignment: {
+    labourSubcategory: { count: vi.fn() },
+    projectContractor: {
       deleteMany: vi.fn(),
-      createMany: vi.fn(),
+      create: vi.fn(),
       findMany: vi.fn(),
     },
+    projectContractorLabourRate: { createMany: vi.fn() },
     activityLog: { create: vi.fn() },
     $transaction: vi.fn(),
   },
@@ -53,12 +55,12 @@ vi.mock("@/features/budget/server-actions", () => ({
   projectSpend: vi.fn(async () => ({ laborPaise: 0, procurementPaise: 0 })),
 }));
 
-import { setContractorAssignments, createProject } from "./actions";
+import { setProjectContractors, createProject } from "./actions";
 import type { CreateProjectInput } from "../types";
 
-// Valid UUIDs (the assignment schema enforces uuid() before validation runs).
+// Valid UUIDs (the schema enforces uuid() before validation runs).
 const K1 = "11111111-1111-4111-8111-111111111111";
-const CAT1 = "22222222-2222-4222-8222-222222222222";
+const SUB1 = "22222222-2222-4222-8222-222222222222";
 const FOREIGN = "33333333-3333-4333-8333-333333333333";
 
 beforeEach(() => {
@@ -66,78 +68,79 @@ beforeEach(() => {
   h.prisma.project.findFirst.mockReset();
   h.prisma.project.create.mockReset();
   h.prisma.contractor.count.mockReset();
-  h.prisma.labourCategory.count.mockReset();
-  h.prisma.projectContractorAssignment.deleteMany.mockReset().mockResolvedValue({ count: 0 });
-  h.prisma.projectContractorAssignment.createMany.mockReset().mockResolvedValue({ count: 0 });
-  h.prisma.projectContractorAssignment.findMany.mockReset().mockResolvedValue([]);
+  h.prisma.labourSubcategory.count.mockReset();
+  h.prisma.projectContractor.deleteMany.mockReset().mockResolvedValue({ count: 0 });
+  h.prisma.projectContractor.create.mockReset().mockResolvedValue({ id: "pc1" });
+  h.prisma.projectContractor.findMany.mockReset().mockResolvedValue([]);
+  h.prisma.projectContractorLabourRate.createMany.mockReset().mockResolvedValue({ count: 0 });
   h.prisma.activityLog.create.mockReset().mockResolvedValue({ id: "a" });
-  // Array form (setContractorAssignments) runs the ops; callback form runs fn(tx).
+  // Callback form runs fn(tx); array form runs the ops.
   h.prisma.$transaction.mockReset().mockImplementation(async (arg: unknown) =>
     typeof arg === "function" ? (arg as (tx: unknown) => unknown)(h.prisma) : Promise.all(arg as unknown[]),
   );
 });
 
-describe("setContractorAssignments — RBAC + ownership", () => {
+const row = (contractorId: string, subId = SUB1, ratePaise = 80000) => ({
+  contractorId,
+  labourRates: [{ labourSubcategoryId: subId, ratePaise }],
+});
+
+describe("setProjectContractors — RBAC + ownership", () => {
   it("rejects a PM who does not own the project (FORBIDDEN), no write", async () => {
     h.user = PM;
     h.prisma.project.findFirst.mockResolvedValue({ pmId: "someone-else" });
-    await expect(
-      setContractorAssignments("p1", [{ contractorId: K1, labourCategoryId: CAT1 }]),
-    ).rejects.toThrow("FORBIDDEN");
-    expect(h.prisma.projectContractorAssignment.createMany).not.toHaveBeenCalled();
-    expect(h.prisma.projectContractorAssignment.deleteMany).not.toHaveBeenCalled();
+    await expect(setProjectContractors("p1", [row(K1)])).rejects.toThrow("FORBIDDEN");
+    expect(h.prisma.projectContractor.create).not.toHaveBeenCalled();
+    expect(h.prisma.projectContractor.deleteMany).not.toHaveBeenCalled();
   });
 
   it("rejects a caller lacking projects.edit before any DB lookup", async () => {
     h.user = { ...PM, permissions: ["projects.view"] };
-    await expect(
-      setContractorAssignments("p1", [{ contractorId: K1, labourCategoryId: CAT1 }]),
-    ).rejects.toThrow("FORBIDDEN");
+    await expect(setProjectContractors("p1", [row(K1)])).rejects.toThrow("FORBIDDEN");
     expect(h.prisma.project.findFirst).not.toHaveBeenCalled();
   });
 });
 
-describe("setContractorAssignments — company ownership (tenancy)", () => {
-  it("rejects a cross-company contractor/category (INVALID_ASSIGNMENT), no write", async () => {
+describe("setProjectContractors — company ownership (tenancy)", () => {
+  it("rejects a cross-company contractor/subcategory (INVALID_ASSIGNMENT), no write", async () => {
     h.user = OWNER;
     h.prisma.project.findFirst.mockResolvedValue({ pmId: "o1" });
-    // Only 0 of the 1 requested contractor ids belong to the company.
-    h.prisma.contractor.count.mockResolvedValue(0);
-    h.prisma.labourCategory.count.mockResolvedValue(1);
-    await expect(
-      setContractorAssignments("p1", [{ contractorId: FOREIGN, labourCategoryId: CAT1 }]),
-    ).rejects.toThrow("INVALID_ASSIGNMENT");
+    h.prisma.contractor.count.mockResolvedValue(0); // foreign contractor
+    h.prisma.labourSubcategory.count.mockResolvedValue(1);
+    await expect(setProjectContractors("p1", [row(FOREIGN)])).rejects.toThrow("INVALID_ASSIGNMENT");
     expect(h.prisma.$transaction).not.toHaveBeenCalled();
   });
 
-  it("dedupes exact-duplicate rows and writes the unique set", async () => {
+  it("dedupes duplicate contractors + labour types and writes the unique set", async () => {
     h.user = OWNER;
     h.prisma.project.findFirst.mockResolvedValue({ pmId: "o1" });
     h.prisma.contractor.count.mockResolvedValue(1); // 1 distinct contractor
-    h.prisma.labourCategory.count.mockResolvedValue(1); // 1 distinct category
-    await setContractorAssignments("p1", [
-      { contractorId: K1, labourCategoryId: CAT1 },
-      { contractorId: K1, labourCategoryId: CAT1 }, // duplicate
+    h.prisma.labourSubcategory.count.mockResolvedValue(1); // 1 distinct subcategory
+    await setProjectContractors("p1", [
+      { contractorId: K1, labourRates: [{ labourSubcategoryId: SUB1, ratePaise: 80000 }, { labourSubcategoryId: SUB1, ratePaise: 90000 }] },
+      row(K1), // duplicate contractor
     ]);
-    expect(h.prisma.projectContractorAssignment.deleteMany).toHaveBeenCalled();
-    const created = h.prisma.projectContractorAssignment.createMany.mock.calls[0][0];
-    expect(created.data).toHaveLength(1);
-    expect(created.data[0]).toMatchObject({ companyId: "c1", projectId: "p1", contractorId: K1 });
+    expect(h.prisma.projectContractor.deleteMany).toHaveBeenCalled();
+    // One contractor created; its labour rates deduped to a single subcategory.
+    expect(h.prisma.projectContractor.create).toHaveBeenCalledTimes(1);
+    const rateCall = h.prisma.projectContractorLabourRate.createMany.mock.calls[0][0];
+    expect(rateCall.data).toHaveLength(1);
+    expect(rateCall.data[0]).toMatchObject({ companyId: "c1", projectContractorId: "pc1", labourSubcategoryId: SUB1 });
   });
 });
 
-describe("createProject — assignment validation is transactional", () => {
-  it("rejects a cross-company assignment before creating the project", async () => {
+describe("createProject — contractor validation is transactional", () => {
+  it("rejects a cross-company contractor before creating the project", async () => {
     h.user = OWNER;
     h.prisma.contractor.count.mockResolvedValue(0); // foreign contractor
-    h.prisma.labourCategory.count.mockResolvedValue(1);
+    h.prisma.labourSubcategory.count.mockResolvedValue(1);
     await expect(
       createProject({
         name: "New",
         type: "COMMERCIAL",
         budgetPaise: 0,
         contractValuePaise: 0,
-        contractorAssignments: [{ contractorId: FOREIGN, labourCategoryId: CAT1 }],
+        contractors: [row(FOREIGN)],
       } as CreateProjectInput),
     ).rejects.toThrow("INVALID_ASSIGNMENT");
     expect(h.prisma.project.create).not.toHaveBeenCalled();

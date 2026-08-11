@@ -55,8 +55,11 @@ export function useSetQuantity(projectId: string, date: string) {
       await qc.cancelQueries({ queryKey: key });
       const prev = qc.getQueryData<AttendanceSheet>(key);
       if (prev) {
+        const cid = v.contractorId ?? null;
+        // Match the ROW under the target CONTRACTOR group — the same subcategory
+        // can appear under multiple contractors (Pappu-Centering, Saddam-Centering).
         const groups = prev.groups.map((g) => {
-          if (!g.rows.some((r) => r.subcategoryId === v.subcategoryId)) return g;
+          if (g.contractorId !== cid || !g.rows.some((r) => r.subcategoryId === v.subcategoryId)) return g;
           const rows = g.rows.map((r) =>
             r.subcategoryId === v.subcategoryId
               ? { ...r, quantity: v.quantity, notes: v.notes !== undefined ? (v.notes ?? null) : r.notes }
@@ -154,12 +157,16 @@ export function useHierarchyMutations() {
       invalidateLabour(qc);
       toast.success("Subcategory deleted");
     },
-    onError: (e) =>
+    onError: (e) => {
+      const msg = e instanceof Error ? e.message : "";
       toast.error(
-        e instanceof Error && e.message === "SUBCATEGORY_HAS_ATTENDANCE"
-          ? "This subcategory has recorded attendance and can't be deleted"
-          : "Couldn't delete the subcategory",
-      ),
+        msg === "SUBCATEGORY_HAS_ATTENDANCE"
+          ? "This labour type has recorded attendance and can't be deleted"
+          : msg === "SUBCATEGORY_HAS_ASSIGNMENTS"
+            ? "This labour type is configured under a contractor on a project — remove it there first"
+            : "Couldn't delete the labour type",
+      );
+    },
   });
   const reorderSubcategories = useMutation({
     mutationFn: (v: { categoryId: string; orderedIds: string[] }) =>

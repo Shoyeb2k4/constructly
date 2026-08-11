@@ -157,6 +157,26 @@ create policy project_contractor_assignments_all on public.project_contractor_as
   for all using (company_id = public.current_company_id() and public.can_access_project(project_id))
   with check (company_id = public.current_company_id() and public.can_access_project(project_id));
 
+-- Project ↔ contractor engagement (contractor-first labour config). Supersedes
+-- project_contractor_assignments. Project-scoped, same backstop rationale.
+alter table public.project_contractors enable row level security;
+create policy project_contractors_all on public.project_contractors
+  for all using (company_id = public.current_company_id() and public.can_access_project(project_id))
+  with check (company_id = public.current_company_id() and public.can_access_project(project_id));
+
+-- Project-contractor labour rates (child of project_contractors). Access follows
+-- the parent's project visibility, tenant-scoped (mirrors po_line_items).
+alter table public.project_contractor_labour_rates enable row level security;
+create policy project_contractor_labour_rates_all on public.project_contractor_labour_rates
+  for all using (
+    exists (
+      select 1 from public.project_contractors pc
+      where pc.id = project_contractor_id
+        and pc.company_id = public.current_company_id()
+        and public.can_access_project(pc.project_id)
+    )
+  );
+
 -- ── labour_attendance (tenant + PM-scoped via project access) ──────────
 alter table public.labour_attendance enable row level security;
 create policy labour_attendance_all on public.labour_attendance

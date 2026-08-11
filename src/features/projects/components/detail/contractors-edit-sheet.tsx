@@ -1,8 +1,8 @@
 "use client";
 
 import * as React from "react";
-import { useSetContractorAssignments } from "../../hooks";
-import type { ContractorAssignmentInput, ProjectContractorAssignmentItem } from "../../types";
+import { useSetProjectContractors } from "../../hooks";
+import type { ProjectContractorInput, ProjectContractorItem } from "../../types";
 import {
   ContractorAssignmentsField,
   cleanAssignments,
@@ -16,21 +16,32 @@ export function ContractorsEditSheet({
   onOpenChange,
 }: {
   projectId: string;
-  /** Current assignments from the loaded project detail (no extra fetch). */
-  initial: ProjectContractorAssignmentItem[];
+  /** Current contractor config from the loaded project detail (no extra fetch). */
+  initial: ProjectContractorItem[];
   open: boolean;
   onOpenChange: (o: boolean) => void;
 }) {
-  const save = useSetContractorAssignments(projectId);
-  const [rows, setRows] = React.useState<ContractorAssignmentInput[]>([]);
+  const save = useSetProjectContractors(projectId);
+  const [rows, setRows] = React.useState<ProjectContractorInput[]>([]);
 
-  // Seed the editor from the persisted assignments each time it opens
+  // Seed the editor from the persisted config each time it opens
   // (derive-during-render, not an effect — edits stay local until saved).
   const [wasOpen, setWasOpen] = React.useState(false);
   if (open !== wasOpen) {
     setWasOpen(open);
     if (open) {
-      setRows(initial.map((a) => ({ contractorId: a.contractorId, labourCategoryId: a.labourCategoryId })));
+      setRows(
+        initial.map((pc) => ({
+          contractorId: pc.contractorId,
+          contractRatePaise: pc.contractRatePaise,
+          contractRateUnit: pc.contractRateUnit,
+          labourRates: pc.labourRates.map((r) => ({
+            labourSubcategoryId: r.labourSubcategoryId,
+            ratePaise: r.ratePaise,
+            rateUnit: r.rateUnit,
+          })),
+        })),
+      );
     }
   }
 
@@ -44,7 +55,7 @@ export function ContractorsEditSheet({
       open={open}
       onOpenChange={onOpenChange}
       title="Edit contractors"
-      description="Assign contractors to the work categories they handle on this project."
+      description="Set the contractors on this project and the labour types they supply, with project rates."
       onSubmit={onSubmit}
       saving={save.isPending}
     >

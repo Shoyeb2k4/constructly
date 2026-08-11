@@ -1,7 +1,7 @@
 import type {
-  ContractorAssignmentInput,
+  ProjectContractorInput,
   CreateProjectInput,
-  ProjectContractorAssignmentItem,
+  ProjectContractorItem,
   ProjectDetail,
   ProjectFilters,
   ProjectListItem,
@@ -44,11 +44,11 @@ export interface ProjectsRepository {
 
   listManagers(): Promise<Manager[]>;
 
-  /** Project → contractor assignments (by work category). */
-  listContractorAssignments(projectId: string): Promise<ProjectContractorAssignmentItem[]>;
-  /** Transactional replace-all of a project's assignments. */
-  setContractorAssignments(
+  /** Project → contractors (with the labour types + project rates they supply). */
+  listProjectContractors(projectId: string): Promise<ProjectContractorItem[]>;
+  /** Transactional replace-all of a project's contractor config. */
+  setProjectContractors(
     projectId: string,
-    rows: ContractorAssignmentInput[],
-  ): Promise<ProjectContractorAssignmentItem[]>;
+    rows: ProjectContractorInput[],
+  ): Promise<ProjectContractorItem[]>;
 }

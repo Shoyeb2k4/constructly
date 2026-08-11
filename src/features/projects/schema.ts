@@ -211,16 +211,32 @@ export const updateProjectInputSchema = z
     path: ["expectedCompletionDate"],
   });
 
-/* ── Contractor↔category assignments (create form + edit sheet + server) ── */
+/* ── Contractor-first labour config (create form + edit sheet + server) ── */
 
-export const contractorAssignmentInputSchema = z.object({
-  contractorId: z.string().uuid(),
-  labourCategoryId: z.string().uuid(),
+/** A labour type + project-specific day rate under a contractor. */
+export const projectContractorLabourRateInputSchema = z.object({
+  labourSubcategoryId: z.string().uuid(),
+  /** Integer paise, ≤ ₹1,00,000/day. */
+  ratePaise: z.number().int().min(0).max(10_000_000),
+  rateUnit: z.string().trim().max(20).optional(),
 });
-/** A project's full assignment set. Server dedupes; UI guards obvious dupes. */
-export const contractorAssignmentsSchema = z
-  .array(contractorAssignmentInputSchema)
-  .max(100, "Too many contractor assignments");
+
+/** A contractor engaged on a project + the labour types they supply. */
+export const projectContractorInputSchema = z.object({
+  contractorId: z.string().uuid(),
+  /** Optional project agreement rate (₹/sq.ft etc.), display only. */
+  contractRatePaise: z.number().int().min(0).max(1_000_000_000).nullish(),
+  contractRateUnit: z.string().trim().max(20).nullish(),
+  labourRates: z
+    .array(projectContractorLabourRateInputSchema)
+    .max(200, "Too many labour types for one contractor"),
+});
+
+/** A project's full contractor config. Server dedupes contractors + labour
+ *  types and validates company ownership; UI guards obvious dupes. */
+export const projectContractorsSchema = z
+  .array(projectContractorInputSchema)
+  .max(100, "Too many contractors");
 
 export const deadlineSchema = z.object({
   title: z.string().trim().min(1, "Required").max(120),

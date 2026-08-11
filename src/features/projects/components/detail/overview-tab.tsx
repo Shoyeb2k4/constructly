@@ -22,6 +22,7 @@ import { ContractorsEditSheet } from "./contractors-edit-sheet";
 import type { ProjectDetail } from "../../types";
 import { TYPE_LABEL } from "../../constants";
 import { formatDate, deadlineCountdown } from "../../format";
+import { formatPaiseSmart } from "@/lib/money";
 
 function Line({
   icon: Icon,
@@ -91,25 +92,43 @@ export function OverviewTab({
             )}
           </CardHeader>
           <CardContent className="py-0">
-            {project.contractorAssignments.length === 0 ? (
+            {project.contractors.length === 0 ? (
               <p className="py-4 text-sm text-foreground-subtle">
-                No contractors assigned yet.
+                No contractors on this project yet.
               </p>
             ) : (
               <div className="divide-y divide-border">
-                {project.contractorAssignments.map((a) => (
-                  <div key={a.id} className="flex items-center justify-between gap-3 py-2.5">
-                    <span className="flex min-w-0 items-center gap-2 text-sm font-medium">
-                      <HardHat className="size-4 shrink-0 text-foreground-subtle" />
-                      <span className="truncate">{a.contractorName}</span>
-                    </span>
-                    <span className="flex shrink-0 items-center gap-1.5 text-sm text-foreground-muted">
-                      <span
-                        className="size-2 rounded-full"
-                        style={{ background: a.categoryColor ?? "var(--color-foreground-subtle)" }}
-                      />
-                      {a.categoryName}
-                    </span>
+                {project.contractors.map((pc) => (
+                  <div key={pc.id} className="space-y-1.5 py-2.5">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="flex min-w-0 items-center gap-2 text-sm font-medium">
+                        <HardHat className="size-4 shrink-0 text-foreground-subtle" />
+                        <span className="truncate">{pc.contractorName}</span>
+                      </span>
+                      {pc.contractRatePaise != null && (
+                        <span className="shrink-0 text-xs text-foreground-muted">
+                          {formatPaiseSmart(pc.contractRatePaise)}
+                          {pc.contractRateUnit === "sqft" ? " / sq.ft" : ""}
+                        </span>
+                      )}
+                    </div>
+                    {pc.labourRates.length === 0 ? (
+                      <p className="pl-6 text-xs text-foreground-subtle">No labour types configured.</p>
+                    ) : (
+                      <div className="flex flex-wrap gap-1.5 pl-6">
+                        {pc.labourRates.map((r) => (
+                          <span
+                            key={r.id}
+                            className="inline-flex items-center gap-1 rounded-md bg-surface-muted px-1.5 py-0.5 text-[11px] text-foreground-muted"
+                          >
+                            {r.subcategoryName}
+                            <span className="font-medium text-foreground">
+                              {formatPaiseSmart(r.ratePaise)}/day
+                            </span>
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -210,7 +229,7 @@ export function OverviewTab({
           />
           <ContractorsEditSheet
             projectId={project.id}
-            initial={project.contractorAssignments}
+            initial={project.contractors}
             open={editing === "contractors"}
             onOpenChange={toggle("contractors")}
           />

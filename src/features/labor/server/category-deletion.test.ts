@@ -22,7 +22,7 @@ const h = vi.hoisted(() => ({
   user: null as SessionUser | null,
   prisma: {
     labourAttendance: { count: vi.fn() },
-    projectContractorAssignment: { count: vi.fn() },
+    projectContractorLabourRate: { count: vi.fn() },
     labourCategory: { delete: vi.fn() },
     labourSubcategory: { delete: vi.fn() },
     $queryRaw: vi.fn(),
@@ -43,7 +43,7 @@ import { deleteCategory, deleteSubcategory } from "./actions";
 beforeEach(() => {
   h.user = u(["labour.view", "labour.archive"]);
   h.prisma.labourAttendance.count.mockReset().mockResolvedValue(0);
-  h.prisma.projectContractorAssignment.count.mockReset().mockResolvedValue(0);
+  h.prisma.projectContractorLabourRate.count.mockReset().mockResolvedValue(0);
   h.prisma.labourCategory.delete.mockReset().mockResolvedValue({ id: "cat1" });
   h.prisma.labourSubcategory.delete.mockReset().mockResolvedValue({ id: "sub1" });
   // Locks return the target row (found); callback transaction runs on the mock.
@@ -58,14 +58,14 @@ describe("deleteCategory", () => {
     expect(h.prisma.labourCategory.delete).not.toHaveBeenCalled();
   });
 
-  it("blocks a category that has assignments but no attendance (config preserved)", async () => {
+  it("blocks a category whose subcategory has a configured labour rate (config preserved)", async () => {
     h.prisma.labourAttendance.count.mockResolvedValue(0);
-    h.prisma.projectContractorAssignment.count.mockResolvedValue(2);
+    h.prisma.projectContractorLabourRate.count.mockResolvedValue(2);
     await expect(deleteCategory("cat1")).rejects.toThrow("CATEGORY_HAS_ASSIGNMENTS");
     expect(h.prisma.labourCategory.delete).not.toHaveBeenCalled();
   });
 
-  it("deletes a genuinely unused category (no attendance, no assignments)", async () => {
+  it("deletes a genuinely unused category (no attendance, no config)", async () => {
     await deleteCategory("cat1");
     expect(h.prisma.labourCategory.delete).toHaveBeenCalledWith({
       where: { id: "cat1", companyId: "c1" },
@@ -87,6 +87,13 @@ describe("deleteSubcategory", () => {
   it("blocks a subcategory with recorded attendance", async () => {
     h.prisma.labourAttendance.count.mockResolvedValue(1);
     await expect(deleteSubcategory("sub1")).rejects.toThrow("SUBCATEGORY_HAS_ATTENDANCE");
+    expect(h.prisma.labourSubcategory.delete).not.toHaveBeenCalled();
+  });
+
+  it("blocks a subcategory with a configured project-contractor rate", async () => {
+    h.prisma.labourAttendance.count.mockResolvedValue(0);
+    h.prisma.projectContractorLabourRate.count.mockResolvedValue(1);
+    await expect(deleteSubcategory("sub1")).rejects.toThrow("SUBCATEGORY_HAS_ASSIGNMENTS");
     expect(h.prisma.labourSubcategory.delete).not.toHaveBeenCalled();
   });
 

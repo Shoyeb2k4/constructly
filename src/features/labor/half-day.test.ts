@@ -29,8 +29,8 @@ describe("half-day attendance", () => {
   describe("rowTotals", () => {
     it("sums decimal quantities and their costs", () => {
       const rows: SheetRow[] = [
-        { subcategoryId: "a", name: "Mason", dailyRatePaise: 60_000, quantity: 1.5, notes: null, contractorId: null },
-        { subcategoryId: "b", name: "Helper", dailyRatePaise: 40_000, quantity: 0.5, notes: null, contractorId: null },
+        { subcategoryId: "a", name: "Mason", categoryId: "m", categoryName: "Mason", dailyRatePaise: 60_000, quantity: 1.5, notes: null },
+        { subcategoryId: "b", name: "Helper", categoryId: "m", categoryName: "Mason", dailyRatePaise: 40_000, quantity: 0.5, notes: null },
       ];
       const totals = rowTotals(rows);
       expect(totals.totalPresent).toBe(2);
@@ -70,6 +70,8 @@ describe("half-day attendance", () => {
         color: null,
         subcategoryId: "s1",
         subcategoryName: "Senior Mason",
+        contractorId: null,
+        contractorName: null,
         quantityPresent: qty,
         dailyRatePaiseSnapshot: 60_000,
         estimatedCostPaise: Math.round(60_000 * qty),

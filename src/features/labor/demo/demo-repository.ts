@@ -6,6 +6,8 @@ import type {
   CategoryWithSubs,
   CreateCategoryInput,
   CreateSubcategoryInput,
+  SheetGroup,
+  SheetRow,
   UpdateCategoryInput,
   UpdateSubcategoryInput,
 } from "../types";
@@ -24,10 +26,34 @@ const K = {
   subcategories: "constructly.demo.labourSubcategories.v2",
   attendance: "constructly.demo.labourAttendance.v2",
   projects: "constructly.demo.projects.v1",
+  contractors: "constructly.demo.contractors.v1",
   // Legacy flat-model stores (migrated on first load — ADR-0023).
   v1Categories: "constructly.demo.labourCategories.v1",
   v1Attendance: "constructly.demo.labourAttendance.v1",
 };
+
+/** Shape of a project's contractor-first config as persisted by the projects
+ *  demo repo (self-describing — carries resolved names, so no extra lookups). */
+interface DemoProjectContractorRate {
+  labourSubcategoryId: string;
+  subcategoryName: string;
+  categoryId: string;
+  categoryName: string;
+  ratePaise: number;
+  rateUnit: string;
+}
+interface DemoProjectContractor {
+  contractorId: string;
+  contractorName: string;
+  contractRatePaise: number | null;
+  contractRateUnit: string | null;
+  labourRates: DemoProjectContractorRate[];
+}
+interface DemoProjectRec {
+  id: string;
+  name: string;
+  contractors?: DemoProjectContractor[];
+}
 
 const uid = () =>
   typeof crypto !== "undefined" && crypto.randomUUID
@@ -52,35 +78,67 @@ function write<T>(key: string, rows: T[]): void {
   }
 }
 
-/** Demo parity for server eligibility (category-exact): is this contractor
- *  assigned to this project FOR THE SUBCATEGORY'S CATEGORY? The category is
- *  resolved from the subcategory (never trusted from the caller), mirroring
- *  isAttributionEligible on the server. */
-/** Demo parity for the server's assignment guard: does ANY project have a
- *  contractor assignment referencing this category? */
+function loadProjectsRaw(): DemoProjectRec[] {
+  return readRaw<DemoProjectRec>(K.projects) ?? [];
+}
+/** Contractor id → name, for attributing orphan/legacy attendance rows. */
+function contractorNames(): Map<string, string> {
+  const rows = readRaw<{ id: string; name: string }>(K.contractors) ?? [];
+  return new Map(rows.map((c) => [c.id, c.name]));
+}
+
+/** The configured project+contractor rate for a subcategory, or undefined when
+ *  the contractor doesn't supply that subcategory on the project. */
+function projectContractorRatePaise(
+  projectId: string,
+  contractorId: string,
+  subcategoryId: string,
+): number | undefined {
+  const p = loadProjectsRaw().find((x) => x.id === projectId);
+  const pc = p?.contractors?.find((c) => c.contractorId === contractorId);
+  return pc?.labourRates.find((r) => r.labourSubcategoryId === subcategoryId)?.ratePaise;
+}
+
+/** Demo parity for the server's category-delete guard: does ANY project have a
+ *  configured labour rate referencing a subcategory in this category? */
 function categoryHasAssignmentsDemo(categoryId: string): boolean {
-  const projects =
-    readRaw<{ contractorAssignments?: { labourCategoryId: string }[] }>(K.projects) ?? [];
-  return projects.some((p) =>
-    p.contractorAssignments?.some((a) => a.labourCategoryId === categoryId),
+  const subIds = new Set(
+    loadSubcategories().filter((s) => s.categoryId === categoryId).map((s) => s.id),
+  );
+  return loadProjectsRaw().some((p) =>
+    p.contractors?.some((c) => c.labourRates.some((r) => subIds.has(r.labourSubcategoryId))),
   );
 }
 
+/** Demo parity for the server's subcategory-delete config guard. */
+function subcategoryHasAssignmentsDemo(subcategoryId: string): boolean {
+  return loadProjectsRaw().some((p) =>
+    p.contractors?.some((c) => c.labourRates.some((r) => r.labourSubcategoryId === subcategoryId)),
+  );
+}
+
+/** Demo parity for server eligibility (subcategory-exact): does the contractor
+ *  supply this subcategory on this project (a configured rate exists)? */
 function isAttributionEligibleDemo(
   projectId: string,
   subcategoryId: string,
   contractorId: string,
 ): boolean {
-  const sub = loadSubcategories().find((s) => s.id === subcategoryId);
-  if (!sub) return false;
-  const projects =
-    readRaw<{ id: string; contractorAssignments?: { contractorId: string; labourCategoryId: string }[] }>(
-      K.projects,
-    ) ?? [];
-  const p = projects.find((x) => x.id === projectId);
-  return !!p?.contractorAssignments?.some(
-    (a) => a.contractorId === contractorId && a.labourCategoryId === sub.categoryId,
-  );
+  return projectContractorRatePaise(projectId, contractorId, subcategoryId) !== undefined;
+}
+
+/** Resolve the effective rate to snapshot: project+contractor+subcategory rate,
+ *  falling back to the subcategory's global default (parity with the server). */
+function resolveRateDemo(
+  projectId: string,
+  contractorId: string | null,
+  subcategoryId: string,
+): number | null {
+  if (contractorId != null) {
+    const r = projectContractorRatePaise(projectId, contractorId, subcategoryId);
+    if (r !== undefined) return r;
+  }
+  return loadSubcategories().find((s) => s.id === subcategoryId)?.dailyRatePaise ?? null;
 }
 
 interface V1Category { id: string; name: string; color: string; dailyRatePaise: number | null }
@@ -151,38 +209,96 @@ const byOrder = <T extends { displayOrder: number }>(a: T, b: T) => a.displayOrd
 function buildSheet(
   projectId: string,
   date: string,
-  categories: CategoryRecord[],
   subcategories: SubcategoryRecord[],
   attendance: LabourAttendanceRecord[],
 ): AttendanceSheet {
   const todays = attendance.filter((a) => a.projectId === projectId && a.date === date);
-  const groups = [...categories].sort(byOrder).map((c) => {
-    const rows = subcategories
-      .filter((s) => s.categoryId === c.id)
-      .sort(byOrder)
-      .map((s) => {
-        const rec = todays.find((a) => a.labourSubcategoryId === s.id);
+  const config = loadProjectsRaw().find((p) => p.id === projectId)?.contractors ?? [];
+  const names = contractorNames();
+  const subName = new Map(subcategories.map((s) => [s.id, s.name]));
+  const subCat = new Map(subcategories.map((s) => [s.id, s.categoryId]));
+  const catName = new Map(loadCategories().map((c) => [c.id, c.name]));
+
+  const attKey = (contractorId: string | null | undefined, subId: string) =>
+    `${contractorId ?? ""}|${subId}`;
+  const byKey = new Map(todays.map((a) => [attKey(a.contractorId ?? null, a.labourSubcategoryId), a]));
+  const consumed = new Set<string>();
+
+  const groups: SheetGroup[] = [...config]
+    .sort((a, b) => a.contractorName.localeCompare(b.contractorName))
+    .map((pc) => {
+      const rows: SheetRow[] = pc.labourRates.map((lr) => {
+        const k = attKey(pc.contractorId, lr.labourSubcategoryId);
+        const rec = byKey.get(k);
+        if (rec) consumed.add(k);
         return {
-          subcategoryId: s.id,
-          name: s.name,
-          dailyRatePaise: rec ? rec.dailyRatePaiseSnapshot : s.dailyRatePaise,
+          subcategoryId: lr.labourSubcategoryId,
+          name: lr.subcategoryName,
+          categoryId: lr.categoryId,
+          categoryName: lr.categoryName,
+          dailyRatePaise: rec ? rec.dailyRatePaiseSnapshot : lr.ratePaise,
           quantity: rec?.quantityPresent ?? 0,
           notes: rec?.notes ?? null,
-          contractorId: rec?.contractorId ?? null,
         };
       });
-    return { categoryId: c.id, name: c.name, color: c.color, rows, ...rowTotals(rows) };
-  });
-  const contractorId = todays.find((a) => a.contractorId)?.contractorId ?? null;
-  return { projectId, date, groups, contractorId, ...sheetTotals(groups) };
+      return {
+        contractorId: pc.contractorId,
+        contractorName: pc.contractorName,
+        contractRatePaise: pc.contractRatePaise,
+        contractRateUnit: pc.contractRateUnit,
+        configured: true,
+        rows,
+        ...rowTotals(rows),
+      };
+    });
+
+  // Leftover recorded rows (de-configured contractor/type, or legacy null).
+  const orphans = new Map<string, { contractorId: string | null; name: string; rows: SheetRow[] }>();
+  for (const a of todays) {
+    const k = attKey(a.contractorId ?? null, a.labourSubcategoryId);
+    if (consumed.has(k)) continue;
+    const gk = a.contractorId ?? "";
+    const cid = a.contractorId ?? null;
+    const g = orphans.get(gk) ?? {
+      contractorId: cid,
+      name: (cid && names.get(cid)) || "Unattributed",
+      rows: [],
+    };
+    const catId = subCat.get(a.labourSubcategoryId) ?? "unknown";
+    g.rows.push({
+      subcategoryId: a.labourSubcategoryId,
+      name: subName.get(a.labourSubcategoryId) ?? "Unknown",
+      categoryId: catId,
+      categoryName: catName.get(catId) ?? "Unknown",
+      dailyRatePaise: a.dailyRatePaiseSnapshot,
+      quantity: a.quantityPresent,
+      notes: a.notes,
+    });
+    orphans.set(gk, g);
+  }
+  for (const g of orphans.values()) {
+    groups.push({
+      contractorId: g.contractorId,
+      contractorName: g.name,
+      contractRatePaise: null,
+      contractRateUnit: null,
+      configured: false,
+      rows: g.rows,
+      ...rowTotals(g.rows),
+    });
+  }
+
+  return { projectId, date, groups, ...sheetTotals(groups) };
 }
 
 function toItems(records: LabourAttendanceRecord[]): AttendanceRecordItem[] {
   const categories = loadCategories();
   const subcategories = loadSubcategories();
+  const names = contractorNames();
   return records.map((r) => {
     const sub = subcategories.find((s) => s.id === r.labourSubcategoryId);
     const cat = sub ? categories.find((c) => c.id === sub.categoryId) : undefined;
+    const cid = r.contractorId ?? null;
     return {
       id: r.id,
       projectId: r.projectId,
@@ -193,6 +309,8 @@ function toItems(records: LabourAttendanceRecord[]): AttendanceRecordItem[] {
       color: cat?.color ?? null,
       subcategoryId: r.labourSubcategoryId,
       subcategoryName: sub?.name ?? "Unknown",
+      contractorId: cid,
+      contractorName: cid ? (names.get(cid) ?? null) : null,
       quantityPresent: r.quantityPresent,
       dailyRatePaiseSnapshot: r.dailyRatePaiseSnapshot,
       estimatedCostPaise: r.estimatedCostPaise,
@@ -311,6 +429,9 @@ export const demoLaborRepository: LaborRepository = {
     if (loadAttendance().some((a) => a.labourSubcategoryId === id)) {
       throw new Error("SUBCATEGORY_HAS_ATTENDANCE");
     }
+    if (subcategoryHasAssignmentsDemo(id)) {
+      throw new Error("SUBCATEGORY_HAS_ASSIGNMENTS");
+    }
     write(K.subcategories, loadSubcategories().filter((s) => s.id !== id));
   },
 
@@ -325,22 +446,26 @@ export const demoLaborRepository: LaborRepository = {
   },
 
   async getSheet(projectId, date) {
-    return buildSheet(projectId, date, loadCategories(), loadSubcategories(), loadAttendance());
+    return buildSheet(projectId, date, loadSubcategories(), loadAttendance());
   },
 
   async setQuantity(projectId, date, subcategoryId, quantity, notes, contractorId) {
-    const categories = loadCategories();
     const subcategories = loadSubcategories();
     let attendance = loadAttendance();
-    // Eligibility parity with the server: only a contractor assigned to this
-    // project may be attributed; an ineligible id degrades to null (never
-    // rejects, matching the offline sync path). undefined = leave unchanged.
-    let effContractor = contractorId;
-    if (typeof effContractor === "string" && !isAttributionEligibleDemo(projectId, subcategoryId, effContractor)) {
+    // Eligibility parity with the server: a contractor may only be attributed to
+    // a subcategory THEY SUPPLY on this project; an ineligible id degrades to
+    // null (never rejects, matching the offline sync path). undefined = null.
+    let effContractor = contractorId ?? null;
+    if (effContractor != null && !isAttributionEligibleDemo(projectId, subcategoryId, effContractor)) {
       effContractor = null;
     }
+    // Identity now includes the contractor (Pappu-Centering ≠ Saddam-Centering).
     const existing = attendance.find(
-      (a) => a.projectId === projectId && a.date === date && a.labourSubcategoryId === subcategoryId,
+      (a) =>
+        a.projectId === projectId &&
+        a.date === date &&
+        a.labourSubcategoryId === subcategoryId &&
+        (a.contractorId ?? null) === effContractor,
     );
     if (quantity <= 0) {
       attendance = attendance.filter((a) => a !== existing);
@@ -349,10 +474,9 @@ export const demoLaborRepository: LaborRepository = {
       existing.quantityPresent = quantity;
       existing.estimatedCostPaise = Math.round((existing.dailyRatePaiseSnapshot ?? 0) * quantity);
       if (notes !== undefined) existing.notes = notes;
-      if (effContractor !== undefined) existing.contractorId = effContractor;
       existing.updatedAt = new Date().toISOString();
     } else {
-      const rate = subcategories.find((s) => s.id === subcategoryId)?.dailyRatePaise ?? null;
+      const rate = resolveRateDemo(projectId, effContractor, subcategoryId);
       attendance.push({
         id: uid(),
         projectId,
@@ -362,17 +486,16 @@ export const demoLaborRepository: LaborRepository = {
         dailyRatePaiseSnapshot: rate,
         estimatedCostPaise: Math.round((rate ?? 0) * quantity),
         notes: notes ?? null,
-        contractorId: effContractor ?? null,
+        contractorId: effContractor,
         clientUuid: uid(),
         updatedAt: new Date().toISOString(),
       });
     }
     write(K.attendance, attendance);
-    return buildSheet(projectId, date, categories, subcategories, attendance);
+    return buildSheet(projectId, date, subcategories, attendance);
   },
 
   async copyPreviousDay(projectId, date) {
-    const categories = loadCategories();
     const subcategories = loadSubcategories();
     let attendance = loadAttendance();
     const prev = attendance
@@ -383,11 +506,19 @@ export const demoLaborRepository: LaborRepository = {
     if (prev) {
       const source = attendance.filter((a) => a.projectId === projectId && a.date === prev);
       for (const rec of source) {
+        const cid = rec.contractorId ?? null;
+        // Replace the same (subcategory, contractor) slot on the target day.
         attendance = attendance.filter(
-          (a) => !(a.projectId === projectId && a.date === date && a.labourSubcategoryId === rec.labourSubcategoryId),
+          (a) =>
+            !(
+              a.projectId === projectId &&
+              a.date === date &&
+              a.labourSubcategoryId === rec.labourSubcategoryId &&
+              (a.contractorId ?? null) === cid
+            ),
         );
         // Copying into a new day is a NEW recording → snapshot today's rate.
-        const rate = subcategories.find((s) => s.id === rec.labourSubcategoryId)?.dailyRatePaise ?? null;
+        const rate = resolveRateDemo(projectId, cid, rec.labourSubcategoryId);
         attendance.push({
           ...rec,
           id: uid(),
@@ -400,7 +531,7 @@ export const demoLaborRepository: LaborRepository = {
       }
       write(K.attendance, attendance);
     }
-    return buildSheet(projectId, date, categories, subcategories, attendance);
+    return buildSheet(projectId, date, subcategories, attendance);
   },
 
   async listAttendance(filters: AttendanceFilters) {

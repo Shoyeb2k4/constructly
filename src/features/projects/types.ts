@@ -88,21 +88,44 @@ export interface ProjectListItem {
   updatedAt: string;
 }
 
-/** One contractor↔work-category assignment on a project (the client's
- *  "Pappu → Civil, Shoeb → Tiles"). Reuses the LabourCategory taxonomy. */
-export interface ProjectContractorAssignmentItem {
+/** One labour type a contractor supplies on a project, with its project-specific
+ *  rate. Reuses the LabourSubcategory taxonomy (Mason, Helper, Centering, …). */
+export interface ProjectContractorLabourRateItem {
+  id: string;
+  labourSubcategoryId: string;
+  subcategoryName: string;
+  categoryId: string;
+  categoryName: string;
+  ratePaise: number;
+  rateUnit: string;
+}
+
+/** A contractor engaged on a project (contractor-first config). The contractor
+ *  is the top-level grouping the Labour module presents; the labour types they
+ *  supply hang off `labourRates`. `contractRatePaise` is an OPTIONAL project
+ *  agreement figure (₹/sq.ft) — display only, never billed from attendance. */
+export interface ProjectContractorItem {
   id: string;
   contractorId: string;
   contractorName: string;
-  labourCategoryId: string;
-  categoryName: string;
-  categoryColor: string | null;
+  contractRatePaise: number | null;
+  contractRateUnit: string | null;
+  labourRates: ProjectContractorLabourRateItem[];
 }
 
-/** Write shape for a single assignment row (create form + edit sheet). */
-export interface ContractorAssignmentInput {
+/** Write shape: a labour type + project rate under a contractor. */
+export interface ProjectContractorLabourRateInput {
+  labourSubcategoryId: string;
+  ratePaise: number;
+  rateUnit?: string;
+}
+
+/** Write shape: a contractor engaged on a project + the labour types they supply. */
+export interface ProjectContractorInput {
   contractorId: string;
-  labourCategoryId: string;
+  contractRatePaise?: number | null;
+  contractRateUnit?: string | null;
+  labourRates: ProjectContractorLabourRateInput[];
 }
 
 export interface ProjectDetail extends ProjectListItem {
@@ -118,7 +141,7 @@ export interface ProjectDetail extends ProjectListItem {
   documents: ProjectDocument[];
   notes: Note[];
   activity: ActivityEntry[];
-  contractorAssignments: ProjectContractorAssignmentItem[];
+  contractors: ProjectContractorItem[];
 }
 
 /** Project list sort modes. RECENT (last updated) is the default. */
@@ -157,8 +180,9 @@ export interface CreateProjectInput {
   expectedCompletionDate?: string | null;
   pmId?: string | null;
   tags?: string[];
-  /** Contractor↔category assignments to create alongside the project. */
-  contractorAssignments?: ContractorAssignmentInput[];
+  /** Contractors (with their labour types + project rates) to engage on the
+   *  project at creation time. */
+  contractors?: ProjectContractorInput[];
 }
 
 export type UpdateProjectInput = Partial<CreateProjectInput>;

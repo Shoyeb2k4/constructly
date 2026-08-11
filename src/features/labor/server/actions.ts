@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db/prisma";
 import { requirePermission, hasPermission } from "@/lib/auth/permissions";
 import type { SessionUser } from "@/lib/auth/types";
 import { rowTotals, sheetTotals, summarize } from "../calc";
-import { isAttributionEligible } from "./assignment-eligibility";
+import { isAttributionEligible, resolveAttendanceRate } from "./assignment-eligibility";
 import type {
   AttendanceFilters,
   AttendanceRecordItem,
@@ -15,6 +15,8 @@ import type {
   LabourCategory,
   LabourSubcategory,
   LabourSummary,
+  SheetGroup,
+  SheetRow,
   UpdateCategoryInput,
   UpdateSubcategoryInput,
 } from "../types";
@@ -86,17 +88,16 @@ export async function updateCategory(id: string, patch: UpdateCategoryInput): Pr
 export async function deleteCategory(id: string): Promise<void> {
   const user = await requirePermission("labour.archive");
   // Physical deletion cascade-deletes subcategories → attendance AND
-  // project_contractor_assignments. Both must be preserved: attendance is
-  // labour history; assignments are config that must only ever change through
-  // the audited setContractorAssignments path (which logs
-  // project.contractors_updated). So a category is deletable ONLY when it has
-  // neither attendance nor assignments.
+  // project_contractor_labour_rates. Both must be preserved: attendance is
+  // labour history; labour rates are project config that must only ever change
+  // through the audited setProjectContractors path (which logs
+  // project.contractors_updated). So a category is deletable ONLY when none of
+  // its subcategories has attendance or a configured project-contractor rate.
   //
   // Race safety: run the check + delete in one transaction and lock the parent
-  // rows FOR UPDATE. A concurrent assignment insert takes FOR KEY SHARE on the
-  // category row (blocked by our lock on it); a concurrent attendance insert
-  // takes FOR KEY SHARE on a subcategory row (blocked by our lock on the
-  // subcategories). So nothing can slip in between the check and the delete.
+  // rows FOR UPDATE. A concurrent rate insert takes FOR KEY SHARE on a
+  // subcategory row (blocked by our lock on the subcategories); a concurrent
+  // attendance insert likewise. So nothing can slip in between check and delete.
   await prisma.$transaction(async (tx) => {
     const locked = await tx.$queryRaw<{ id: string }[]>`
       SELECT id FROM labour_categories
@@ -113,10 +114,10 @@ export async function deleteCategory(id: string): Promise<void> {
       where: { companyId: user.company.id, subcategory: { categoryId: id } },
     });
     if (attendance > 0) throw new Error("CATEGORY_HAS_ATTENDANCE");
-    const assignments = await tx.projectContractorAssignment.count({
-      where: { companyId: user.company.id, labourCategoryId: id },
+    const labourRates = await tx.projectContractorLabourRate.count({
+      where: { companyId: user.company.id, subcategory: { categoryId: id } },
     });
-    if (assignments > 0) throw new Error("CATEGORY_HAS_ASSIGNMENTS");
+    if (labourRates > 0) throw new Error("CATEGORY_HAS_ASSIGNMENTS");
 
     await tx.labourCategory.delete({ where: { id, companyId: user.company.id } });
   });
@@ -169,11 +170,11 @@ export async function updateSubcategory(id: string, patch: UpdateSubcategoryInpu
 
 export async function deleteSubcategory(id: string): Promise<void> {
   const user = await requirePermission("labour.archive");
-  // History guard (same rationale as deleteCategory): a subcategory with
-  // recorded attendance cannot be physically deleted (that cascade-deletes its
-  // attendance history). Assignments reference the CATEGORY, not the
-  // subcategory, so there's no assignment guard here. Race-safe via a FOR UPDATE
-  // lock on the subcategory row (concurrent attendance inserts block).
+  // History + config guard (same rationale as deleteCategory): a subcategory
+  // with recorded attendance cannot be deleted (that cascade-deletes attendance
+  // history); nor can one with a configured project-contractor rate (config that
+  // must change via setProjectContractors). Race-safe via a FOR UPDATE lock on
+  // the subcategory row (concurrent attendance/rate inserts block).
   await prisma.$transaction(async (tx) => {
     const locked = await tx.$queryRaw<{ id: string }[]>`
       SELECT id FROM labour_subcategories
@@ -184,6 +185,10 @@ export async function deleteSubcategory(id: string): Promise<void> {
       where: { companyId: user.company.id, labourSubcategoryId: id },
     });
     if (attendance > 0) throw new Error("SUBCATEGORY_HAS_ATTENDANCE");
+    const labourRates = await tx.projectContractorLabourRate.count({
+      where: { companyId: user.company.id, labourSubcategoryId: id },
+    });
+    if (labourRates > 0) throw new Error("SUBCATEGORY_HAS_ASSIGNMENTS");
     await tx.labourSubcategory.delete({ where: { id, companyId: user.company.id } });
   });
 }
@@ -203,30 +208,168 @@ export async function reorderSubcategories(categoryId: string, orderedIds: strin
 /* ── Attendance ──────────────────────────────────────────────────────── */
 
 async function buildSheet(companyId: string, projectId: string, date: string): Promise<AttendanceSheet> {
-  const [categories, todays] = await Promise.all([
-    prisma.labourCategory.findMany({
-      where: { companyId },
-      orderBy: { displayOrder: "asc" },
-      include: { subcategories: { orderBy: { displayOrder: "asc" } } },
+  const [projectContractors, todays] = await Promise.all([
+    prisma.projectContractor.findMany({
+      where: { companyId, projectId },
+      include: {
+        contractor: { select: { name: true } },
+        labourRates: {
+          include: {
+            subcategory: {
+              select: { name: true, categoryId: true, displayOrder: true, category: { select: { name: true } } },
+            },
+          },
+          orderBy: { subcategory: { displayOrder: "asc" } },
+        },
+      },
+      orderBy: { contractor: { name: "asc" } },
     }),
-    prisma.labourAttendance.findMany({ where: { companyId, projectId, date: new Date(date) } }),
+    prisma.labourAttendance.findMany({
+      where: { companyId, projectId, date: new Date(date) },
+      include: {
+        subcategory: { select: { name: true, categoryId: true, category: { select: { name: true } } } },
+        contractor: { select: { name: true } },
+      },
+    }),
   ]);
-  const groups = categories.map((c) => {
-    const rows = c.subcategories.map((s) => {
-      const rec = todays.find((a) => a.labourSubcategoryId === s.id);
+
+  // Index recorded rows by contractor|subcategory; track which are represented
+  // by a configured (contractor, labour-type) so leftovers can be surfaced.
+  const attKey = (contractorId: string | null, subId: string) => `${contractorId ?? ""}|${subId}`;
+  const byKey = new Map(todays.map((a) => [attKey(a.contractorId, a.labourSubcategoryId), a]));
+  const consumed = new Set<string>();
+
+  const groups: SheetGroup[] = projectContractors.map((pc) => {
+    const rows: SheetRow[] = pc.labourRates.map((lr) => {
+      const k = attKey(pc.contractorId, lr.labourSubcategoryId);
+      const rec = byKey.get(k);
+      if (rec) consumed.add(k);
       return {
-        subcategoryId: s.id,
-        name: s.name,
-        dailyRatePaise: rec ? rec.dailyRatePaiseSnapshot : s.dailyRatePaise,
+        subcategoryId: lr.labourSubcategoryId,
+        name: lr.subcategory.name,
+        categoryId: lr.subcategory.categoryId,
+        categoryName: lr.subcategory.category.name,
+        // Effective rate: the record's snapshot when recorded, else the
+        // project+contractor configured rate.
+        dailyRatePaise: rec ? rec.dailyRatePaiseSnapshot : lr.ratePaise,
         quantity: rec?.quantityPresent ?? 0,
         notes: rec?.notes ?? null,
-        contractorId: rec?.contractorId ?? null,
       };
     });
-    return { categoryId: c.id, name: c.name, color: c.color, rows, ...rowTotals(rows) };
+    return {
+      contractorId: pc.contractorId,
+      contractorName: pc.contractor.name,
+      contractRatePaise: pc.contractRatePaise,
+      contractRateUnit: pc.contractRateUnit,
+      configured: true,
+      rows,
+      ...rowTotals(rows),
+    };
   });
-  const contractorId = todays.find((a) => a.contractorId)?.contractorId ?? null;
-  return { projectId, date, groups, contractorId, ...sheetTotals(groups) };
+
+  // Leftover recorded rows not covered by any configured (contractor, type):
+  // a contractor/type de-configured after recording, or legacy unattributed
+  // rows (contractorId null). Grouped so history stays visible & clearable, but
+  // marked configured:false so they read as "no longer configured".
+  const orphans = new Map<string, { contractorId: string | null; name: string; rows: SheetRow[] }>();
+  for (const a of todays) {
+    const k = attKey(a.contractorId, a.labourSubcategoryId);
+    if (consumed.has(k)) continue;
+    const gk = a.contractorId ?? "";
+    const g = orphans.get(gk) ?? {
+      contractorId: a.contractorId,
+      name: a.contractor?.name ?? "Unattributed",
+      rows: [],
+    };
+    g.rows.push({
+      subcategoryId: a.labourSubcategoryId,
+      name: a.subcategory.name,
+      categoryId: a.subcategory.categoryId,
+      categoryName: a.subcategory.category.name,
+      dailyRatePaise: a.dailyRatePaiseSnapshot,
+      quantity: a.quantityPresent,
+      notes: a.notes,
+    });
+    orphans.set(gk, g);
+  }
+  for (const g of orphans.values()) {
+    groups.push({
+      contractorId: g.contractorId,
+      contractorName: g.name,
+      contractRatePaise: null,
+      contractRateUnit: null,
+      configured: false,
+      rows: g.rows,
+      ...rowTotals(g.rows),
+    });
+  }
+
+  return { projectId, date, groups, ...sheetTotals(groups) };
+}
+
+/**
+ * Insert-or-update one attendance row, snapshotting the effective rate on FIRST
+ * record and preserving it on edits (ADR-0022). Rate resolves from
+ * project+contractor+subcategory, falling back to the subcategory's global rate.
+ * Find-then-write handles both the contractor path and the rare null-contractor
+ * (legacy/unattributed) path uniformly; the DB unique index is the race backstop.
+ */
+async function writeAttendanceRow(
+  companyId: string,
+  projectId: string,
+  key: { projectId: string; date: Date; labourSubcategoryId: string; contractorId: string | null },
+  contractorId: string | null,
+  subcategoryId: string,
+  quantity: number,
+  notes: string | null | undefined,
+): Promise<void> {
+  const existing = await prisma.labourAttendance.findFirst({
+    where: {
+      companyId,
+      projectId,
+      date: key.date,
+      labourSubcategoryId: subcategoryId,
+      contractorId,
+    },
+    select: { id: true, dailyRatePaiseSnapshot: true, projectContractorLabourRateId: true },
+  });
+
+  let snapshot: number | null;
+  let rateId: string | null;
+  if (existing) {
+    snapshot = existing.dailyRatePaiseSnapshot;
+    rateId = existing.projectContractorLabourRateId;
+  } else {
+    const resolved = await resolveAttendanceRate(companyId, projectId, contractorId, subcategoryId);
+    snapshot = resolved.ratePaise;
+    rateId = resolved.projectContractorLabourRateId;
+  }
+  // Round: half-day quantities can produce fractional paise.
+  const estimatedCostPaise = Math.round((snapshot ?? 0) * quantity);
+
+  if (existing) {
+    await prisma.labourAttendance.update({
+      where: { id: existing.id },
+      data: { quantityPresent: quantity, estimatedCostPaise, ...(notes !== undefined ? { notes } : {}) },
+    });
+  } else {
+    await prisma.labourAttendance.create({
+      data: {
+        companyId,
+        projectId,
+        date: key.date,
+        labourSubcategoryId: subcategoryId,
+        contractorId,
+        quantityPresent: quantity,
+        dailyRatePaiseSnapshot: snapshot,
+        projectContractorLabourRateId: rateId,
+        estimatedCostPaise,
+        notes: notes ?? null,
+        clientUuid: crypto.randomUUID(),
+        clientSeq: BigInt(Date.now()),
+      },
+    });
+  }
 }
 
 export async function getSheet(projectId: string, date: string): Promise<AttendanceSheet> {
@@ -250,59 +393,26 @@ export async function setQuantity(
   if (await isPeriodLocked(user.company.id, projectId, date)) {
     await requirePermission("attendance.edit");
   }
-  const key = { projectId, date: new Date(date), labourSubcategoryId: subcategoryId };
+  const cid = contractorId ?? null;
+  const key = { projectId, date: new Date(date), labourSubcategoryId: subcategoryId, contractorId: cid };
   if (quantity <= 0) {
     // Deleting a row: attribution is moot, so no eligibility check (avoids
-    // rejecting a legitimate clear that happens to carry a contractorId).
+    // rejecting a legitimate clear). Keyed by contractor so clearing one
+    // contractor's row never touches another's on the same subcategory/date.
     await prisma.labourAttendance.deleteMany({ where: { ...key, companyId: user.company.id } });
   } else {
-    // Eligibility (exact): a contractor may only be attributed to a project for
-    // the SUBCATEGORY'S CATEGORY — resolved server-side, never trusted from the
-    // client (blocks Civil-only "Pappu" being written against "Tiles"). Null is
-    // always allowed; historical rows are never revalidated (read paths don't
-    // call this). The UI only offers a category's assigned contractors — this is
-    // the server backstop against a stale/manipulated client.
+    // Eligibility (subcategory-exact): a contractor may only be attributed to a
+    // project for a SUBCATEGORY THEY SUPPLY (a ProjectContractorLabourRate
+    // exists) — resolved server-side, never trusted from the client. Null
+    // (legacy/unattributed) is always allowed. The UI only offers a project's
+    // configured contractors + their labour types — this is the server backstop.
     if (
-      contractorId != null &&
-      !(await isAttributionEligible(user.company.id, projectId, contractorId, subcategoryId))
+      cid != null &&
+      !(await isAttributionEligible(user.company.id, projectId, cid, subcategoryId))
     ) {
       throw new Error("CONTRACTOR_NOT_ASSIGNED");
     }
-    // Snapshot the rate on FIRST recording; edits keep it (ADR-0022).
-    const existing = await prisma.labourAttendance.findUnique({
-      where: { projectId_date_labourSubcategoryId: key },
-      select: { dailyRatePaiseSnapshot: true },
-    });
-    const snapshot = existing
-      ? existing.dailyRatePaiseSnapshot
-      : (
-          await prisma.labourSubcategory.findFirstOrThrow({
-            where: { id: subcategoryId, companyId: user.company.id },
-            select: { dailyRatePaise: true },
-          })
-        ).dailyRatePaise;
-    // Round: half-day quantities can produce fractional paise.
-    const estimatedCostPaise = Math.round((snapshot ?? 0) * quantity);
-    await prisma.labourAttendance.upsert({
-      where: { projectId_date_labourSubcategoryId: key },
-      create: {
-        companyId: user.company.id,
-        ...key,
-        quantityPresent: quantity,
-        dailyRatePaiseSnapshot: snapshot,
-        estimatedCostPaise,
-        notes: notes ?? null,
-        contractorId: contractorId ?? null,
-        clientUuid: crypto.randomUUID(),
-        clientSeq: BigInt(Date.now()),
-      },
-      update: {
-        quantityPresent: quantity,
-        estimatedCostPaise,
-        ...(notes !== undefined ? { notes } : {}),
-        ...(contractorId !== undefined ? { contractorId } : {}),
-      },
-    });
+    await writeAttendanceRow(user.company.id, projectId, key, cid, subcategoryId, quantity, notes);
   }
   return buildSheet(user.company.id, projectId, date);
 }
@@ -323,7 +433,16 @@ export async function copyPreviousDay(projectId: string, date: string): Promise<
       where: { companyId: user.company.id, projectId, date: prev.date },
     });
     for (const rec of source) {
-      await setQuantity(projectId, date, rec.labourSubcategoryId, rec.quantityPresent, rec.notes);
+      // Preserve the contractor attribution so each contractor's rows copy
+      // forward independently (Pappu-Centering and Saddam-Centering stay split).
+      await setQuantity(
+        projectId,
+        date,
+        rec.labourSubcategoryId,
+        rec.quantityPresent,
+        rec.notes,
+        rec.contractorId,
+      );
     }
   }
   return buildSheet(user.company.id, projectId, date);
@@ -343,6 +462,7 @@ async function fetchItems(user: SessionUser, filters: AttendanceFilters): Promis
     include: {
       subcategory: { include: { category: { select: { id: true, name: true, color: true } } } },
       project: { select: { name: true } },
+      contractor: { select: { name: true } },
     },
     orderBy: { date: "desc" },
   });
@@ -356,6 +476,8 @@ async function fetchItems(user: SessionUser, filters: AttendanceFilters): Promis
     color: r.subcategory.category.color,
     subcategoryId: r.labourSubcategoryId,
     subcategoryName: r.subcategory.name,
+    contractorId: r.contractorId,
+    contractorName: r.contractor?.name ?? null,
     quantityPresent: r.quantityPresent,
     dailyRatePaiseSnapshot: r.dailyRatePaiseSnapshot,
     estimatedCostPaise: r.estimatedCostPaise,

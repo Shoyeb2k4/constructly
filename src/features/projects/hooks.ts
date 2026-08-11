@@ -8,7 +8,7 @@ import {
 import { toast } from "sonner";
 import { projectsApi, projectKeys } from "./data";
 import type {
-  ContractorAssignmentInput,
+  ProjectContractorInput,
   CreateProjectInput,
   ProjectDetail,
   ProjectFilters,
@@ -64,29 +64,30 @@ export function useSetProjectRetention() {
   });
 }
 
-/** A project's contractor↔category assignments. Also powers the Labour
- *  attendance contractor list (which contractors work this project). */
-export function useContractorAssignments(projectId: string | null, enabled = true) {
+/** A project's contractor config (contractors + the labour types/rates they
+ *  supply). Also powers the Labour attendance screen (which contractors work
+ *  this project, and their labour types/rates). */
+export function useProjectContractors(projectId: string | null, enabled = true) {
   return useQuery({
-    queryKey: projectKeys.contractorAssignments(projectId ?? "none"),
-    queryFn: () => projectsApi.listContractorAssignments(projectId!),
+    queryKey: projectKeys.projectContractors(projectId ?? "none"),
+    queryFn: () => projectsApi.listProjectContractors(projectId!),
     enabled: enabled && !!projectId,
     staleTime: 60_000,
   });
 }
 
-/** Replace a project's assignments (Contractors edit sheet). Refreshes the
- *  detail and the assignment list so Labour picks up the change immediately. */
-export function useSetContractorAssignments(projectId: string) {
+/** Replace a project's contractor config (Contractors edit sheet). Refreshes the
+ *  detail and the config list so Labour picks up the change immediately. */
+export function useSetProjectContractors(projectId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (rows: ContractorAssignmentInput[]) =>
-      projectsApi.setContractorAssignments(projectId, rows),
+    mutationFn: (rows: ProjectContractorInput[]) =>
+      projectsApi.setProjectContractors(projectId, rows),
     onSuccess: (items) => {
-      qc.setQueryData(projectKeys.contractorAssignments(projectId), items);
+      qc.setQueryData(projectKeys.projectContractors(projectId), items);
       qc.invalidateQueries({ queryKey: projectKeys.detail(projectId) });
-      qc.invalidateQueries({ queryKey: projectKeys.contractorAssignments(projectId) });
-      // Attendance derives its per-category contractor from assignments.
+      qc.invalidateQueries({ queryKey: projectKeys.projectContractors(projectId) });
+      // Attendance derives its contractors + labour types/rates from this config.
       qc.invalidateQueries({ queryKey: ["labor"] });
       toast.success("Contractors updated");
     },

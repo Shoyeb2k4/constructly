@@ -1,8 +1,8 @@
 import type { ProjectsRepository } from "../repository";
 import type {
-  ContractorAssignmentInput,
+  ProjectContractorInput,
   CreateProjectInput,
-  ProjectContractorAssignmentItem,
+  ProjectContractorItem,
   ProjectDetail,
   ProjectFilters,
   ProjectListItem,
@@ -109,36 +109,56 @@ function mutate<T>(id: string, fn: (p: ProjectDetail, rows: ProjectDetail[]) => 
 }
 
 /**
- * Resolve raw {contractorId, labourCategoryId} rows into display items by
- * reading the demo contractor + labour-category stores. Dedupes and drops rows
- * whose contractor/category no longer exists (parity with the server's
- * company-ownership validation).
+ * Resolve contractor-config input into display items by reading the demo
+ * contractor + labour-subcategory stores. Dedupes contractors + labour types and
+ * drops any whose contractor/subcategory no longer exists (parity with the
+ * server's company-ownership validation).
  */
-async function resolveAssignments(
-  rows: ContractorAssignmentInput[],
-): Promise<ProjectContractorAssignmentItem[]> {
+async function resolveContractors(
+  rows: ProjectContractorInput[],
+): Promise<ProjectContractorItem[]> {
   const [contractors, categories] = await Promise.all([
     demoContractorsRepository.listContractors({}),
     demoLaborRepository.listCategories(),
   ]);
   const cById = new Map(contractors.map((c) => [c.id, c]));
-  const catById = new Map(categories.map((c) => [c.id, c]));
-  const seen = new Set<string>();
-  const items: ProjectContractorAssignmentItem[] = [];
+  const subInfo = new Map<
+    string,
+    { name: string; categoryId: string; categoryName: string }
+  >();
+  for (const cat of categories)
+    for (const s of cat.subcategories)
+      subInfo.set(s.id, { name: s.name, categoryId: cat.id, categoryName: cat.name });
+
+  const seenContractor = new Set<string>();
+  const items: ProjectContractorItem[] = [];
   for (const r of rows) {
-    const key = `${r.contractorId}|${r.labourCategoryId}`;
-    if (seen.has(key)) continue;
     const contractor = cById.get(r.contractorId);
-    const category = catById.get(r.labourCategoryId);
-    if (!contractor || !category) continue;
-    seen.add(key);
+    if (!contractor || seenContractor.has(r.contractorId)) continue;
+    seenContractor.add(r.contractorId);
+    const seenSub = new Set<string>();
+    const labourRates = [];
+    for (const lr of r.labourRates) {
+      const info = subInfo.get(lr.labourSubcategoryId);
+      if (!info || seenSub.has(lr.labourSubcategoryId)) continue;
+      seenSub.add(lr.labourSubcategoryId);
+      labourRates.push({
+        id: uid(),
+        labourSubcategoryId: lr.labourSubcategoryId,
+        subcategoryName: info.name,
+        categoryId: info.categoryId,
+        categoryName: info.categoryName,
+        ratePaise: Math.max(0, Math.round(lr.ratePaise || 0)),
+        rateUnit: lr.rateUnit ?? "day",
+      });
+    }
     items.push({
       id: uid(),
       contractorId: contractor.id,
       contractorName: contractor.name,
-      labourCategoryId: category.id,
-      categoryName: category.name,
-      categoryColor: category.color,
+      contractRatePaise: r.contractRatePaise ?? null,
+      contractRateUnit: r.contractRateUnit ?? null,
+      labourRates,
     });
   }
   return items;
@@ -201,7 +221,7 @@ export const demoRepository: ProjectsRepository = {
       ...p,
       usedPaise: spend.laborPaise + spend.procurementPaise,
       // Backward-compat for projects persisted before this feature existed.
-      contractorAssignments: p.contractorAssignments ?? [],
+      contractors: p.contractors ?? [],
     };
   },
 
@@ -241,10 +261,10 @@ export const demoRepository: ProjectsRepository = {
       documents: [],
       notes: [],
       activity: [],
-      contractorAssignments: [],
+      contractors: [],
     };
-    if (input.contractorAssignments && input.contractorAssignments.length > 0) {
-      project.contractorAssignments = await resolveAssignments(input.contractorAssignments);
+    if (input.contractors && input.contractors.length > 0) {
+      project.contractors = await resolveContractors(input.contractors);
     }
     log(project, "project.created", "created the project");
     rows.push(project);
@@ -425,21 +445,22 @@ export const demoRepository: ProjectsRepository = {
     return DEMO_MANAGERS;
   },
 
-  async listContractorAssignments(projectId) {
+  async listProjectContractors(projectId) {
     const p = load().find((x) => x.id === projectId);
-    return p?.contractorAssignments ?? [];
+    return p?.contractors ?? [];
   },
 
-  async setContractorAssignments(projectId, rows) {
-    const resolved = await resolveAssignments(rows);
+  async setProjectContractors(projectId, rows) {
+    const resolved = await resolveContractors(rows);
     return mutate(projectId, (p) => {
-      p.contractorAssignments = resolved;
+      p.contractors = resolved;
+      const labourTypeCount = resolved.reduce((s, c) => s + c.labourRates.length, 0);
       log(
         p,
         "project.contractors_updated",
         resolved.length === 0
-          ? "cleared contractor assignments"
-          : `set ${resolved.length} contractor assignment${resolved.length === 1 ? "" : "s"}`,
+          ? "cleared project contractors"
+          : `set ${resolved.length} contractor${resolved.length === 1 ? "" : "s"} (${labourTypeCount} labour type${labourTypeCount === 1 ? "" : "s"})`,
       );
       return resolved;
     });

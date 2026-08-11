@@ -56,6 +56,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { toRupees } from "@/lib/money";
 import {
@@ -104,7 +105,7 @@ function CategoryDialog({
     <Dialog open={open} onOpenChange={(o) => (o ? onOpenChange(true) : close())}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{editing ? "Edit category" : "Add labour category"}</DialogTitle>
+          <DialogTitle>{editing ? "Edit group" : "Add trade group"}</DialogTitle>
           <DialogDescription>A trade group, e.g. Carpenter or Electrician.</DialogDescription>
         </DialogHeader>
         <form onSubmit={onSubmit} className="space-y-4">
@@ -136,7 +137,7 @@ function CategoryDialog({
           <div className="flex justify-end gap-2">
             <Button type="button" variant="ghost" onClick={close}>Cancel</Button>
             <Button type="submit" variant="primary" disabled={createCategory.isPending || updateCategory.isPending}>
-              {editing ? "Save" : "Add category"}
+              {editing ? "Save" : "Add group"}
             </Button>
           </div>
         </form>
@@ -183,20 +184,20 @@ function SubcategoryDialog({
     <Dialog open={open} onOpenChange={(o) => (o ? onOpenChange(true) : close())}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{editing ? "Edit subcategory" : "Add subcategory"}</DialogTitle>
+          <DialogTitle>{editing ? "Edit labour type" : "Add labour type"}</DialogTitle>
           <DialogDescription>
-            e.g. Main Carpenter or Carpenter Helper.{editing ? " Changing the category moves it." : ""}
+            e.g. Mason, Mason Helper, or Centering.{editing ? " Changing the group moves it." : ""}
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={onSubmit} className="space-y-4">
           <div className="space-y-1.5">
-            <Label>Category</Label>
+            <Label>Group</Label>
             <Controller
               control={control}
               name="categoryId"
               render={({ field }) => (
                 <Select value={field.value} onValueChange={field.onChange}>
-                  <SelectTrigger className="w-full"><SelectValue placeholder="Pick a category" /></SelectTrigger>
+                  <SelectTrigger className="w-full"><SelectValue placeholder="Pick a group" /></SelectTrigger>
                   <SelectContent>
                     {categories.map((c) => (
                       <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
@@ -222,7 +223,7 @@ function SubcategoryDialog({
           <div className="flex justify-end gap-2">
             <Button type="button" variant="ghost" onClick={close}>Cancel</Button>
             <Button type="submit" variant="primary" disabled={createSubcategory.isPending || updateSubcategory.isPending}>
-              {editing ? "Save" : "Add subcategory"}
+              {editing ? "Save" : "Add labour type"}
             </Button>
           </div>
         </form>
@@ -299,15 +300,32 @@ export function CategoriesView() {
 
   return (
     <div className="space-y-4">
+      {/* Orientation: this screen is the reusable master; contractors and
+          project rates are configured elsewhere (the owner's contractor-first
+          workflow). Keeps "Labour Types" from being mistaken for the per-project
+          contractor setup. */}
+      <div className="rounded-lg border border-border bg-surface-muted/40 px-3 py-2.5 text-xs text-foreground-muted">
+        <p className="font-medium text-foreground-subtle">Reusable labour types &amp; default rates.</p>
+        <p className="mt-0.5">
+          Labour types (e.g. Mason, Mason Helper, Centering) grouped by trade, with a default day
+          rate. Manage contractors under{" "}
+          <Link href="/labor/contractors" className="text-primary hover:underline">Labour → Contractors</Link>.
+          Assign contractors and set project-specific rates on each{" "}
+          <Link href="/projects" className="text-primary hover:underline">Project → Contractors</Link>.
+          The <Link href="/labor" className="text-primary hover:underline">Attendance</Link> screen then
+          groups labour by contractor.
+        </p>
+      </div>
+
       {canCreate && (
         <div className="flex justify-end gap-2">
-          <Button variant="secondary" onClick={() => { setEditingSub(null); setSubDefaultCat(null); setSubDialog(true); }}>
-            <Plus />
-            Add subcategory
-          </Button>
-          <Button variant="primary" onClick={() => { setEditingCat(null); setCatDialog(true); }}>
+          <Button variant="secondary" onClick={() => { setEditingCat(null); setCatDialog(true); }}>
             <FolderPlus />
-            Add category
+            Add group
+          </Button>
+          <Button variant="primary" onClick={() => { setEditingSub(null); setSubDefaultCat(null); setSubDialog(true); }}>
+            <Plus />
+            Add labour type
           </Button>
         </div>
       )}
@@ -317,12 +335,12 @@ export function CategoriesView() {
       ) : categories.length === 0 ? (
         <EmptyState
           icon={Tags}
-          title="No labour categories"
-          description="Add categories like Carpenter and Mason, each with subcategories like Main Carpenter and Carpenter Helper."
+          title="No labour types yet"
+          description="Add trade groups like Carpenter and Mason, each with labour types like Main Carpenter and Carpenter Helper. Contractors and project rates are set per project."
           action={
             canCreate ? (
               <Button variant="primary" size="sm" onClick={() => { setEditingCat(null); setCatDialog(true); }}>
-                <FolderPlus />Add category
+                <FolderPlus />Add group
               </Button>
             ) : undefined
           }
@@ -346,7 +364,7 @@ export function CategoriesView() {
                         <span className="size-2.5 shrink-0 rounded-full" style={{ background: category.color ?? FALLBACK_COLOR }} />
                         <span className="min-w-0 flex-1 truncate text-sm font-semibold">{category.name}</span>
                         <span className="text-xs text-foreground-subtle">
-                          {category.subcategories.length} subcategor{category.subcategories.length === 1 ? "y" : "ies"}
+                          {category.subcategories.length} labour type{category.subcategories.length === 1 ? "" : "s"}
                         </span>
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
@@ -356,7 +374,7 @@ export function CategoriesView() {
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
                             <DropdownMenuItem onSelect={() => { setEditingSub(null); setSubDefaultCat(category.id); setSubDialog(true); }}>
-                              <Plus />Add subcategory
+                              <Plus />Add labour type
                             </DropdownMenuItem>
                             <DropdownMenuItem onSelect={() => { setEditingCat(category); setCatDialog(true); }}>
                               <Pencil />Edit
@@ -379,7 +397,7 @@ export function CategoriesView() {
                       >
                         <SortableContext items={category.subcategories.map((s) => s.id)} strategy={verticalListSortingStrategy}>
                           {category.subcategories.length === 0 ? (
-                            <p className="px-10 py-3 text-xs text-foreground-subtle">No subcategories yet.</p>
+                            <p className="px-10 py-3 text-xs text-foreground-subtle">No labour types yet.</p>
                           ) : (
                             category.subcategories.map((sub) => (
                               <SortableItem key={sub.id} id={sub.id}>
@@ -453,8 +471,8 @@ export function CategoriesView() {
             <DialogTitle>Delete {confirm?.item.name}?</DialogTitle>
             <DialogDescription>
               {confirm?.kind === "category"
-                ? "This removes its subcategories. A category with recorded attendance or contractor assignments can't be deleted — labour history and assignment config are preserved."
-                : "Subcategories with recorded attendance can't be deleted — labour history is preserved."}
+                ? "This removes its labour types. A group whose labour types have recorded attendance or a configured contractor rate can't be deleted — labour history and project config are preserved."
+                : "A labour type with recorded attendance or a configured contractor rate can't be deleted — labour history and project config are preserved."}
             </DialogDescription>
           </DialogHeader>
           <div className="flex justify-end gap-2">

@@ -36,23 +36,33 @@ export interface CreateSubcategoryInput {
 /** categoryId in the patch moves the subcategory to another category. */
 export type UpdateSubcategoryInput = Partial<CreateSubcategoryInput>;
 
-/* ── Attendance sheet (grouped by category) ──────────────────────────── */
+/* ── Attendance sheet (contractor-first) ─────────────────────────────── */
 
-/** One subcategory row. quantity 0 = not recorded. dailyRatePaise is the
- *  EFFECTIVE rate: the record's snapshot when recorded, else current. */
+/** One labour-type (subcategory) row under a contractor. quantity 0 = not
+ *  recorded. dailyRatePaise is the EFFECTIVE rate: the record's snapshot when
+ *  recorded, else the project+contractor configured rate. */
 export interface SheetRow {
   subcategoryId: string;
   name: string;
+  /** Owning trade category — retained for reports/exports, not for grouping. */
+  categoryId: string;
+  categoryName: string;
   dailyRatePaise: number | null;
   quantity: number;
   notes: string | null;
-  contractorId: string | null;
 }
 
+/** A contractor group: the contractor and the labour types they supply on this
+ *  project. `configured` is false for a synthesized group holding rows recorded
+ *  against a contractor/type no longer configured (or legacy unattributed rows,
+ *  contractorId null) — kept visible so history can be seen and cleared. */
 export interface SheetGroup {
-  categoryId: string;
-  name: string;
-  color: string | null;
+  contractorId: string | null;
+  contractorName: string;
+  /** Optional project agreement rate (₹/sq.ft etc.) — display only. */
+  contractRatePaise: number | null;
+  contractRateUnit: string | null;
+  configured: boolean;
   rows: SheetRow[];
   totalPresent: number;
   estimatedCostPaise: number;
@@ -64,8 +74,6 @@ export interface AttendanceSheet {
   groups: SheetGroup[];
   totalPresent: number;
   estimatedCostPaise: number;
-  /** Contractor attributed for this sheet (first attributed row), if any. */
-  contractorId: string | null;
 }
 
 /* ── Records, filters, summaries ─────────────────────────────────────── */
@@ -82,6 +90,9 @@ export interface AttendanceRecordItem {
   color: string | null;
   subcategoryId: string;
   subcategoryName: string;
+  /** Contractor the labour was attributed to (null = legacy/unattributed). */
+  contractorId: string | null;
+  contractorName: string | null;
   quantityPresent: number;
   dailyRatePaiseSnapshot: number | null;
   estimatedCostPaise: number;
@@ -115,9 +126,18 @@ export interface LabourTrendPoint {
   total: number;
 }
 
+/** Man-days + cost rolled up per contractor (contractor-first summary). */
+export interface ContractorManDays {
+  contractorId: string | null;
+  name: string;
+  manDays: number;
+  estimatedCostPaise: number;
+}
+
 export interface LabourSummary {
   totalManDays: number;
   estimatedCostPaise: number;
+  byContractor: ContractorManDays[];
   byCategory: CategoryManDays[];
   byProject: { projectId: string; projectName: string; manDays: number; estimatedCostPaise: number }[];
   trend: LabourTrendPoint[];

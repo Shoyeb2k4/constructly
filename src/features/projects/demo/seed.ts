@@ -40,7 +40,7 @@ function base(
     documents: [],
     notes: [],
     activity: [],
-    contractorAssignments: [],
+    contractors: [],
     ...partial,
   };
 }

@@ -1,13 +1,18 @@
 /**
- * Project ↔ contractor assignment + Labour filtering (demo-repository parity).
+ * Contractor-first labour config + attendance (demo-repository parity).
  * Runs against the localStorage-backed demo repositories in jsdom, exercising
- * the same read/write/eligibility paths the server enforces (see
+ * the same read/write/eligibility/rate paths the server enforces (see
  * server/assignments-enforcement.test.ts for the tenancy/RBAC gate).
+ *
+ * Anchored by the client's canonical scenario (§33): on one project, Pappu
+ * supplies Mason/Helper/Centering and Saddam supplies Centering — both at their
+ * own rates — and both record Centering on the SAME day as independent rows.
  */
 import { describe, it, expect, beforeEach } from "vitest";
 import { demoRepository as projects } from "./demo/demo-repository";
 import { demoContractorsRepository as contractors } from "@/features/contractors/demo/demo-repository";
 import { demoLaborRepository as labor } from "@/features/labor/demo/demo-repository";
+import type { ProjectContractorInput } from "./types";
 
 beforeEach(() => {
   localStorage.clear();
@@ -17,186 +22,213 @@ async function setup() {
   const cats = await labor.listCategories();
   const [catA, catB] = cats;
   const existing = await contractors.listContractors({});
-  const A = existing[0];
-  const B = existing[1];
-  const C = await contractors.createContractor({ name: "Arif Plumbing", openingAdvancePaise: 0 });
-  return { catA, catB, A, B, C };
+  const PAPPU = existing[0];
+  const SADDAM = existing[1];
+  const OTHER = await contractors.createContractor({ name: "Arif Plumbing", openingAdvancePaise: 0 });
+  return {
+    catA,
+    catB,
+    PAPPU,
+    SADDAM,
+    OTHER,
+    MASON: catA.subcategories[0].id,
+    HELPER: catA.subcategories[1].id,
+    CENTERING: catB.subcategories[0].id,
+  };
 }
 
 const base = { type: "COMMERCIAL" as const, budgetPaise: 0, contractValuePaise: 0 };
+const DATE = "2026-08-12";
 
-describe("project contractor assignments — demo parity", () => {
-  it("assigns a single contractor to a category and resolves names", async () => {
-    const { catA, A } = await setup();
-    const p = await projects.create({
-      ...base,
-      name: "Township",
-      contractorAssignments: [{ contractorId: A.id, labourCategoryId: catA.id }],
-    });
-    const detail = await projects.get(p.id);
-    expect(detail?.contractorAssignments).toHaveLength(1);
-    expect(detail?.contractorAssignments[0]).toMatchObject({
-      contractorId: A.id,
-      contractorName: A.name,
-      labourCategoryId: catA.id,
-      categoryName: catA.name,
-    });
+const recordsFor = async (projectId: string) =>
+  labor.listAttendance({ projectId, from: DATE, to: DATE });
+const find = <T extends { subcategoryId: string; contractorId: string | null }>(
+  rows: T[],
+  subId: string,
+  contractorId: string | null,
+) => rows.find((r) => r.subcategoryId === subId && r.contractorId === contractorId);
+
+describe("§33 — canonical Anjali Residency scenario", () => {
+  it("Pappu + Saddam both supply Centering; four independent rows coexist with own rates", async () => {
+    const { PAPPU, SADDAM, MASON, HELPER, CENTERING } = await setup();
+    const config: ProjectContractorInput[] = [
+      {
+        contractorId: PAPPU.id,
+        labourRates: [
+          { labourSubcategoryId: MASON, ratePaise: 80000 },
+          { labourSubcategoryId: HELPER, ratePaise: 70000 },
+          { labourSubcategoryId: CENTERING, ratePaise: 85000 },
+        ],
+      },
+      { contractorId: SADDAM.id, labourRates: [{ labourSubcategoryId: CENTERING, ratePaise: 95000 }] },
+    ];
+    const anjali = await projects.create({ ...base, name: "Anjali Residency", contractors: config });
+
+    await labor.setQuantity(anjali.id, DATE, MASON, 8, null, PAPPU.id);
+    await labor.setQuantity(anjali.id, DATE, HELPER, 5, null, PAPPU.id);
+    await labor.setQuantity(anjali.id, DATE, CENTERING, 4, null, PAPPU.id);
+    await labor.setQuantity(anjali.id, DATE, CENTERING, 3, null, SADDAM.id);
+
+    const rows = await recordsFor(anjali.id);
+    expect(rows).toHaveLength(4); // four INDEPENDENT rows
+
+    // Pappu Centering and Saddam Centering coexist with their own rate + cost.
+    const pc = find(rows, CENTERING, PAPPU.id)!;
+    const sc = find(rows, CENTERING, SADDAM.id)!;
+    expect(pc.dailyRatePaiseSnapshot).toBe(85000);
+    expect(pc.estimatedCostPaise).toBe(4 * 85000);
+    expect(sc.dailyRatePaiseSnapshot).toBe(95000);
+    expect(sc.estimatedCostPaise).toBe(3 * 95000);
+
+    // The sheet groups contractor-first: Pappu (3 rows) + Saddam (1 row).
+    const sheet = await labor.getSheet(anjali.id, DATE);
+    const pappuGroup = sheet.groups.find((g) => g.contractorId === PAPPU.id)!;
+    const saddamGroup = sheet.groups.find((g) => g.contractorId === SADDAM.id)!;
+    expect(pappuGroup.configured).toBe(true);
+    expect(pappuGroup.rows.length).toBe(3);
+    expect(saddamGroup.rows.length).toBe(1);
+    expect(pappuGroup.rows.find((r) => r.subcategoryId === CENTERING)?.quantity).toBe(4);
+    expect(saddamGroup.rows.find((r) => r.subcategoryId === CENTERING)?.quantity).toBe(3);
   });
 
-  it("assigns multiple contractors and loads them on edit", async () => {
-    const { catA, catB, A, B } = await setup();
-    const p = await projects.create({
+  it("editing a contractor's rate later never rewrites recorded attendance", async () => {
+    const { PAPPU, CENTERING } = await setup();
+    const anjali = await projects.create({
       ...base,
-      name: "Township",
-      contractorAssignments: [
-        { contractorId: A.id, labourCategoryId: catA.id },
-        { contractorId: B.id, labourCategoryId: catB.id },
-      ],
+      name: "Anjali",
+      contractors: [{ contractorId: PAPPU.id, labourRates: [{ labourSubcategoryId: CENTERING, ratePaise: 85000 }] }],
     });
-    const loaded = await projects.listContractorAssignments(p.id);
-    expect(loaded.map((a) => a.contractorId).sort()).toEqual([A.id, B.id].sort());
-  });
+    await labor.setQuantity(anjali.id, DATE, CENTERING, 4, null, PAPPU.id);
 
-  it("drops exact-duplicate (contractor + category) rows", async () => {
-    const { catA, A } = await setup();
-    const p = await projects.create({
-      ...base,
-      name: "Dup",
-      contractorAssignments: [
-        { contractorId: A.id, labourCategoryId: catA.id },
-        { contractorId: A.id, labourCategoryId: catA.id },
-      ],
-    });
-    expect((await projects.get(p.id))?.contractorAssignments).toHaveLength(1);
-  });
-
-  it("changes and removes assignments via setContractorAssignments", async () => {
-    const { catA, catB, A, B } = await setup();
-    const p = await projects.create({ ...base, name: "Edit me" });
-    await projects.setContractorAssignments(p.id, [
-      { contractorId: A.id, labourCategoryId: catA.id },
-      { contractorId: B.id, labourCategoryId: catB.id },
+    // Raise Pappu's Centering rate to ₹900/day.
+    await projects.setProjectContractors(anjali.id, [
+      { contractorId: PAPPU.id, labourRates: [{ labourSubcategoryId: CENTERING, ratePaise: 90000 }] },
     ]);
-    expect(await projects.listContractorAssignments(p.id)).toHaveLength(2);
 
-    // Change: keep only A.
-    await projects.setContractorAssignments(p.id, [{ contractorId: A.id, labourCategoryId: catA.id }]);
-    const afterChange = await projects.listContractorAssignments(p.id);
-    expect(afterChange).toHaveLength(1);
-    expect(afterChange[0].contractorId).toBe(A.id);
+    const rec = find(await recordsFor(anjali.id), CENTERING, PAPPU.id)!;
+    expect(rec.dailyRatePaiseSnapshot).toBe(85000); // frozen
+    expect(rec.estimatedCostPaise).toBe(4 * 85000);
+  });
+});
 
-    // Remove all.
-    await projects.setContractorAssignments(p.id, []);
-    expect(await projects.listContractorAssignments(p.id)).toHaveLength(0);
+describe("§34 — project-specific rates, config edits, eligibility", () => {
+  it("same contractor + labour type has different rates on different projects", async () => {
+    const { PAPPU, MASON } = await setup();
+    const anjali = await projects.create({
+      ...base,
+      name: "Anjali",
+      contractors: [{ contractorId: PAPPU.id, labourRates: [{ labourSubcategoryId: MASON, ratePaise: 80000 }] }],
+    });
+    const township = await projects.create({
+      ...base,
+      name: "Township",
+      contractors: [{ contractorId: PAPPU.id, labourRates: [{ labourSubcategoryId: MASON, ratePaise: 90000 }] }],
+    });
+
+    await labor.setQuantity(anjali.id, DATE, MASON, 2, null, PAPPU.id);
+    await labor.setQuantity(township.id, DATE, MASON, 2, null, PAPPU.id);
+
+    expect(find(await recordsFor(anjali.id), MASON, PAPPU.id)?.dailyRatePaiseSnapshot).toBe(80000);
+    expect(find(await recordsFor(township.id), MASON, PAPPU.id)?.dailyRatePaiseSnapshot).toBe(90000);
   });
 
-  it("ignores an unknown contractor/category (company-ownership parity)", async () => {
-    const { catA } = await setup();
-    const p = await projects.create({
+  it("project switching surfaces only that project's contractors", async () => {
+    const { PAPPU, SADDAM, OTHER, MASON, CENTERING } = await setup();
+    const anjali = await projects.create({
+      ...base,
+      name: "Anjali",
+      contractors: [
+        { contractorId: PAPPU.id, labourRates: [{ labourSubcategoryId: MASON, ratePaise: 80000 }] },
+        { contractorId: SADDAM.id, labourRates: [{ labourSubcategoryId: CENTERING, ratePaise: 95000 }] },
+      ],
+    });
+    const township = await projects.create({
+      ...base,
+      name: "Township",
+      contractors: [{ contractorId: OTHER.id, labourRates: [{ labourSubcategoryId: MASON, ratePaise: 88000 }] }],
+    });
+
+    const anjaliContractors = (await projects.listProjectContractors(anjali.id)).map((c) => c.contractorId);
+    const townshipContractors = (await projects.listProjectContractors(township.id)).map((c) => c.contractorId);
+    expect(anjaliContractors.sort()).toEqual([PAPPU.id, SADDAM.id].sort());
+    expect(townshipContractors).toEqual([OTHER.id]);
+    expect(townshipContractors).not.toContain(PAPPU.id);
+  });
+
+  it("edits + removes contractor config transactionally", async () => {
+    const { PAPPU, SADDAM, MASON, CENTERING } = await setup();
+    const p = await projects.create({ ...base, name: "Edit me" });
+    await projects.setProjectContractors(p.id, [
+      { contractorId: PAPPU.id, labourRates: [{ labourSubcategoryId: MASON, ratePaise: 80000 }] },
+      { contractorId: SADDAM.id, labourRates: [{ labourSubcategoryId: CENTERING, ratePaise: 95000 }] },
+    ]);
+    expect(await projects.listProjectContractors(p.id)).toHaveLength(2);
+
+    await projects.setProjectContractors(p.id, [
+      { contractorId: PAPPU.id, labourRates: [{ labourSubcategoryId: MASON, ratePaise: 80000 }] },
+    ]);
+    const after = await projects.listProjectContractors(p.id);
+    expect(after).toHaveLength(1);
+    expect(after[0].contractorId).toBe(PAPPU.id);
+
+    await projects.setProjectContractors(p.id, []);
+    expect(await projects.listProjectContractors(p.id)).toHaveLength(0);
+  });
+
+  it("drops unknown contractor + unconfigured labour types (company-ownership parity)", async () => {
+    const { PAPPU, MASON } = await setup();
+    const ghost = await projects.create({
       ...base,
       name: "Ghost",
-      contractorAssignments: [{ contractorId: "does-not-exist", labourCategoryId: catA.id }],
-    });
-    expect((await projects.get(p.id))?.contractorAssignments).toHaveLength(0);
-  });
-});
-
-describe("Labour contractor availability follows the selected project", () => {
-  it("returns each project's own contractors only (A,B for one; C for the other)", async () => {
-    const { catA, catB, A, B, C } = await setup();
-    const pA = await projects.create({
-      ...base,
-      name: "Project A",
-      contractorAssignments: [
-        { contractorId: A.id, labourCategoryId: catA.id },
-        { contractorId: B.id, labourCategoryId: catB.id },
+      contractors: [
+        { contractorId: "does-not-exist", labourRates: [{ labourSubcategoryId: MASON, ratePaise: 1 }] },
+        { contractorId: PAPPU.id, labourRates: [{ labourSubcategoryId: "nope-sub", ratePaise: 1 }] },
       ],
     });
-    const pB = await projects.create({
+    const detail = await projects.get(ghost.id);
+    // Unknown contractor dropped entirely; Pappu kept but with no valid labour types.
+    expect(detail?.contractors).toHaveLength(1);
+    expect(detail?.contractors[0].contractorId).toBe(PAPPU.id);
+    expect(detail?.contractors[0].labourRates).toHaveLength(0);
+  });
+
+  it("degrades an ineligible contractor attribution to null; keeps eligible ones", async () => {
+    const { PAPPU, OTHER, MASON } = await setup();
+    const anjali = await projects.create({
       ...base,
-      name: "Project B",
-      contractorAssignments: [{ contractorId: C.id, labourCategoryId: catA.id }],
+      name: "Anjali",
+      contractors: [{ contractorId: PAPPU.id, labourRates: [{ labourSubcategoryId: MASON, ratePaise: 80000 }] }],
     });
 
-    const availA = (await projects.listContractorAssignments(pA.id)).map((a) => a.contractorId);
-    const availB = (await projects.listContractorAssignments(pB.id)).map((a) => a.contractorId);
+    // OTHER supplies nothing on this project → not eligible → coerced to null.
+    await labor.setQuantity(anjali.id, DATE, MASON, 2, null, OTHER.id);
+    expect(find(await recordsFor(anjali.id), MASON, null)?.contractorId ?? null).toBeNull();
 
-    expect(availA.sort()).toEqual([A.id, B.id].sort());
-    expect(availB).toEqual([C.id]);
-    // A/B must NOT appear for project B.
-    expect(availB).not.toContain(A.id);
-    expect(availB).not.toContain(B.id);
+    // Pappu supplies Mason here → attribution kept.
+    await labor.setQuantity(anjali.id, DATE, MASON, 2, null, PAPPU.id);
+    expect(find(await recordsFor(anjali.id), MASON, PAPPU.id)?.contractorId).toBe(PAPPU.id);
   });
 });
 
-describe("category deletion respects assignments (demo parity)", () => {
-  it("a category with assignments but no attendance cannot be deleted; assignment survives", async () => {
-    const { A } = await setup();
-    // Fresh category (no seeded attendance) assigned to a contractor.
+describe("taxonomy deletion guards respect contractor config (demo parity)", () => {
+  it("a category with a configured labour rate cannot be deleted", async () => {
+    const { PAPPU } = await setup();
     const fresh = await labor.createCategory({ name: "Civil (fresh)" });
-    const p = await projects.create({
+    const sub = await labor.createSubcategory({ categoryId: fresh.id, name: "Mason", dailyRatePaise: 80000 });
+    await projects.create({
       ...base,
       name: "Assigned",
-      contractorAssignments: [{ contractorId: A.id, labourCategoryId: fresh.id }],
+      contractors: [{ contractorId: PAPPU.id, labourRates: [{ labourSubcategoryId: sub.id, ratePaise: 80000 }] }],
     });
 
     await expect(labor.deleteCategory(fresh.id)).rejects.toThrow("CATEGORY_HAS_ASSIGNMENTS");
-
-    // The category AND the assignment are untouched by the blocked delete.
+    await expect(labor.deleteSubcategory(sub.id)).rejects.toThrow("SUBCATEGORY_HAS_ASSIGNMENTS");
     expect((await labor.listCategories()).some((c) => c.id === fresh.id)).toBe(true);
-    const assignments = await projects.listContractorAssignments(p.id);
-    expect(assignments.map((a) => a.labourCategoryId)).toContain(fresh.id);
   });
 
-  it("a genuinely unused category (no attendance, no assignments) can be deleted", async () => {
+  it("a genuinely unused category can be deleted", async () => {
     const cat = await labor.createCategory({ name: "Unused" });
     await labor.deleteCategory(cat.id);
     expect((await labor.listCategories()).some((c) => c.id === cat.id)).toBe(false);
-  });
-});
-
-describe("attendance eligibility — a contractor not assigned to the project is rejected", () => {
-  it("degrades an ineligible contractor attribution to null, keeps eligible ones", async () => {
-    const { catA, A, C } = await setup();
-    const pA = await projects.create({
-      ...base,
-      name: "Project A",
-      contractorAssignments: [{ contractorId: A.id, labourCategoryId: catA.id }],
-    });
-    const subId = catA.subcategories[0].id;
-    const date = "2026-08-11";
-
-    // C is assigned to a DIFFERENT project → not eligible on pA → coerced to null.
-    const sheet1 = await labor.setQuantity(pA.id, date, subId, 2, null, C.id);
-    const row1 = sheet1.groups.flatMap((g) => g.rows).find((r) => r.subcategoryId === subId);
-    expect(row1?.contractorId).toBeNull();
-
-    // A is assigned to pA → attribution is kept.
-    const sheet2 = await labor.setQuantity(pA.id, date, subId, 2, null, A.id);
-    const row2 = sheet2.groups.flatMap((g) => g.rows).find((r) => r.subcategoryId === subId);
-    expect(row2?.contractorId).toBe(A.id);
-  });
-
-  it("category-exact: Pappu (assigned to Civil) cannot be written against Tiles", async () => {
-    const { catA, catB, A } = await setup(); // catA = "Civil", catB = "Tiles"
-    const pA = await projects.create({
-      ...base,
-      name: "Project A",
-      // A ("Pappu") is assigned ONLY to catA (Civil) on this project.
-      contractorAssignments: [{ contractorId: A.id, labourCategoryId: catA.id }],
-    });
-    const civilSub = catA.subcategories[0].id;
-    const tilesSub = catB.subcategories[0].id;
-    const date = "2026-08-11";
-
-    // A against Tiles (catB) — assigned to Civil, NOT Tiles → degraded to null.
-    const tiles = await labor.setQuantity(pA.id, date, tilesSub, 3, null, A.id);
-    const tilesRow = tiles.groups.flatMap((g) => g.rows).find((r) => r.subcategoryId === tilesSub);
-    expect(tilesRow?.contractorId).toBeNull();
-
-    // A against Civil (catA) — the assigned category → attribution kept.
-    const civil = await labor.setQuantity(pA.id, date, civilSub, 3, null, A.id);
-    const civilRow = civil.groups.flatMap((g) => g.rows).find((r) => r.subcategoryId === civilSub);
-    expect(civilRow?.contractorId).toBe(A.id);
   });
 });

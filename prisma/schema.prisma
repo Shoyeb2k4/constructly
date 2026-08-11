@@ -65,25 +65,25 @@ enum PaymentMode {
 
 /// A tenant. Every domain row carries companyId.
 model Company {
-  id        String   @id @default(uuid()) @db.Uuid
-  name      String
-  gstin     String?
+  id       String  @id @default(uuid()) @db.Uuid
+  name     String
+  gstin    String?
   /// { poApprovalRequired: boolean, currency: "INR", ... }
-  settings  Json     @default("{\"poApprovalRequired\": false, \"currency\": \"INR\"}")
+  settings Json    @default("{\"poApprovalRequired\": false, \"currency\": \"INR\"}")
 
   // ── Company profile (white-labeling). All nullable — companies without
   //    branding fall back to Constructly defaults (see features/branding). ──
-  legalName String? @map("legal_name")
-  pan       String?
-  cin       String?
+  legalName   String? @map("legal_name")
+  pan         String?
+  cin         String?
   addressLine String? @map("address_line")
-  city      String?
-  state     String?
-  country   String? @default("India")
-  pincode   String?
-  phone     String?
-  email     String?
-  website   String?
+  city        String?
+  state       String?
+  country     String? @default("India")
+  pincode     String?
+  phone       String?
+  email       String?
+  website     String?
 
   // ── Branding assets: Supabase Storage object paths ("{companyId}/…"). ──
   logoPath       String? @map("logo_path")
@@ -105,42 +105,44 @@ model Company {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  users                 User[]
-  roles                 CompanyRole[]
-  userRoles             UserRole[]
-  invitations           Invitation[]
-  projects              Project[]
-  activity              ActivityLog[]
-  contractors           Contractor[]
-  contractorLedger      ContractorLedgerEntry[]
-  contractorSettlements ContractorSettlement[]
-  labourCategories      LabourCategory[]
-  labourSubcategories   LabourSubcategory[]
-  labourAttendance      LabourAttendance[]
-  vendors               Vendor[]
-  purchaseOrders        PurchaseOrder[]
-  vendorPayments        VendorPayment[]
-  vendorDocuments       VendorDocument[]
-  goodsReceipts         GoodsReceipt[]
-  contractorAssignments ProjectContractorAssignment[]
+  users                        User[]
+  roles                        CompanyRole[]
+  userRoles                    UserRole[]
+  invitations                  Invitation[]
+  projects                     Project[]
+  activity                     ActivityLog[]
+  contractors                  Contractor[]
+  contractorLedger             ContractorLedgerEntry[]
+  contractorSettlements        ContractorSettlement[]
+  labourCategories             LabourCategory[]
+  labourSubcategories          LabourSubcategory[]
+  labourAttendance             LabourAttendance[]
+  vendors                      Vendor[]
+  purchaseOrders               PurchaseOrder[]
+  vendorPayments               VendorPayment[]
+  vendorDocuments              VendorDocument[]
+  goodsReceipts                GoodsReceipt[]
+  contractorAssignments        ProjectContractorAssignment[]
+  projectContractors           ProjectContractor[]
+  projectContractorLabourRates ProjectContractorLabourRate[]
 
   @@map("companies")
 }
 
 /// Application user. `id` mirrors the Supabase auth user id.
 model User {
-  id        String     @id @db.Uuid
-  companyId String     @map("company_id") @db.Uuid
-  email     String     @unique
-  fullName  String     @map("full_name")
+  id            String     @id @db.Uuid
+  companyId     String     @map("company_id") @db.Uuid
+  email         String     @unique
+  fullName      String     @map("full_name")
   /// Legacy role enum — still authoritative for authorization in Phase 1. The
   /// RBAC layer (companyRole) runs alongside it until the Phase 2 enforcement
   /// swap. Do NOT drop this column until every check reads permissions instead.
-  role      Role       @default(PROJECT_MANAGER)
-  status    UserStatus @default(ACTIVE)
+  role          Role       @default(PROJECT_MANAGER)
+  status        UserStatus @default(ACTIVE)
   /// RBAC: the data-driven company role assigned to this user (nullable during
   /// migration; the session falls back to `role` when unset).
-  companyRoleId String? @map("role_id") @db.Uuid
+  companyRoleId String?    @map("role_id") @db.Uuid
 
   // ── Personal profile (all nullable; sensible defaults applied in app). ──
   designation   String?
@@ -151,8 +153,8 @@ model User {
   language      String? @default("en")
   timezone      String? @default("Asia/Kolkata")
 
-  createdAt DateTime   @default(now()) @map("created_at")
-  updatedAt DateTime   @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   company                Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
   createdProjects        Project[]         @relation("ProjectCreatedBy")
@@ -300,10 +302,10 @@ model Project {
   createdAt              DateTime     @default(now()) @map("created_at")
   updatedAt              DateTime     @updatedAt @map("updated_at")
 
-  company               Company                @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  pm                    User?                  @relation("ProjectManager", fields: [pmId], references: [id], onDelete: SetNull)
-  createdBy             User                   @relation("ProjectCreatedBy", fields: [createdById], references: [id])
-  deletedBy             User?                  @relation("ProjectDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
+  company               Company                       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  pm                    User?                         @relation("ProjectManager", fields: [pmId], references: [id], onDelete: SetNull)
+  createdBy             User                          @relation("ProjectCreatedBy", fields: [createdById], references: [id])
+  deletedBy             User?                         @relation("ProjectDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
   deadlines             Deadline[]
   documents             ProjectDocument[]
   notes                 Note[]
@@ -314,6 +316,7 @@ model Project {
   goodsReceipts         GoodsReceipt[]
   contractorSettlements ContractorSettlement[]
   contractorAssignments ProjectContractorAssignment[]
+  projectContractors    ProjectContractor[]
 
   @@unique([companyId, code])
   @@index([companyId, stage])
@@ -423,11 +426,12 @@ model Contractor {
   createdAt           DateTime         @default(now()) @map("created_at")
   updatedAt           DateTime         @updatedAt @map("updated_at")
 
-  company     Company                       @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  ledger      ContractorLedgerEntry[]
-  settlements ContractorSettlement[]
-  attendance  LabourAttendance[]
-  assignments ProjectContractorAssignment[]
+  company            Company                       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  ledger             ContractorLedgerEntry[]
+  settlements        ContractorSettlement[]
+  attendance         LabourAttendance[]
+  assignments        ProjectContractorAssignment[]
+  projectContractors ProjectContractor[]
 
   @@index([companyId, status])
   @@map("contractors")
@@ -538,9 +542,10 @@ model LabourSubcategory {
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")
 
-  company    Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  category   LabourCategory     @relation(fields: [categoryId], references: [id], onDelete: Cascade)
-  attendance LabourAttendance[]
+  company                Company                       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  category               LabourCategory                @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  attendance             LabourAttendance[]
+  projectContractorRates ProjectContractorLabourRate[]
 
   @@unique([categoryId, name])
   @@index([companyId, categoryId, displayOrder])
@@ -574,40 +579,121 @@ model ProjectContractorAssignment {
   @@map("project_contractor_assignments")
 }
 
-/// Category-based daily attendance: the number of workers present for a
-/// labour category on a project + date. Offline-syncable (clientUuid
-/// idempotency, clientSeq order); one row per (project, date, category).
-/// The category's day rate is SNAPSHOTTED at record time — editing a
-/// category's rate later never rewrites historical cost (ADR-0022).
+/// A contractor engaged on a project (the client's "Anjali → Pappu, Saddam").
+/// The CONTRACTOR is the top-level grouping the Labour module presents; the
+/// labour types they supply on this project (with per-type rates) hang off this
+/// row via ProjectContractorLabourRate. `contractRatePaise`/`contractRateUnit`
+/// hold an OPTIONAL project-level agreement figure (e.g. ₹240/sq.ft) — a
+/// DIFFERENT concept from labour day-rates: display/store only, never fed into
+/// daily attendance or settlement. Supersedes ProjectContractorAssignment.
+model ProjectContractor {
+  id                String   @id @default(uuid()) @db.Uuid
+  companyId         String   @map("company_id") @db.Uuid
+  projectId         String   @map("project_id") @db.Uuid
+  contractorId      String   @map("contractor_id") @db.Uuid
+  /// Optional project agreement rate (integer paise). Not used for attendance.
+  contractRatePaise Int?     @map("contract_rate_paise")
+  /// Unit for the agreement rate: "sqft" | "lumpsum" | … (free text). Null when
+  /// no agreement rate is set.
+  contractRateUnit  String?  @map("contract_rate_unit")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  company     Company                       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  project     Project                       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  contractor  Contractor                    @relation(fields: [contractorId], references: [id], onDelete: Cascade)
+  labourRates ProjectContractorLabourRate[]
+
+  @@unique([projectId, contractorId])
+  @@index([companyId, projectId])
+  @@index([companyId, contractorId])
+  @@map("project_contractors")
+}
+
+/// Which labour types a contractor supplies on a project, and the PROJECT-
+/// SPECIFIC day rate for each. Reuses the LabourSubcategory taxonomy (Mason,
+/// Helper, Centering, …) — the same subcategory can appear under multiple
+/// contractors on one project (Pappu-Centering ₹850 and Saddam-Centering ₹950
+/// coexist). Attendance snapshots ratePaise at record time; editing it later
+/// never rewrites history (attendance keeps its own snapshot).
+model ProjectContractorLabourRate {
+  id                  String   @id @default(uuid()) @db.Uuid
+  companyId           String   @map("company_id") @db.Uuid
+  projectContractorId String   @map("project_contractor_id") @db.Uuid
+  labourSubcategoryId String   @map("labour_subcategory_id") @db.Uuid
+  /// Project-specific day rate (integer paise).
+  ratePaise           Int      @map("rate_paise")
+  rateUnit            String   @default("day") @map("rate_unit")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  company           Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  projectContractor ProjectContractor  @relation(fields: [projectContractorId], references: [id], onDelete: Cascade)
+  subcategory       LabourSubcategory  @relation(fields: [labourSubcategoryId], references: [id], onDelete: Cascade)
+  attendance        LabourAttendance[]
+
+  @@unique([projectContractorId, labourSubcategoryId])
+  @@index([companyId, projectContractorId])
+  @@index([companyId, labourSubcategoryId])
+  @@map("project_contractor_labour_rates")
+}
+
+/// Contractor-first daily attendance: the number of workers present for a
+/// labour subcategory on a project + date, ATTRIBUTED TO A CONTRACTOR.
+/// Offline-syncable (clientUuid idempotency, clientSeq order). Identity is
+/// (project, date, subcategory, contractor) — enforced in SQL as a
+/// UNIQUE … NULLS NOT DISTINCT index so two contractors can supply the same
+/// subcategory on the same project/date (Pappu-Centering + Saddam-Centering)
+/// while legacy null-contractor rows keep one-row-per-triple semantics.
+/// The effective day rate (project + contractor + subcategory, falling back to
+/// the subcategory's global rate) is SNAPSHOTTED at record time — editing a
+/// rate later never rewrites historical cost (ADR-0022).
 model LabourAttendance {
-  id                     String   @id @default(uuid()) @db.Uuid
-  companyId              String   @map("company_id") @db.Uuid
-  projectId              String   @map("project_id") @db.Uuid
-  date                   DateTime @db.Date
-  labourSubcategoryId    String   @map("labour_subcategory_id") @db.Uuid
+  id                            String   @id @default(uuid()) @db.Uuid
+  companyId                     String   @map("company_id") @db.Uuid
+  projectId                     String   @map("project_id") @db.Uuid
+  date                          DateTime @db.Date
+  labourSubcategoryId           String   @map("labour_subcategory_id") @db.Uuid
   /// Optional contractor this labour is attributed to. Nullable: legacy rows
   /// and unattributed labour have none; a contractor's weekly bill sums the
   /// estimatedCostPaise of their attributed rows in the period.
-  contractorId           String?  @map("contractor_id") @db.Uuid
+  contractorId                  String?  @map("contractor_id") @db.Uuid
+  /// Provenance of the snapshotted rate: the ProjectContractorLabourRate the
+  /// rate came from. Null when the rate fell back to the subcategory's global
+  /// rate, or for legacy rows. SetNull on delete so history survives config edits.
+  projectContractorLabourRateId String?  @map("project_contractor_labour_rate_id") @db.Uuid
   /// Headcount present. Float to allow half-day (0.5) increments; 0.5 steps
   /// are exactly representable, and legacy whole-number rows are unaffected.
-  quantityPresent        Float    @map("quantity_present")
-  /// Rate snapshot at first recording (null if the subcategory had no rate).
-  dailyRatePaiseSnapshot Int?     @map("daily_rate_paise_snapshot")
+  quantityPresent               Float    @map("quantity_present")
+  /// Rate snapshot at first recording (null if no rate resolved).
+  dailyRatePaiseSnapshot        Int?     @map("daily_rate_paise_snapshot")
   /// quantityPresent × dailyRatePaiseSnapshot, stored for immutable history.
-  estimatedCostPaise     Int      @default(0) @map("estimated_cost_paise")
-  notes                  String?
-  clientUuid             String   @unique @map("client_uuid")
-  clientSeq              BigInt   @map("client_seq")
-  createdAt              DateTime @default(now()) @map("created_at")
-  updatedAt              DateTime @updatedAt @map("updated_at")
+  estimatedCostPaise            Int      @default(0) @map("estimated_cost_paise")
+  notes                         String?
+  clientUuid                    String   @unique @map("client_uuid")
+  clientSeq                     BigInt   @map("client_seq")
+  createdAt                     DateTime @default(now()) @map("created_at")
+  updatedAt                     DateTime @updatedAt @map("updated_at")
 
-  company     Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  project     Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  subcategory LabourSubcategory @relation(fields: [labourSubcategoryId], references: [id], onDelete: Cascade)
-  contractor  Contractor?       @relation(fields: [contractorId], references: [id], onDelete: SetNull)
+  company     Company                      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  project     Project                      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  subcategory LabourSubcategory            @relation(fields: [labourSubcategoryId], references: [id], onDelete: Cascade)
+  contractor  Contractor?                  @relation(fields: [contractorId], references: [id], onDelete: SetNull)
+  rate        ProjectContractorLabourRate? @relation(fields: [projectContractorLabourRateId], references: [id], onDelete: SetNull)
 
-  @@unique([projectId, date, labourSubcategoryId])
+  // Identity = (project, date, subcategory, contractor). The DB enforces this as
+  // UNIQUE … NULLS NOT DISTINCT (see prisma/migration-attendance-contractor-
+  // identity.sql) so the legacy contractorId-NULL rows keep
+  // one-row-per-(project,date,subcategory). Prisma has no schema syntax for
+  // NULLS NOT DISTINCT, and the compound-unique accessor it generates
+  // (projectId_date_labourSubcategoryId_contractorId) types contractorId as
+  // NON-null — so it CANNOT target a NULL-contractor row. The write paths
+  // therefore never use that accessor: setQuantity / applyLabourAttendance /
+  // copyPreviousDay do findFirst (nullable-safe) → update-by-id or create, and
+  // clears use deleteMany (WHERE contractor_id IS NULL). The DB unique index is
+  // the concurrency backstop; a rare race surfaces as a create error that the
+  // interactive path reports and the offline outbox retries into an update.
+  @@unique([projectId, date, labourSubcategoryId, contractorId])
   @@index([companyId, contractorId, date])
   @@index([companyId, projectId, date])
   @@index([companyId, date])

@@ -66,7 +66,7 @@ export function ProjectLabourTab({ projectId }: { projectId: string }) {
 
           <div className="grid gap-6 lg:grid-cols-2">
             <Card>
-              <CardHeader><CardTitle>By category</CardTitle></CardHeader>
+              <CardHeader><CardTitle>By trade group</CardTitle></CardHeader>
               <CardContent className="space-y-3">
                 {data.byCategory.map((c) => (
                   <div key={c.categoryId}>

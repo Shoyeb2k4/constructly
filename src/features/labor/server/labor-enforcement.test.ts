@@ -11,8 +11,10 @@ const h = vi.hoisted(() => ({
   user: null as SessionUser | null,
   prisma: {
     labourCategory: { findMany: vi.fn(), count: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn() },
-    labourSubcategory: { count: vi.fn(), create: vi.fn() },
-    labourAttendance: { findMany: vi.fn(), findFirst: vi.fn(), findUnique: vi.fn(), deleteMany: vi.fn(), upsert: vi.fn() },
+    labourSubcategory: { count: vi.fn(), create: vi.fn(), findFirst: vi.fn() },
+    labourAttendance: { findMany: vi.fn(), findFirst: vi.fn(), findUnique: vi.fn(), deleteMany: vi.fn(), upsert: vi.fn(), create: vi.fn(), update: vi.fn() },
+    projectContractor: { findMany: vi.fn() },
+    projectContractorLabourRate: { findFirst: vi.fn() },
     project: { findFirst: vi.fn() },
   },
 }));
@@ -38,6 +40,7 @@ beforeEach(() => {
   Object.values(h.prisma).forEach((m) => Object.values(m).forEach((f) => (f as ReturnType<typeof vi.fn>).mockReset()));
   h.prisma.labourCategory.findMany.mockResolvedValue([]);
   h.prisma.labourAttendance.findMany.mockResolvedValue([]);
+  h.prisma.projectContractor.findMany.mockResolvedValue([]);
   h.prisma.project.findFirst.mockResolvedValue({ id: "p1" });
 });
 

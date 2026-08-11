@@ -1,10 +1,14 @@
 import type {
   AttendanceRecordItem,
   CategoryManDays,
+  ContractorManDays,
   LabourSummary,
   SheetGroup,
   SheetRow,
 } from "./types";
+
+/** Stable key for the "no contractor" (legacy/unattributed) rollup bucket. */
+const UNATTRIBUTED = "__unattributed__";
 
 /** Estimated cost for a headcount: (day rate ?? 0) × quantity. Rounded because
  *  half-day quantities (0.5 steps) can otherwise yield fractional paise. */
@@ -32,12 +36,24 @@ export function sheetTotals(groups: SheetGroup[]): { totalPresent: number; estim
  * record's stored snapshot (ADR-0022). Pure; demo + server both use it.
  */
 export function summarize(records: AttendanceRecordItem[]): LabourSummary {
+  const byContractor = new Map<string, ContractorManDays>();
   const byCategory = new Map<string, CategoryManDays>();
   const byProject = new Map<string, { projectId: string; projectName: string; manDays: number; estimatedCostPaise: number }>();
   const byDate = new Map<string, number>();
 
   for (const r of records) {
     const cost = r.estimatedCostPaise;
+
+    const ck = r.contractorId ?? UNATTRIBUTED;
+    const con = byContractor.get(ck) ?? {
+      contractorId: r.contractorId,
+      name: r.contractorName ?? "Unattributed",
+      manDays: 0,
+      estimatedCostPaise: 0,
+    };
+    con.manDays += r.quantityPresent;
+    con.estimatedCostPaise += cost;
+    byContractor.set(ck, con);
 
     const c = byCategory.get(r.categoryId) ?? {
       categoryId: r.categoryId,
@@ -78,6 +94,7 @@ export function summarize(records: AttendanceRecordItem[]): LabourSummary {
   return {
     totalManDays: records.reduce((s, r) => s + r.quantityPresent, 0),
     estimatedCostPaise: [...byCategory.values()].reduce((s, c) => s + c.estimatedCostPaise, 0),
+    byContractor: [...byContractor.values()].sort((a, b) => b.manDays - a.manDays),
     byCategory: [...byCategory.values()].sort((a, b) => b.manDays - a.manDays),
     byProject: [...byProject.values()].sort((a, b) => b.manDays - a.manDays),
     trend: [...byDate.entries()]

@@ -25,7 +25,7 @@ import {
 import { projectFormSchema, formToInput, type ProjectFormValues } from "../schema";
 import { PROJECT_TYPES, TYPE_LABEL } from "../constants";
 import { useCreateProject, useManagers } from "../hooks";
-import type { ContractorAssignmentInput } from "../types";
+import type { ProjectContractorInput } from "../types";
 import { Field } from "./field";
 import { ContractorAssignmentsField, cleanAssignments } from "./contractor-assignments-field";
 
@@ -41,7 +41,7 @@ export function CreateProjectSheet({
   const { data: managers = [] } = useManagers();
   const [tags, setTags] = React.useState<string[]>([]);
   const [tagDraft, setTagDraft] = React.useState("");
-  const [assignments, setAssignments] = React.useState<ContractorAssignmentInput[]>([]);
+  const [assignments, setAssignments] = React.useState<ProjectContractorInput[]>([]);
 
   const {
     register,
@@ -66,7 +66,7 @@ export function CreateProjectSheet({
     const parsed = projectFormSchema.parse({ ...values, tags });
     const project = await create.mutateAsync({
       ...formToInput(parsed),
-      contractorAssignments: cleanAssignments(assignments),
+      contractors: cleanAssignments(assignments),
     });
     close();
     router.push(`/projects/${project.id}`);

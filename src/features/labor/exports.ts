@@ -10,7 +10,7 @@ import type { AttendanceRecordItem, AttendanceSheet, LabourSummary } from "./typ
 // jsPDF's built-in fonts lack the ₹ glyph — use "Rs." in exports.
 const rs = (paise: number) => `Rs. ${toRupees(paise).toLocaleString("en-IN")}`;
 
-/* ── Daily sheet (grouped by category) ───────────────────────────────── */
+/* ── Daily sheet (grouped by contractor) ─────────────────────────────── */
 
 export async function exportSheetPdf(sheet: AttendanceSheet, projectName: string) {
   const { doc, startY, finalize } = await createBrandedPdf({
@@ -21,7 +21,7 @@ export async function exportSheetPdf(sheet: AttendanceSheet, projectName: string
   for (const g of sheet.groups) {
     const rows = g.rows.filter((r) => r.quantity > 0);
     if (rows.length === 0) continue;
-    body.push([{ content: g.name, colSpan: 5, styles: { fontStyle: "bold", fillColor: [244, 245, 247] } }]);
+    body.push([{ content: g.contractorName, colSpan: 5, styles: { fontStyle: "bold", fillColor: [244, 245, 247] } }]);
     rows.forEach((r) =>
       body.push([
         `  ${r.name}`,
@@ -32,7 +32,7 @@ export async function exportSheetPdf(sheet: AttendanceSheet, projectName: string
       ]),
     );
     body.push([
-      { content: `${g.name} total`, styles: { fontStyle: "bold" } },
+      { content: `${g.contractorName} total`, styles: { fontStyle: "bold" } },
       { content: String(g.totalPresent), styles: { fontStyle: "bold" } },
       "",
       { content: rs(g.estimatedCostPaise), styles: { fontStyle: "bold" } },
@@ -41,7 +41,7 @@ export async function exportSheetPdf(sheet: AttendanceSheet, projectName: string
   }
   autoTable(doc, {
     startY,
-    head: [["Category / Subcategory", "Present", "Day rate", "Est. cost", "Notes"]],
+    head: [["Contractor / Labour type", "Present", "Day rate", "Est. cost", "Notes"]],
     body,
     foot: [["Grand total", String(sheet.totalPresent), "", rs(sheet.estimatedCostPaise), ""]],
     styles: { fontSize: 9 },
@@ -55,24 +55,25 @@ export function exportSheetExcel(sheet: AttendanceSheet, projectName: string) {
     ["Constructly — Daily labour attendance"],
     [`${projectName} · ${sheet.date}`],
     [],
-    ["Category", "Subcategory", "Present", "Day rate (Rs.)", "Est. cost (Rs.)", "Notes"],
+    ["Contractor", "Labour type", "Category", "Present", "Day rate (Rs.)", "Est. cost (Rs.)", "Notes"],
   ];
   for (const g of sheet.groups) {
     const active = g.rows.filter((r) => r.quantity > 0);
     if (active.length === 0) continue;
     active.forEach((r) =>
       rows.push([
-        g.name,
+        g.contractorName,
         r.name,
+        r.categoryName,
         r.quantity,
         r.dailyRatePaise != null ? toRupees(r.dailyRatePaise) : null,
         toRupees(estimateCostPaise(r.dailyRatePaise, r.quantity)),
         r.notes ?? "",
       ]),
     );
-    rows.push([`${g.name} total`, "", g.totalPresent, null, toRupees(g.estimatedCostPaise), ""]);
+    rows.push([`${g.contractorName} total`, "", "", g.totalPresent, null, toRupees(g.estimatedCostPaise), ""]);
   }
-  rows.push([], ["Grand total", "", sheet.totalPresent, null, toRupees(sheet.estimatedCostPaise), ""]);
+  rows.push([], ["Grand total", "", "", sheet.totalPresent, null, toRupees(sheet.estimatedCostPaise), ""]);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), "Attendance");
   XLSX.writeFile(wb, `attendance-${projectName.replace(/\s+/g, "-").toLowerCase()}-${sheet.date}.xlsx`);
@@ -93,6 +94,15 @@ export async function exportRangePdf({ records, summary, from, to, scope }: Rang
     title: "Labour summary",
     subtitle: `${scope} · ${from} → ${to}`,
   });
+  // By contractor (the primary contractor-first rollup).
+  autoTable(doc, {
+    startY,
+    head: [["Contractor", "Man-days", "Est. cost"]],
+    body: summary.byContractor.map((c) => [c.name, String(c.manDays), rs(c.estimatedCostPaise)]),
+    foot: [["Grand total", String(summary.totalManDays), rs(summary.estimatedCostPaise)]],
+    styles: { fontSize: 9 },
+    headStyles: { fillColor: [46, 91, 255] },
+  });
   const body: RowInput[] = [];
   for (const c of summary.byCategory) {
     body.push([{ content: c.name, colSpan: 3, styles: { fontStyle: "bold", fillColor: [244, 245, 247] } }]);
@@ -104,16 +114,22 @@ export async function exportRangePdf({ records, summary, from, to, scope }: Rang
     ]);
   }
   autoTable(doc, {
-    startY,
     head: [["Category / Subcategory", "Man-days", "Est. cost"]],
     body,
-    foot: [["Grand total", String(summary.totalManDays), rs(summary.estimatedCostPaise)]],
     styles: { fontSize: 9 },
     headStyles: { fillColor: [46, 91, 255] },
   });
   autoTable(doc, {
-    head: [["Date", "Project", "Category", "Subcategory", "Present", "Notes"]],
-    body: records.map((r) => [r.date, r.projectName, r.categoryName, r.subcategoryName, String(r.quantityPresent), r.notes ?? ""]),
+    head: [["Date", "Project", "Contractor", "Category", "Labour type", "Present", "Notes"]],
+    body: records.map((r) => [
+      r.date,
+      r.projectName,
+      r.contractorName ?? "—",
+      r.categoryName,
+      r.subcategoryName,
+      String(r.quantityPresent),
+      r.notes ?? "",
+    ]),
     styles: { fontSize: 8 },
     headStyles: { fillColor: [46, 91, 255] },
   });
@@ -124,6 +140,9 @@ export function exportRangeExcel({ records, summary, from, to, scope }: RangeExp
   const summaryRows: (string | number | null)[][] = [
     ["Constructly — Labour summary"],
     [`${scope} · ${from} → ${to}`],
+    [],
+    ["By contractor", "Man-days", "Est. cost (Rs.)"],
+    ...summary.byContractor.map((c) => [c.name, c.manDays, toRupees(c.estimatedCostPaise)]),
     [],
     ["Category", "Subcategory", "Man-days", "Est. cost (Rs.)"],
   ];
@@ -138,8 +157,16 @@ export function exportRangeExcel({ records, summary, from, to, scope }: RangeExp
   XLSX.utils.book_append_sheet(
     wb,
     XLSX.utils.aoa_to_sheet([
-      ["Date", "Project", "Category", "Subcategory", "Present", "Notes"],
-      ...records.map((r) => [r.date, r.projectName, r.categoryName, r.subcategoryName, r.quantityPresent, r.notes ?? ""]),
+      ["Date", "Project", "Contractor", "Category", "Labour type", "Present", "Notes"],
+      ...records.map((r) => [
+        r.date,
+        r.projectName,
+        r.contractorName ?? "—",
+        r.categoryName,
+        r.subcategoryName,
+        r.quantityPresent,
+        r.notes ?? "",
+      ]),
     ]),
     "Daily records",
   );

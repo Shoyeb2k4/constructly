@@ -48,64 +48,84 @@ async function applyLabourAttendance(clientUuid: string, payload: unknown, user:
   });
   if (!project) throw new Error("FORBIDDEN");
 
-  // Eligibility (offline-safe, category-exact): a contractor may only be
-  // attributed to a project for the subcategory's category (resolved
-  // server-side, never trusted from the client). Unlike the interactive action,
-  // we DON'T reject here — a queued mutation whose assignment was later removed
-  // would become a poison message that never syncs. Instead we degrade: keep the
-  // attendance (the valuable offline data) and drop the now-invalid attribution.
+  // Eligibility (offline-safe, subcategory-exact): a contractor may only be
+  // attributed to a subcategory THEY SUPPLY on the project (a
+  // ProjectContractorLabourRate exists; resolved server-side, never trusted from
+  // the client). Unlike the interactive action we DON'T reject — a queued
+  // mutation whose config was later removed would become a poison message that
+  // never syncs. Instead we degrade: keep the attendance (the valuable offline
+  // data) and drop the now-invalid attribution.
+  const { isAttributionEligible, resolveAttendanceRate } = await import(
+    "@/features/labor/server/assignment-eligibility"
+  );
   let contractorId = p.contractorId ?? null;
   if (contractorId != null) {
-    const { isAttributionEligible } = await import(
-      "@/features/labor/server/assignment-eligibility"
-    );
     if (!(await isAttributionEligible(user.company.id, p.projectId, contractorId, p.labourSubcategoryId))) {
       contractorId = null;
     }
   }
 
-  const key = {
-    projectId: p.projectId,
-    date: new Date(p.date),
-    labourSubcategoryId: p.labourSubcategoryId,
-  };
+  const date = new Date(p.date);
   if (p.quantityPresent <= 0) {
-    await prisma.labourAttendance.deleteMany({ where: { ...key, companyId: user.company.id } });
+    await prisma.labourAttendance.deleteMany({
+      where: {
+        companyId: user.company.id,
+        projectId: p.projectId,
+        date,
+        labourSubcategoryId: p.labourSubcategoryId,
+        contractorId,
+      },
+    });
     return;
   }
-  // Snapshot the rate on first recording; edits keep it (ADR-0022).
-  const existing = await prisma.labourAttendance.findUnique({
-    where: { projectId_date_labourSubcategoryId: key },
-    select: { dailyRatePaiseSnapshot: true },
-  });
-  const snapshot = existing
-    ? existing.dailyRatePaiseSnapshot
-    : (
-        await prisma.labourSubcategory.findFirstOrThrow({
-          where: { id: p.labourSubcategoryId, companyId: user.company.id },
-          select: { dailyRatePaise: true },
-        })
-      ).dailyRatePaise;
-  await prisma.labourAttendance.upsert({
-    where: { projectId_date_labourSubcategoryId: key },
-    create: {
+  // Identity now includes the contractor; find the exact row (contractorId may
+  // be null for legacy/degraded rows — findFirst handles the nullable key).
+  const existing = await prisma.labourAttendance.findFirst({
+    where: {
       companyId: user.company.id,
-      ...key,
-      quantityPresent: p.quantityPresent,
-      dailyRatePaiseSnapshot: snapshot,
-      estimatedCostPaise: Math.round((snapshot ?? 0) * p.quantityPresent),
-      notes: p.notes ?? null,
+      projectId: p.projectId,
+      date,
+      labourSubcategoryId: p.labourSubcategoryId,
       contractorId,
-      clientUuid,
-      clientSeq: BigInt(Date.now()),
     },
-    update: {
-      quantityPresent: p.quantityPresent,
-      estimatedCostPaise: Math.round((snapshot ?? 0) * p.quantityPresent),
-      ...(p.notes !== undefined ? { notes: p.notes } : {}),
-      ...(p.contractorId !== undefined ? { contractorId } : {}),
-    },
+    select: { id: true, dailyRatePaiseSnapshot: true, projectContractorLabourRateId: true },
   });
+  // Snapshot the effective rate on first recording; edits keep it (ADR-0022).
+  const { ratePaise: snapshot, projectContractorLabourRateId: rateId } = existing
+    ? {
+        ratePaise: existing.dailyRatePaiseSnapshot,
+        projectContractorLabourRateId: existing.projectContractorLabourRateId,
+      }
+    : await resolveAttendanceRate(user.company.id, p.projectId, contractorId, p.labourSubcategoryId);
+  const estimatedCostPaise = Math.round((snapshot ?? 0) * p.quantityPresent);
+
+  if (existing) {
+    await prisma.labourAttendance.update({
+      where: { id: existing.id },
+      data: {
+        quantityPresent: p.quantityPresent,
+        estimatedCostPaise,
+        ...(p.notes !== undefined ? { notes: p.notes } : {}),
+      },
+    });
+  } else {
+    await prisma.labourAttendance.create({
+      data: {
+        companyId: user.company.id,
+        projectId: p.projectId,
+        date,
+        labourSubcategoryId: p.labourSubcategoryId,
+        contractorId,
+        quantityPresent: p.quantityPresent,
+        dailyRatePaiseSnapshot: snapshot,
+        projectContractorLabourRateId: rateId,
+        estimatedCostPaise,
+        notes: p.notes ?? null,
+        clientUuid,
+        clientSeq: BigInt(Date.now()),
+      },
+    });
+  }
 }
 
 const handlers: Record<string, SyncHandler> = {

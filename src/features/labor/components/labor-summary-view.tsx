@@ -35,6 +35,7 @@ export function LaborSummaryView() {
 
   const scope = projectId === "ALL" ? "All projects" : (projects.find((p) => p.id === projectId)?.name ?? "");
   const maxCat = Math.max(1, ...(summary?.byCategory ?? []).map((c) => c.manDays));
+  const maxContractor = Math.max(1, ...(summary?.byContractor ?? []).map((c) => c.manDays));
   const maxDay = Math.max(1, ...(summary?.trend ?? []).map((t) => t.total));
 
   return (
@@ -97,9 +98,42 @@ export function LaborSummaryView() {
           </div>
 
           <div className="grid gap-6 lg:grid-cols-2">
-            {/* Man-days by category → subcategory */}
+            {/* Man-days by contractor (the owner's primary view). */}
             <Card>
-              <CardHeader><CardTitle>Man-days by category</CardTitle></CardHeader>
+              <CardHeader><CardTitle>Man-days by contractor</CardTitle></CardHeader>
+              <CardContent className="space-y-3">
+                {summary.byContractor.length === 0 ? (
+                  <p className="text-sm text-foreground-subtle">No labour recorded in this range.</p>
+                ) : (
+                  summary.byContractor.map((c) => (
+                    <div key={c.contractorId ?? "unattributed"} className="space-y-1.5">
+                      <div className="flex items-center justify-between text-sm font-semibold">
+                        <span className="truncate">{c.name}</span>
+                        <span className="font-mono text-xs">
+                          {c.manDays} · <MoneyText paise={c.estimatedCostPaise} compact />
+                        </span>
+                      </div>
+                      <div className="h-1.5 overflow-hidden rounded-full bg-surface-muted">
+                        <div
+                          className="h-full rounded-full bg-primary"
+                          style={{ width: `${Math.max(2, (c.manDays / maxContractor) * 100)}%` }}
+                        />
+                      </div>
+                    </div>
+                  ))
+                )}
+                <div className="flex items-center justify-between border-t border-border pt-2 text-sm font-semibold">
+                  <span>Grand total</span>
+                  <span className="font-mono">
+                    {summary.totalManDays} · <MoneyText paise={summary.estimatedCostPaise} compact />
+                  </span>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Man-days by trade group → labour type (master-data breakdown). */}
+            <Card>
+              <CardHeader><CardTitle>Man-days by trade group</CardTitle></CardHeader>
               <CardContent className="space-y-4">
                 {summary.byCategory.map((c) => (
                   <div key={c.categoryId} className="space-y-1.5">

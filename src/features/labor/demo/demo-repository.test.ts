@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { demoLaborRepository as repo } from "./demo-repository";
+import { demoRepository as projectsRepo } from "@/features/projects/demo/demo-repository";
 
 const SKY = "10000000-0000-0000-0000-000000000001";
+const RAMESH = "c-ramesh"; // seeded demo contractor
 const today = new Date().toISOString().slice(0, 10);
 
 beforeEach(() => localStorage.clear());
@@ -9,6 +11,20 @@ beforeEach(() => localStorage.clear());
 async function firstSub() {
   const cats = await repo.listCategories();
   return { category: cats[0], sub: cats[0].subcategories[0] };
+}
+
+/** Configure a contractor on SKY supplying the given subcategories at rates
+ *  equal to their global default (contractor-first attendance needs config). */
+async function configure(
+  subs: { id: string; dailyRatePaise: number | null }[],
+  contractorId = RAMESH,
+) {
+  await projectsRepo.setProjectContractors(SKY, [
+    {
+      contractorId,
+      labourRates: subs.map((s) => ({ labourSubcategoryId: s.id, ratePaise: s.dailyRatePaise ?? 0 })),
+    },
+  ]);
 }
 
 describe("labour hierarchy", () => {
@@ -75,21 +91,26 @@ describe("labour hierarchy", () => {
   });
 });
 
-describe("labour attendance (hierarchy)", () => {
-  it("builds a grouped sheet (today unrecorded)", async () => {
+describe("labour attendance (contractor-first)", () => {
+  it("builds a contractor-grouped sheet (today unrecorded)", async () => {
+    const cats = await repo.listCategories();
+    await configure(cats[0].subcategories); // Ramesh supplies the 2 Carpenter types
     const sheet = await repo.getSheet(SKY, today);
-    expect(sheet.groups.length).toBe(5);
+    expect(sheet.groups.length).toBe(1);
+    expect(sheet.groups[0].contractorId).toBe(RAMESH);
+    expect(sheet.groups[0].configured).toBe(true);
     expect(sheet.groups[0].rows.length).toBe(2);
     expect(sheet.totalPresent).toBe(0);
   });
 
-  it("sets headcounts per subcategory with group + grand totals", async () => {
+  it("sets headcounts per labour type with contractor + grand totals", async () => {
     const cats = await repo.listCategories();
     const mainCarp = cats[0].subcategories[0]; // ₹900
     const carpHelp = cats[0].subcategories[1]; // ₹550
-    await repo.setQuantity(SKY, today, mainCarp.id, 12);
-    const sheet = await repo.setQuantity(SKY, today, carpHelp.id, 8);
-    const group = sheet.groups.find((g) => g.categoryId === cats[0].id)!;
+    await configure([mainCarp, carpHelp]);
+    await repo.setQuantity(SKY, today, mainCarp.id, 12, null, RAMESH);
+    const sheet = await repo.setQuantity(SKY, today, carpHelp.id, 8, null, RAMESH);
+    const group = sheet.groups.find((g) => g.contractorId === RAMESH)!;
     expect(group.totalPresent).toBe(20);
     expect(group.estimatedCostPaise).toBe(12 * 90000 + 8 * 55000);
     expect(sheet.totalPresent).toBe(20);
@@ -97,19 +118,22 @@ describe("labour attendance (hierarchy)", () => {
 
   it("quantity 0 deletes the record", async () => {
     const { sub } = await firstSub();
-    await repo.setQuantity(SKY, today, sub.id, 12);
-    const sheet = await repo.setQuantity(SKY, today, sub.id, 0);
+    await configure([sub]);
+    await repo.setQuantity(SKY, today, sub.id, 12, null, RAMESH);
+    const sheet = await repo.setQuantity(SKY, today, sub.id, 0, null, RAMESH);
     expect(sheet.totalPresent).toBe(0);
     expect((await repo.listAttendance({ projectId: SKY, from: today, to: today })).length).toBe(0);
   });
 
-  it("keeps the rate snapshot when the subcategory rate changes later", async () => {
+  it("keeps the rate snapshot when the rate changes later", async () => {
     const { sub } = await firstSub();
-    await repo.setQuantity(SKY, today, sub.id, 10); // snapshot @ current rate
+    await configure([sub]);
+    await repo.setQuantity(SKY, today, sub.id, 10, null, RAMESH); // snapshot @ current rate
     await repo.updateSubcategory(sub.id, { dailyRatePaise: (sub.dailyRatePaise ?? 0) + 50000 });
     const rec = (await repo.listAttendance({ projectId: SKY, from: today, to: today }))[0];
     expect(rec.dailyRatePaiseSnapshot).toBe(sub.dailyRatePaise); // original
     expect(rec.estimatedCostPaise).toBe((sub.dailyRatePaise ?? 0) * 10); // unchanged
+    expect(rec.contractorId).toBe(RAMESH);
   });
 
   it("copies the previous working day", async () => {

@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 const ITEMS = [
   { label: "Attendance", href: "/labor", icon: CalendarCheck, exact: true },
   { label: "Contractors", href: "/labor/contractors", icon: HardHat },
-  { label: "Categories", href: "/labor/categories", icon: Tags },
+  { label: "Labour Types", href: "/labor/categories", icon: Tags },
   { label: "Summary", href: "/labor/summary", icon: BarChart3 },
 ];
 

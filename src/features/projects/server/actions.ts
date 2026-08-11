@@ -8,9 +8,9 @@ import type { SessionUser } from "@/lib/auth/types";
 import { STAGE_LABEL } from "../constants";
 import { deadlineBounds, todayISO } from "../deadline";
 import type {
-  ContractorAssignmentInput,
+  ProjectContractorInput,
   CreateProjectInput,
-  ProjectContractorAssignmentItem,
+  ProjectContractorItem,
   ProjectDetail,
   ProjectFilters,
   ProjectListItem,
@@ -21,7 +21,7 @@ import type {
 import { Prisma } from "@/generated/prisma";
 import { spendByProject, projectSpend } from "@/features/budget/server-actions";
 import { purgeEligibleAt, isValidRetention } from "../retention";
-import { updateProjectInputSchema, contractorAssignmentsSchema } from "../schema";
+import { updateProjectInputSchema, projectContractorsSchema } from "../schema";
 
 /**
  * Server-side projects API. Authorization is RBAC-first: every action requires a
@@ -80,58 +80,123 @@ async function logActivity(
   });
 }
 
-/* ── Contractor↔category assignments ─────────────────────────────────── */
+/* ── Contractor-first labour config (project → contractors → labour rates) ─ */
 
-const assignmentInclude = {
+const projectContractorInclude = {
   contractor: { select: { name: true } },
-  category: { select: { name: true, color: true } },
-} satisfies Prisma.ProjectContractorAssignmentInclude;
+  labourRates: {
+    include: {
+      subcategory: {
+        select: { name: true, categoryId: true, displayOrder: true, category: { select: { name: true } } },
+      },
+    },
+    orderBy: { subcategory: { displayOrder: "asc" } },
+  },
+} satisfies Prisma.ProjectContractorInclude;
 
-type AssignmentRow = Prisma.ProjectContractorAssignmentGetPayload<{
-  include: typeof assignmentInclude;
+type ProjectContractorRow = Prisma.ProjectContractorGetPayload<{
+  include: typeof projectContractorInclude;
 }>;
 
-function toAssignmentItem(a: AssignmentRow): ProjectContractorAssignmentItem {
+function toProjectContractorItem(pc: ProjectContractorRow): ProjectContractorItem {
   return {
-    id: a.id,
-    contractorId: a.contractorId,
-    contractorName: a.contractor.name,
-    labourCategoryId: a.labourCategoryId,
-    categoryName: a.category.name,
-    categoryColor: a.category.color,
+    id: pc.id,
+    contractorId: pc.contractorId,
+    contractorName: pc.contractor.name,
+    contractRatePaise: pc.contractRatePaise,
+    contractRateUnit: pc.contractRateUnit,
+    labourRates: pc.labourRates.map((r) => ({
+      id: r.id,
+      labourSubcategoryId: r.labourSubcategoryId,
+      subcategoryName: r.subcategory.name,
+      categoryId: r.subcategory.categoryId,
+      categoryName: r.subcategory.category.name,
+      ratePaise: r.ratePaise,
+      rateUnit: r.rateUnit,
+    })),
   };
 }
 
+const projectContractorOrderBy = { contractor: { name: "asc" } } satisfies Prisma.ProjectContractorOrderByWithRelationInput;
+
 /**
- * Validate + normalize an assignment set for a company: strips exact duplicate
- * (contractor, category) pairs and confirms every contractor and category
- * belongs to the caller's company (cross-company rows are rejected — the UI
- * filters, but the server never trusts it). Returns the deduped rows.
+ * Validate + normalize a contractor-config set for a company: dedupes
+ * contractors (first wins) and, within each, dedupes labour types by
+ * subcategory; then confirms every contractor and labour subcategory belongs to
+ * the caller's company (cross-company ids are rejected — the UI filters, but the
+ * server never trusts it). Returns the deduped rows.
  */
-async function validateAssignments(
+async function validateProjectContractors(
   companyId: string,
-  rows: ContractorAssignmentInput[],
-): Promise<ContractorAssignmentInput[]> {
-  const seen = new Set<string>();
-  const deduped = rows.filter((r) => {
-    const k = `${r.contractorId}|${r.labourCategoryId}`;
-    if (seen.has(k)) return false;
-    seen.add(k);
-    return true;
-  });
+  rows: ProjectContractorInput[],
+): Promise<ProjectContractorInput[]> {
+  const seenContractor = new Set<string>();
+  const deduped = rows
+    .filter((r) => {
+      if (seenContractor.has(r.contractorId)) return false;
+      seenContractor.add(r.contractorId);
+      return true;
+    })
+    .map((r) => {
+      const seenSub = new Set<string>();
+      return {
+        ...r,
+        labourRates: r.labourRates.filter((lr) => {
+          if (seenSub.has(lr.labourSubcategoryId)) return false;
+          seenSub.add(lr.labourSubcategoryId);
+          return true;
+        }),
+      };
+    });
   if (deduped.length === 0) return deduped;
 
   const contractorIds = [...new Set(deduped.map((r) => r.contractorId))];
-  const categoryIds = [...new Set(deduped.map((r) => r.labourCategoryId))];
-  const [contractorCount, categoryCount] = await Promise.all([
+  const subIds = [...new Set(deduped.flatMap((r) => r.labourRates.map((lr) => lr.labourSubcategoryId)))];
+  const [contractorCount, subCount] = await Promise.all([
     prisma.contractor.count({ where: { id: { in: contractorIds }, companyId } }),
-    prisma.labourCategory.count({ where: { id: { in: categoryIds }, companyId } }),
+    subIds.length > 0
+      ? prisma.labourSubcategory.count({ where: { id: { in: subIds }, companyId } })
+      : Promise.resolve(0),
   ]);
-  if (contractorCount !== contractorIds.length || categoryCount !== categoryIds.length) {
+  if (contractorCount !== contractorIds.length || subCount !== subIds.length) {
     throw new Error("INVALID_ASSIGNMENT");
   }
   return deduped;
 }
+
+/** Persist a normalized contractor-config set (project_contractors + nested
+ *  labour rates) inside a transaction. Caller has already deleted the old set. */
+async function writeProjectContractors(
+  tx: Prisma.TransactionClient,
+  companyId: string,
+  projectId: string,
+  rows: ProjectContractorInput[],
+): Promise<void> {
+  for (const r of rows) {
+    const pc = await tx.projectContractor.create({
+      data: {
+        companyId,
+        projectId,
+        contractorId: r.contractorId,
+        contractRatePaise: r.contractRatePaise ?? null,
+        contractRateUnit: r.contractRateUnit ?? null,
+      },
+      select: { id: true },
+    });
+    if (r.labourRates.length > 0) {
+      await tx.projectContractorLabourRate.createMany({
+        data: r.labourRates.map((lr) => ({
+          companyId,
+          projectContractorId: pc.id,
+          labourSubcategoryId: lr.labourSubcategoryId,
+          ratePaise: lr.ratePaise,
+          rateUnit: lr.rateUnit ?? "day",
+        })),
+      });
+    }
+  }
+}
+
 
 const listSelect = {
   id: true,
@@ -313,9 +378,9 @@ export async function getProject(id: string): Promise<ProjectDetail | null> {
         include: { project: false },
       },
       notes: { orderBy: { createdAt: "desc" } },
-      contractorAssignments: {
-        include: assignmentInclude,
-        orderBy: [{ category: { displayOrder: "asc" } }, { contractor: { name: "asc" } }],
+      projectContractors: {
+        include: projectContractorInclude,
+        orderBy: projectContractorOrderBy,
       },
     },
   });
@@ -368,7 +433,7 @@ export async function getProject(id: string): Promise<ProjectDetail | null> {
       actorName: a.actor?.fullName,
       createdAt: a.createdAt.toISOString(),
     })),
-    contractorAssignments: p.contractorAssignments.map(toAssignmentItem),
+    contractors: p.projectContractors.map(toProjectContractorItem),
   };
 }
 
@@ -387,11 +452,11 @@ export async function createProject(
 ): Promise<ProjectDetail> {
   const user = await requirePermission("projects.create");
   createProjectInputSchema.parse(input);
-  // Validate assignments BEFORE any write so a bad row aborts the whole create
-  // (no partially-corrupt project). Company ownership enforced here.
-  const assignments = await validateAssignments(
+  // Validate contractor config BEFORE any write so a bad row aborts the whole
+  // create (no partially-corrupt project). Company ownership enforced here.
+  const contractors = await validateProjectContractors(
     user.company.id,
-    contractorAssignmentsSchema.parse(input.contractorAssignments ?? []),
+    projectContractorsSchema.parse(input.contractors ?? []),
   );
   const created = await prisma.$transaction(async (tx) => {
     const project = await tx.project.create({
@@ -421,16 +486,7 @@ export async function createProject(
       },
       select: { id: true },
     });
-    if (assignments.length > 0) {
-      await tx.projectContractorAssignment.createMany({
-        data: assignments.map((a) => ({
-          companyId: user.company.id,
-          projectId: project.id,
-          contractorId: a.contractorId,
-          labourCategoryId: a.labourCategoryId,
-        })),
-      });
-    }
+    await writeProjectContractors(tx, user.company.id, project.id, contractors);
     return project;
   });
   await logActivity(user, created.id, "project.created", "created the project");
@@ -513,8 +569,13 @@ export async function duplicateProject(id: string): Promise<ProjectDetail> {
   const src = await prisma.project.findFirstOrThrow({
     where: { id, companyId: user.company.id },
     include: {
-      contractorAssignments: {
-        select: { contractorId: true, labourCategoryId: true },
+      projectContractors: {
+        select: {
+          contractorId: true,
+          contractRatePaise: true,
+          contractRateUnit: true,
+          labourRates: { select: { labourSubcategoryId: true, ratePaise: true, rateUnit: true } },
+        },
       },
     },
   });
@@ -541,16 +602,21 @@ export async function duplicateProject(id: string): Promise<ProjectDetail> {
       },
       select: { id: true },
     });
-    if (src.contractorAssignments.length > 0) {
-      await tx.projectContractorAssignment.createMany({
-        data: src.contractorAssignments.map((a) => ({
-          companyId: user.company.id,
-          projectId: project.id,
-          contractorId: a.contractorId,
-          labourCategoryId: a.labourCategoryId,
+    await writeProjectContractors(
+      tx,
+      user.company.id,
+      project.id,
+      src.projectContractors.map((pc) => ({
+        contractorId: pc.contractorId,
+        contractRatePaise: pc.contractRatePaise,
+        contractRateUnit: pc.contractRateUnit,
+        labourRates: pc.labourRates.map((lr) => ({
+          labourSubcategoryId: lr.labourSubcategoryId,
+          ratePaise: lr.ratePaise,
+          rateUnit: lr.rateUnit,
         })),
-      });
-    }
+      })),
+    );
     return project;
   });
   await logActivity(user, created.id, "project.duplicated", `duplicated from ${src.code}`);
@@ -776,18 +842,14 @@ export async function listManagers(): Promise<Manager[]> {
   return rows;
 }
 
-/* ── Contractor↔category assignments (read + replace) ────────────────── */
+/* ── Contractor-first labour config (read + replace) ─────────────────── */
 
-const assignmentOrderBy: Prisma.ProjectContractorAssignmentOrderByWithRelationInput[] = [
-  { category: { displayOrder: "asc" } },
-  { contractor: { name: "asc" } },
-];
-
-/** Read a project's contractor assignments. Viewer-level, project-access scoped
- *  (mirrors getProject/attendance access) — safe for the Labour dropdown too. */
-export async function listContractorAssignments(
+/** Read a project's contractor config (contractors + labour types + rates).
+ *  Viewer-level, project-access scoped (mirrors getProject/attendance access) —
+ *  safe for the Labour attendance screen too. */
+export async function listProjectContractors(
   projectId: string,
-): Promise<ProjectContractorAssignmentItem[]> {
+): Promise<ProjectContractorItem[]> {
   const user = await requirePermission("projects.view");
   const p = await prisma.project.findFirst({
     where: {
@@ -799,57 +861,48 @@ export async function listContractorAssignments(
     select: { id: true },
   });
   if (!p) throw new Error("FORBIDDEN");
-  const rows = await prisma.projectContractorAssignment.findMany({
+  const rows = await prisma.projectContractor.findMany({
     where: { companyId: user.company.id, projectId },
-    include: assignmentInclude,
-    orderBy: assignmentOrderBy,
+    include: projectContractorInclude,
+    orderBy: projectContractorOrderBy,
   });
-  return rows.map(toAssignmentItem);
+  return rows.map(toProjectContractorItem);
 }
 
 /**
- * Replace a project's contractor assignments (transactional). Gated by
- * projects.edit + ownership scope (same as any project edit). Validates company
- * ownership of every contractor + category and dedupes before writing.
+ * Replace a project's contractor config (transactional). Gated by projects.edit
+ * + ownership scope (same as any project edit). Validates company ownership of
+ * every contractor + labour subcategory and dedupes before writing. Deleting the
+ * old project_contractors cascade-removes their labour rates; historical
+ * attendance keeps its rate snapshot + contractorId (the rate-provenance FK is
+ * SetNull), so financial history is never disturbed.
  */
-export async function setContractorAssignments(
+export async function setProjectContractors(
   projectId: string,
-  rows: ContractorAssignmentInput[],
-): Promise<ProjectContractorAssignmentItem[]> {
+  rows: ProjectContractorInput[],
+): Promise<ProjectContractorItem[]> {
   const user = await requireProjectWrite("projects.edit", projectId);
-  const assignments = await validateAssignments(
+  const contractors = await validateProjectContractors(
     user.company.id,
-    contractorAssignmentsSchema.parse(rows),
+    projectContractorsSchema.parse(rows),
   );
-  await prisma.$transaction([
-    prisma.projectContractorAssignment.deleteMany({
-      where: { companyId: user.company.id, projectId },
-    }),
-    ...(assignments.length > 0
-      ? [
-          prisma.projectContractorAssignment.createMany({
-            data: assignments.map((a) => ({
-              companyId: user.company.id,
-              projectId,
-              contractorId: a.contractorId,
-              labourCategoryId: a.labourCategoryId,
-            })),
-          }),
-        ]
-      : []),
-  ]);
+  await prisma.$transaction(async (tx) => {
+    await tx.projectContractor.deleteMany({ where: { companyId: user.company.id, projectId } });
+    await writeProjectContractors(tx, user.company.id, projectId, contractors);
+  });
+  const labourTypeCount = contractors.reduce((s, c) => s + c.labourRates.length, 0);
   await logActivity(
     user,
     projectId,
     "project.contractors_updated",
-    assignments.length === 0
-      ? "cleared contractor assignments"
-      : `set ${assignments.length} contractor assignment${assignments.length === 1 ? "" : "s"}`,
+    contractors.length === 0
+      ? "cleared project contractors"
+      : `set ${contractors.length} contractor${contractors.length === 1 ? "" : "s"} (${labourTypeCount} labour type${labourTypeCount === 1 ? "" : "s"})`,
   );
-  const fresh = await prisma.projectContractorAssignment.findMany({
+  const fresh = await prisma.projectContractor.findMany({
     where: { companyId: user.company.id, projectId },
-    include: assignmentInclude,
-    orderBy: assignmentOrderBy,
+    include: projectContractorInclude,
+    orderBy: projectContractorOrderBy,
   });
-  return fresh.map(toAssignmentItem);
+  return fresh.map(toProjectContractorItem);
 }
