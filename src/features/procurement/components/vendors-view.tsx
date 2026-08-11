@@ -147,7 +147,7 @@ export function VendorsView() {
               <div className="mt-4 flex items-end justify-between border-t border-border pt-3">
                 <div>
                   <p className="text-xs text-foreground-subtle">Lifetime purchases</p>
-                  <p className="font-mono text-sm font-medium"><MoneyText paise={v.totalPurchasedPaise} compact /></p>
+                  <p className="font-mono text-sm font-medium"><MoneyText paise={v.totalPurchasedPaise} /></p>
                 </div>
                 <span className="text-xs text-foreground-subtle">{v.poCount} PO{v.poCount === 1 ? "" : "s"}</span>
               </div>

@@ -38,6 +38,20 @@ describe("labour hierarchy", () => {
     expect((await repo.listCategories()).some((c) => c.id === cat.id)).toBe(false);
   });
 
+  it("blocks physical deletion once attendance is recorded (history preserved)", async () => {
+    const cat = await repo.createCategory({ name: "Roofing" });
+    const sub = await repo.createSubcategory({ categoryId: cat.id, name: "Roofer", dailyRatePaise: 90000 });
+    await repo.setQuantity(SKY, today, sub.id, 2, null);
+
+    await expect(repo.deleteSubcategory(sub.id)).rejects.toThrow("SUBCATEGORY_HAS_ATTENDANCE");
+    await expect(repo.deleteCategory(cat.id)).rejects.toThrow("CATEGORY_HAS_ATTENDANCE");
+
+    // The blocked attempts left the attendance untouched.
+    const sheet = await repo.getSheet(SKY, today);
+    const row = sheet.groups.flatMap((g) => g.rows).find((r) => r.subcategoryId === sub.id);
+    expect(row?.quantity).toBe(2);
+  });
+
   it("reorders categories and subcategories via displayOrder", async () => {
     const before = await repo.listCategories();
     const reversed = [...before.map((c) => c.id)].reverse();

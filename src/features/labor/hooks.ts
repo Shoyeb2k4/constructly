@@ -117,6 +117,16 @@ export function useHierarchyMutations() {
       invalidateLabour(qc);
       toast.success("Category deleted");
     },
+    onError: (e) => {
+      const msg = e instanceof Error ? e.message : "";
+      toast.error(
+        msg === "CATEGORY_HAS_ATTENDANCE"
+          ? "This category has recorded attendance and can't be deleted"
+          : msg === "CATEGORY_HAS_ASSIGNMENTS"
+            ? "This category is assigned to contractors on a project — remove those assignments first"
+            : "Couldn't delete the category",
+      );
+    },
   });
   const reorderCategories = useMutation({
     mutationFn: (orderedIds: string[]) => laborApi.reorderCategories(orderedIds),
@@ -144,6 +154,12 @@ export function useHierarchyMutations() {
       invalidateLabour(qc);
       toast.success("Subcategory deleted");
     },
+    onError: (e) =>
+      toast.error(
+        e instanceof Error && e.message === "SUBCATEGORY_HAS_ATTENDANCE"
+          ? "This subcategory has recorded attendance and can't be deleted"
+          : "Couldn't delete the subcategory",
+      ),
   });
   const reorderSubcategories = useMutation({
     mutationFn: (v: { categoryId: string; orderedIds: string[] }) =>

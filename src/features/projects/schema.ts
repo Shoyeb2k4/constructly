@@ -211,6 +211,17 @@ export const updateProjectInputSchema = z
     path: ["expectedCompletionDate"],
   });
 
+/* ── Contractor↔category assignments (create form + edit sheet + server) ── */
+
+export const contractorAssignmentInputSchema = z.object({
+  contractorId: z.string().uuid(),
+  labourCategoryId: z.string().uuid(),
+});
+/** A project's full assignment set. Server dedupes; UI guards obvious dupes. */
+export const contractorAssignmentsSchema = z
+  .array(contractorAssignmentInputSchema)
+  .max(100, "Too many contractor assignments");
+
 export const deadlineSchema = z.object({
   title: z.string().trim().min(1, "Required").max(120),
   dueDate: z.string().min(1, "Pick a date"),

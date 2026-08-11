@@ -1,6 +1,8 @@
 import type { ProjectsRepository } from "../repository";
 import type {
+  ContractorAssignmentInput,
   CreateProjectInput,
+  ProjectContractorAssignmentItem,
   ProjectDetail,
   ProjectFilters,
   ProjectListItem,
@@ -12,6 +14,8 @@ import { matchesDeadline, byDeadlineAsc, todayISO } from "../deadline";
 import { purgeEligibleAt } from "../retention";
 import { demoSeed, DEMO_MANAGERS } from "./seed";
 import { demoProjectSpend } from "@/features/budget/spend";
+import { demoContractorsRepository } from "@/features/contractors/demo/demo-repository";
+import { demoLaborRepository } from "@/features/labor/demo/demo-repository";
 
 const KEY = "constructly.demo.projects.v1";
 const RETENTION_KEY = "constructly.demo.projects.retention.v1";
@@ -104,6 +108,42 @@ function mutate<T>(id: string, fn: (p: ProjectDetail, rows: ProjectDetail[]) => 
   return result;
 }
 
+/**
+ * Resolve raw {contractorId, labourCategoryId} rows into display items by
+ * reading the demo contractor + labour-category stores. Dedupes and drops rows
+ * whose contractor/category no longer exists (parity with the server's
+ * company-ownership validation).
+ */
+async function resolveAssignments(
+  rows: ContractorAssignmentInput[],
+): Promise<ProjectContractorAssignmentItem[]> {
+  const [contractors, categories] = await Promise.all([
+    demoContractorsRepository.listContractors({}),
+    demoLaborRepository.listCategories(),
+  ]);
+  const cById = new Map(contractors.map((c) => [c.id, c]));
+  const catById = new Map(categories.map((c) => [c.id, c]));
+  const seen = new Set<string>();
+  const items: ProjectContractorAssignmentItem[] = [];
+  for (const r of rows) {
+    const key = `${r.contractorId}|${r.labourCategoryId}`;
+    if (seen.has(key)) continue;
+    const contractor = cById.get(r.contractorId);
+    const category = catById.get(r.labourCategoryId);
+    if (!contractor || !category) continue;
+    seen.add(key);
+    items.push({
+      id: uid(),
+      contractorId: contractor.id,
+      contractorName: contractor.name,
+      labourCategoryId: category.id,
+      categoryName: category.name,
+      categoryColor: category.color,
+    });
+  }
+  return items;
+}
+
 export const demoRepository: ProjectsRepository = {
   async list(filters: ProjectFilters = {}) {
     let rows = load();
@@ -157,7 +197,12 @@ export const demoRepository: ProjectsRepository = {
     const p = load().find((x) => x.id === id);
     if (!p) return null;
     const spend = demoProjectSpend(id);
-    return { ...p, usedPaise: spend.laborPaise + spend.procurementPaise };
+    return {
+      ...p,
+      usedPaise: spend.laborPaise + spend.procurementPaise,
+      // Backward-compat for projects persisted before this feature existed.
+      contractorAssignments: p.contractorAssignments ?? [],
+    };
   },
 
   async create(input: CreateProjectInput) {
@@ -196,7 +241,11 @@ export const demoRepository: ProjectsRepository = {
       documents: [],
       notes: [],
       activity: [],
+      contractorAssignments: [],
     };
+    if (input.contractorAssignments && input.contractorAssignments.length > 0) {
+      project.contractorAssignments = await resolveAssignments(input.contractorAssignments);
+    }
     log(project, "project.created", "created the project");
     rows.push(project);
     save(rows);
@@ -374,5 +423,25 @@ export const demoRepository: ProjectsRepository = {
 
   async listManagers() {
     return DEMO_MANAGERS;
+  },
+
+  async listContractorAssignments(projectId) {
+    const p = load().find((x) => x.id === projectId);
+    return p?.contractorAssignments ?? [];
+  },
+
+  async setContractorAssignments(projectId, rows) {
+    const resolved = await resolveAssignments(rows);
+    return mutate(projectId, (p) => {
+      p.contractorAssignments = resolved;
+      log(
+        p,
+        "project.contractors_updated",
+        resolved.length === 0
+          ? "cleared contractor assignments"
+          : `set ${resolved.length} contractor assignment${resolved.length === 1 ? "" : "s"}`,
+      );
+      return resolved;
+    });
   },
 };

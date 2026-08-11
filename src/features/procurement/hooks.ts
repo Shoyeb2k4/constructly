@@ -1,6 +1,6 @@
 "use client";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { procurementApi, procurementKeys } from "./data";
 import type {
@@ -29,7 +29,15 @@ export function useMembers() {
   return useQuery({ queryKey: procurementKeys.members, queryFn: () => procurementApi.listMembers(), staleTime: 5 * 60_000 });
 }
 export function usePurchaseOrders(filters: POFilters = {}) {
-  return useQuery({ queryKey: procurementKeys.pos(filters), queryFn: () => procurementApi.listPurchaseOrders(filters) });
+  return useQuery({
+    queryKey: procurementKeys.pos(filters),
+    queryFn: () => procurementApi.listPurchaseOrders(filters),
+    // Keep the current rows visible while a background refetch runs (e.g. after
+    // a duplicate/create invalidation or a filter change) so the list never
+    // blanks — the "· updating…" hint reflects a real in-flight refetch that
+    // always settles, never a wedged/empty state.
+    placeholderData: keepPreviousData,
+  });
 }
 export function usePurchaseOrder(id: string) {
   return useQuery({ queryKey: procurementKeys.po(id), queryFn: () => procurementApi.getPurchaseOrder(id) });
@@ -110,14 +118,38 @@ export function useVendorMutations() {
 
 /* ── PO mutations (also invalidate budget + projects) ────────────────── */
 
+/**
+ * Invalidate exactly the procurement queries a PO/payment write can change —
+ * deliberately NOT the static lists (materials, members, material-categories).
+ * Those never change on a PO write, so force-refetching them only adds work:
+ * with Next.js serializing Server Actions, their refetches QUEUE ahead of the
+ * PO-list refetch and keep the list's "· updating…" indicator visible far longer
+ * than the list fetch itself takes (the reported "stuck on Updating…"). Scoping
+ * the invalidation lets the list refetch resolve promptly.
+ */
+function invalidateProcurementWrites(
+  qc: ReturnType<typeof useQueryClient>,
+  opts: { projects?: boolean } = {},
+) {
+  const keys = [
+    ["procurement", "pos"],
+    ["procurement", "po"],
+    ["procurement", "payments"],
+    ["procurement", "project"],
+    ["procurement", "vendors"],
+    ["procurement", "vendor"],
+    ["procurement", "vendor-aging"],
+    ["procurement", "pending-approvals"],
+  ];
+  for (const queryKey of keys) qc.invalidateQueries({ queryKey });
+  qc.invalidateQueries({ queryKey: ["budget"] });
+  qc.invalidateQueries({ queryKey: ["dashboard"] });
+  if (opts.projects) qc.invalidateQueries({ queryKey: ["projects"] });
+}
+
 export function usePOMutations() {
   const qc = useQueryClient();
-  const invalidateAll = () => {
-    qc.invalidateQueries({ queryKey: procurementKeys.all });
-    qc.invalidateQueries({ queryKey: ["budget"] });
-    qc.invalidateQueries({ queryKey: ["projects"] });
-    qc.invalidateQueries({ queryKey: ["dashboard"] });
-  };
+  const invalidateAll = () => invalidateProcurementWrites(qc, { projects: true });
 
   const create = useMutation({
     mutationFn: (input: CreatePOInput) => procurementApi.createPurchaseOrder(input),
@@ -155,6 +187,7 @@ export function usePOMutations() {
       invalidateAll();
       toast.success("Revision created as a new draft");
     },
+    onError: () => toast.error("Couldn't create the revision"),
   });
   const duplicate = useMutation({
     mutationFn: (id: string) => procurementApi.duplicatePurchaseOrder(id),
@@ -162,6 +195,9 @@ export function usePOMutations() {
       invalidateAll();
       toast.success(`Duplicated as ${po.poNumber} (draft)`);
     },
+    // Surface failures so the button re-enables and the flow never appears to
+    // hang on error (the mutation always settles either way).
+    onError: () => toast.error("Couldn't duplicate the purchase order"),
   });
   const remove = useMutation({
     mutationFn: (id: string) => procurementApi.deletePurchaseOrder(id),
@@ -179,11 +215,9 @@ export function usePOMutations() {
 
 export function usePaymentMutations() {
   const qc = useQueryClient();
-  const invalidateAll = () => {
-    qc.invalidateQueries({ queryKey: procurementKeys.all });
-    qc.invalidateQueries({ queryKey: ["budget"] });
-    qc.invalidateQueries({ queryKey: ["dashboard"] });
-  };
+  // A payment changes paid/outstanding + aggregates, but not project spend
+  // (PO totals) — so no ["projects"] invalidation (parity with prior behaviour).
+  const invalidateAll = () => invalidateProcurementWrites(qc);
 
   const create = useMutation({
     mutationFn: (input: CreatePaymentInput) => procurementApi.createPayment(input),

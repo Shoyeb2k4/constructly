@@ -25,7 +25,9 @@ import {
 import { projectFormSchema, formToInput, type ProjectFormValues } from "../schema";
 import { PROJECT_TYPES, TYPE_LABEL } from "../constants";
 import { useCreateProject, useManagers } from "../hooks";
+import type { ContractorAssignmentInput } from "../types";
 import { Field } from "./field";
+import { ContractorAssignmentsField, cleanAssignments } from "./contractor-assignments-field";
 
 export function CreateProjectSheet({
   open,
@@ -39,6 +41,7 @@ export function CreateProjectSheet({
   const { data: managers = [] } = useManagers();
   const [tags, setTags] = React.useState<string[]>([]);
   const [tagDraft, setTagDraft] = React.useState("");
+  const [assignments, setAssignments] = React.useState<ContractorAssignmentInput[]>([]);
 
   const {
     register,
@@ -55,12 +58,16 @@ export function CreateProjectSheet({
     reset();
     setTags([]);
     setTagDraft("");
+    setAssignments([]);
     onOpenChange(false);
   }
 
   const onSubmit = handleSubmit(async (values) => {
     const parsed = projectFormSchema.parse({ ...values, tags });
-    const project = await create.mutateAsync(formToInput(parsed));
+    const project = await create.mutateAsync({
+      ...formToInput(parsed),
+      contractorAssignments: cleanAssignments(assignments),
+    });
     close();
     router.push(`/projects/${project.id}`);
   });
@@ -178,6 +185,16 @@ export function CreateProjectSheet({
                   <Input placeholder="Whitefield, Bengaluru" {...register("siteAddress")} />
                 </Field>
               </div>
+            </div>
+
+            <div className="space-y-3 rounded-lg border border-border bg-surface-muted/40 p-4">
+              <div>
+                <p className="text-xs font-medium text-foreground-subtle">CONTRACTORS</p>
+                <p className="mt-0.5 text-xs text-foreground-subtle">
+                  Assign contractors to the work they handle on this project.
+                </p>
+              </div>
+              <ContractorAssignmentsField value={assignments} onChange={setAssignments} />
             </div>
 
             <Field label="Tags">

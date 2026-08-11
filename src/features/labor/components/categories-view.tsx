@@ -453,8 +453,8 @@ export function CategoriesView() {
             <DialogTitle>Delete {confirm?.item.name}?</DialogTitle>
             <DialogDescription>
               {confirm?.kind === "category"
-                ? "This also removes its subcategories and all their attendance. This cannot be undone."
-                : "This also removes all attendance recorded for this subcategory. This cannot be undone."}
+                ? "This removes its subcategories. A category with recorded attendance or contractor assignments can't be deleted — labour history and assignment config are preserved."
+                : "Subcategories with recorded attendance can't be deleted — labour history is preserved."}
             </DialogDescription>
           </DialogHeader>
           <div className="flex justify-end gap-2">

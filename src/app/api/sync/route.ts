@@ -48,6 +48,22 @@ async function applyLabourAttendance(clientUuid: string, payload: unknown, user:
   });
   if (!project) throw new Error("FORBIDDEN");
 
+  // Eligibility (offline-safe, category-exact): a contractor may only be
+  // attributed to a project for the subcategory's category (resolved
+  // server-side, never trusted from the client). Unlike the interactive action,
+  // we DON'T reject here — a queued mutation whose assignment was later removed
+  // would become a poison message that never syncs. Instead we degrade: keep the
+  // attendance (the valuable offline data) and drop the now-invalid attribution.
+  let contractorId = p.contractorId ?? null;
+  if (contractorId != null) {
+    const { isAttributionEligible } = await import(
+      "@/features/labor/server/assignment-eligibility"
+    );
+    if (!(await isAttributionEligible(user.company.id, p.projectId, contractorId, p.labourSubcategoryId))) {
+      contractorId = null;
+    }
+  }
+
   const key = {
     projectId: p.projectId,
     date: new Date(p.date),
@@ -79,7 +95,7 @@ async function applyLabourAttendance(clientUuid: string, payload: unknown, user:
       dailyRatePaiseSnapshot: snapshot,
       estimatedCostPaise: Math.round((snapshot ?? 0) * p.quantityPresent),
       notes: p.notes ?? null,
-      contractorId: p.contractorId ?? null,
+      contractorId,
       clientUuid,
       clientSeq: BigInt(Date.now()),
     },
@@ -87,7 +103,7 @@ async function applyLabourAttendance(clientUuid: string, payload: unknown, user:
       quantityPresent: p.quantityPresent,
       estimatedCostPaise: Math.round((snapshot ?? 0) * p.quantityPresent),
       ...(p.notes !== undefined ? { notes: p.notes } : {}),
-      ...(p.contractorId !== undefined ? { contractorId: p.contractorId } : {}),
+      ...(p.contractorId !== undefined ? { contractorId } : {}),
     },
   });
 }
