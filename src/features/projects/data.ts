@@ -30,6 +30,8 @@ const serverRepository: ProjectsRepository = {
   addDocument: server.addDocument,
   removeDocument: server.removeDocument,
   listManagers: server.listManagers,
+  listContractorAssignments: server.listContractorAssignments,
+  setContractorAssignments: server.setContractorAssignments,
 };
 
 export const projectsApi: ProjectsRepository = isDemoMode
@@ -43,4 +45,6 @@ export const projectKeys = {
   detail: (id: string) => ["projects", "detail", id] as const,
   managers: ["projects", "managers"] as const,
   retention: ["projects", "retention"] as const,
+  contractorAssignments: (projectId: string) =>
+    ["projects", "contractor-assignments", projectId] as const,
 };

@@ -88,6 +88,23 @@ export interface ProjectListItem {
   updatedAt: string;
 }
 
+/** One contractor↔work-category assignment on a project (the client's
+ *  "Pappu → Civil, Shoeb → Tiles"). Reuses the LabourCategory taxonomy. */
+export interface ProjectContractorAssignmentItem {
+  id: string;
+  contractorId: string;
+  contractorName: string;
+  labourCategoryId: string;
+  categoryName: string;
+  categoryColor: string | null;
+}
+
+/** Write shape for a single assignment row (create form + edit sheet). */
+export interface ContractorAssignmentInput {
+  contractorId: string;
+  labourCategoryId: string;
+}
+
 export interface ProjectDetail extends ProjectListItem {
   clientName: string | null;
   clientContact: string | null;
@@ -101,6 +118,7 @@ export interface ProjectDetail extends ProjectListItem {
   documents: ProjectDocument[];
   notes: Note[];
   activity: ActivityEntry[];
+  contractorAssignments: ProjectContractorAssignmentItem[];
 }
 
 /** Project list sort modes. RECENT (last updated) is the default. */
@@ -139,6 +157,8 @@ export interface CreateProjectInput {
   expectedCompletionDate?: string | null;
   pmId?: string | null;
   tags?: string[];
+  /** Contractor↔category assignments to create alongside the project. */
+  contractorAssignments?: ContractorAssignmentInput[];
 }
 
 export type UpdateProjectInput = Partial<CreateProjectInput>;

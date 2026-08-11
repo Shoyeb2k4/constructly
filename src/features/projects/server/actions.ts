@@ -8,7 +8,9 @@ import type { SessionUser } from "@/lib/auth/types";
 import { STAGE_LABEL } from "../constants";
 import { deadlineBounds, todayISO } from "../deadline";
 import type {
+  ContractorAssignmentInput,
   CreateProjectInput,
+  ProjectContractorAssignmentItem,
   ProjectDetail,
   ProjectFilters,
   ProjectListItem,
@@ -19,7 +21,7 @@ import type {
 import { Prisma } from "@/generated/prisma";
 import { spendByProject, projectSpend } from "@/features/budget/server-actions";
 import { purgeEligibleAt, isValidRetention } from "../retention";
-import { updateProjectInputSchema } from "../schema";
+import { updateProjectInputSchema, contractorAssignmentsSchema } from "../schema";
 
 /**
  * Server-side projects API. Authorization is RBAC-first: every action requires a
@@ -76,6 +78,59 @@ async function logActivity(
       summary,
     },
   });
+}
+
+/* ── Contractor↔category assignments ─────────────────────────────────── */
+
+const assignmentInclude = {
+  contractor: { select: { name: true } },
+  category: { select: { name: true, color: true } },
+} satisfies Prisma.ProjectContractorAssignmentInclude;
+
+type AssignmentRow = Prisma.ProjectContractorAssignmentGetPayload<{
+  include: typeof assignmentInclude;
+}>;
+
+function toAssignmentItem(a: AssignmentRow): ProjectContractorAssignmentItem {
+  return {
+    id: a.id,
+    contractorId: a.contractorId,
+    contractorName: a.contractor.name,
+    labourCategoryId: a.labourCategoryId,
+    categoryName: a.category.name,
+    categoryColor: a.category.color,
+  };
+}
+
+/**
+ * Validate + normalize an assignment set for a company: strips exact duplicate
+ * (contractor, category) pairs and confirms every contractor and category
+ * belongs to the caller's company (cross-company rows are rejected — the UI
+ * filters, but the server never trusts it). Returns the deduped rows.
+ */
+async function validateAssignments(
+  companyId: string,
+  rows: ContractorAssignmentInput[],
+): Promise<ContractorAssignmentInput[]> {
+  const seen = new Set<string>();
+  const deduped = rows.filter((r) => {
+    const k = `${r.contractorId}|${r.labourCategoryId}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+  if (deduped.length === 0) return deduped;
+
+  const contractorIds = [...new Set(deduped.map((r) => r.contractorId))];
+  const categoryIds = [...new Set(deduped.map((r) => r.labourCategoryId))];
+  const [contractorCount, categoryCount] = await Promise.all([
+    prisma.contractor.count({ where: { id: { in: contractorIds }, companyId } }),
+    prisma.labourCategory.count({ where: { id: { in: categoryIds }, companyId } }),
+  ]);
+  if (contractorCount !== contractorIds.length || categoryCount !== categoryIds.length) {
+    throw new Error("INVALID_ASSIGNMENT");
+  }
+  return deduped;
 }
 
 const listSelect = {
@@ -258,6 +313,10 @@ export async function getProject(id: string): Promise<ProjectDetail | null> {
         include: { project: false },
       },
       notes: { orderBy: { createdAt: "desc" } },
+      contractorAssignments: {
+        include: assignmentInclude,
+        orderBy: [{ category: { displayOrder: "asc" } }, { contractor: { name: "asc" } }],
+      },
     },
   });
   if (!p) return null;
@@ -309,6 +368,7 @@ export async function getProject(id: string): Promise<ProjectDetail | null> {
       actorName: a.actor?.fullName,
       createdAt: a.createdAt.toISOString(),
     })),
+    contractorAssignments: p.contractorAssignments.map(toAssignmentItem),
   };
 }
 
@@ -327,32 +387,51 @@ export async function createProject(
 ): Promise<ProjectDetail> {
   const user = await requirePermission("projects.create");
   createProjectInputSchema.parse(input);
-  const created = await prisma.project.create({
-    data: {
-      companyId: user.company.id,
-      code: input.code ?? (await nextCode(user.company.id)),
-      name: input.name,
-      type: input.type,
-      clientName: input.clientName ?? null,
-      clientContact: input.clientContact ?? null,
-      clientPhone: input.clientPhone ?? null,
-      clientEmail: input.clientEmail ?? null,
-      siteAddress: input.siteAddress ?? null,
-      gpsLat: input.gpsLat ?? null,
-      gpsLng: input.gpsLng ?? null,
-      budgetPaise: BigInt(input.budgetPaise),
-      contractValuePaise: BigInt(input.contractValuePaise),
-      procurementBudgetPaise:
-        input.procurementBudgetPaise != null ? BigInt(input.procurementBudgetPaise) : null,
-      startDate: input.startDate ? new Date(input.startDate) : null,
-      expectedCompletionDate: input.expectedCompletionDate
-        ? new Date(input.expectedCompletionDate)
-        : null,
-      tags: input.tags ?? [],
-      pmId: input.pmId ?? null,
-      createdById: user.id,
-    },
-    select: { id: true },
+  // Validate assignments BEFORE any write so a bad row aborts the whole create
+  // (no partially-corrupt project). Company ownership enforced here.
+  const assignments = await validateAssignments(
+    user.company.id,
+    contractorAssignmentsSchema.parse(input.contractorAssignments ?? []),
+  );
+  const created = await prisma.$transaction(async (tx) => {
+    const project = await tx.project.create({
+      data: {
+        companyId: user.company.id,
+        code: input.code ?? (await nextCode(user.company.id)),
+        name: input.name,
+        type: input.type,
+        clientName: input.clientName ?? null,
+        clientContact: input.clientContact ?? null,
+        clientPhone: input.clientPhone ?? null,
+        clientEmail: input.clientEmail ?? null,
+        siteAddress: input.siteAddress ?? null,
+        gpsLat: input.gpsLat ?? null,
+        gpsLng: input.gpsLng ?? null,
+        budgetPaise: BigInt(input.budgetPaise),
+        contractValuePaise: BigInt(input.contractValuePaise),
+        procurementBudgetPaise:
+          input.procurementBudgetPaise != null ? BigInt(input.procurementBudgetPaise) : null,
+        startDate: input.startDate ? new Date(input.startDate) : null,
+        expectedCompletionDate: input.expectedCompletionDate
+          ? new Date(input.expectedCompletionDate)
+          : null,
+        tags: input.tags ?? [],
+        pmId: input.pmId ?? null,
+        createdById: user.id,
+      },
+      select: { id: true },
+    });
+    if (assignments.length > 0) {
+      await tx.projectContractorAssignment.createMany({
+        data: assignments.map((a) => ({
+          companyId: user.company.id,
+          projectId: project.id,
+          contractorId: a.contractorId,
+          labourCategoryId: a.labourCategoryId,
+        })),
+      });
+    }
+    return project;
   });
   await logActivity(user, created.id, "project.created", "created the project");
   return (await getProject(created.id))!;
@@ -433,28 +512,46 @@ export async function duplicateProject(id: string): Promise<ProjectDetail> {
   const user = await requirePermission("projects.create");
   const src = await prisma.project.findFirstOrThrow({
     where: { id, companyId: user.company.id },
-  });
-  const created = await prisma.project.create({
-    data: {
-      companyId: user.company.id,
-      code: await nextCode(user.company.id),
-      name: `${src.name} (copy)`,
-      type: src.type,
-      clientName: src.clientName,
-      clientContact: src.clientContact,
-      clientPhone: src.clientPhone,
-      clientEmail: src.clientEmail,
-      siteAddress: src.siteAddress,
-      gpsLat: src.gpsLat,
-      gpsLng: src.gpsLng,
-      budgetPaise: src.budgetPaise,
-      contractValuePaise: src.contractValuePaise,
-      procurementBudgetPaise: src.procurementBudgetPaise,
-      tags: src.tags,
-      pmId: src.pmId,
-      createdById: user.id,
+    include: {
+      contractorAssignments: {
+        select: { contractorId: true, labourCategoryId: true },
+      },
     },
-    select: { id: true },
+  });
+  const created = await prisma.$transaction(async (tx) => {
+    const project = await tx.project.create({
+      data: {
+        companyId: user.company.id,
+        code: await nextCode(user.company.id),
+        name: `${src.name} (copy)`,
+        type: src.type,
+        clientName: src.clientName,
+        clientContact: src.clientContact,
+        clientPhone: src.clientPhone,
+        clientEmail: src.clientEmail,
+        siteAddress: src.siteAddress,
+        gpsLat: src.gpsLat,
+        gpsLng: src.gpsLng,
+        budgetPaise: src.budgetPaise,
+        contractValuePaise: src.contractValuePaise,
+        procurementBudgetPaise: src.procurementBudgetPaise,
+        tags: src.tags,
+        pmId: src.pmId,
+        createdById: user.id,
+      },
+      select: { id: true },
+    });
+    if (src.contractorAssignments.length > 0) {
+      await tx.projectContractorAssignment.createMany({
+        data: src.contractorAssignments.map((a) => ({
+          companyId: user.company.id,
+          projectId: project.id,
+          contractorId: a.contractorId,
+          labourCategoryId: a.labourCategoryId,
+        })),
+      });
+    }
+    return project;
   });
   await logActivity(user, created.id, "project.duplicated", `duplicated from ${src.code}`);
   return (await getProject(created.id))!;
@@ -677,4 +774,82 @@ export async function listManagers(): Promise<Manager[]> {
     orderBy: { fullName: "asc" },
   });
   return rows;
+}
+
+/* ── Contractor↔category assignments (read + replace) ────────────────── */
+
+const assignmentOrderBy: Prisma.ProjectContractorAssignmentOrderByWithRelationInput[] = [
+  { category: { displayOrder: "asc" } },
+  { contractor: { name: "asc" } },
+];
+
+/** Read a project's contractor assignments. Viewer-level, project-access scoped
+ *  (mirrors getProject/attendance access) — safe for the Labour dropdown too. */
+export async function listContractorAssignments(
+  projectId: string,
+): Promise<ProjectContractorAssignmentItem[]> {
+  const user = await requirePermission("projects.view");
+  const p = await prisma.project.findFirst({
+    where: {
+      id: projectId,
+      companyId: user.company.id,
+      deletedAt: null,
+      ...(hasPermission(user, "projects.view_all") ? {} : { pmId: user.id }),
+    },
+    select: { id: true },
+  });
+  if (!p) throw new Error("FORBIDDEN");
+  const rows = await prisma.projectContractorAssignment.findMany({
+    where: { companyId: user.company.id, projectId },
+    include: assignmentInclude,
+    orderBy: assignmentOrderBy,
+  });
+  return rows.map(toAssignmentItem);
+}
+
+/**
+ * Replace a project's contractor assignments (transactional). Gated by
+ * projects.edit + ownership scope (same as any project edit). Validates company
+ * ownership of every contractor + category and dedupes before writing.
+ */
+export async function setContractorAssignments(
+  projectId: string,
+  rows: ContractorAssignmentInput[],
+): Promise<ProjectContractorAssignmentItem[]> {
+  const user = await requireProjectWrite("projects.edit", projectId);
+  const assignments = await validateAssignments(
+    user.company.id,
+    contractorAssignmentsSchema.parse(rows),
+  );
+  await prisma.$transaction([
+    prisma.projectContractorAssignment.deleteMany({
+      where: { companyId: user.company.id, projectId },
+    }),
+    ...(assignments.length > 0
+      ? [
+          prisma.projectContractorAssignment.createMany({
+            data: assignments.map((a) => ({
+              companyId: user.company.id,
+              projectId,
+              contractorId: a.contractorId,
+              labourCategoryId: a.labourCategoryId,
+            })),
+          }),
+        ]
+      : []),
+  ]);
+  await logActivity(
+    user,
+    projectId,
+    "project.contractors_updated",
+    assignments.length === 0
+      ? "cleared contractor assignments"
+      : `set ${assignments.length} contractor assignment${assignments.length === 1 ? "" : "s"}`,
+  );
+  const fresh = await prisma.projectContractorAssignment.findMany({
+    where: { companyId: user.company.id, projectId },
+    include: assignmentInclude,
+    orderBy: assignmentOrderBy,
+  });
+  return fresh.map(toAssignmentItem);
 }

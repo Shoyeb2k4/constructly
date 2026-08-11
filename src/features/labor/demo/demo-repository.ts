@@ -52,6 +52,37 @@ function write<T>(key: string, rows: T[]): void {
   }
 }
 
+/** Demo parity for server eligibility (category-exact): is this contractor
+ *  assigned to this project FOR THE SUBCATEGORY'S CATEGORY? The category is
+ *  resolved from the subcategory (never trusted from the caller), mirroring
+ *  isAttributionEligible on the server. */
+/** Demo parity for the server's assignment guard: does ANY project have a
+ *  contractor assignment referencing this category? */
+function categoryHasAssignmentsDemo(categoryId: string): boolean {
+  const projects =
+    readRaw<{ contractorAssignments?: { labourCategoryId: string }[] }>(K.projects) ?? [];
+  return projects.some((p) =>
+    p.contractorAssignments?.some((a) => a.labourCategoryId === categoryId),
+  );
+}
+
+function isAttributionEligibleDemo(
+  projectId: string,
+  subcategoryId: string,
+  contractorId: string,
+): boolean {
+  const sub = loadSubcategories().find((s) => s.id === subcategoryId);
+  if (!sub) return false;
+  const projects =
+    readRaw<{ id: string; contractorAssignments?: { contractorId: string; labourCategoryId: string }[] }>(
+      K.projects,
+    ) ?? [];
+  const p = projects.find((x) => x.id === projectId);
+  return !!p?.contractorAssignments?.some(
+    (a) => a.contractorId === contractorId && a.labourCategoryId === sub.categoryId,
+  );
+}
+
 interface V1Category { id: string; name: string; color: string; dailyRatePaise: number | null }
 interface V1Attendance extends Omit<LabourAttendanceRecord, "labourSubcategoryId"> { labourCategoryId: string }
 
@@ -215,9 +246,17 @@ export const demoLaborRepository: LaborRepository = {
 
   async deleteCategory(id) {
     const subIds = new Set(loadSubcategories().filter((s) => s.categoryId === id).map((s) => s.id));
+    // Guards (parity with the server): block deletion when the category has
+    // recorded attendance (history) OR active project-contractor assignments
+    // (config that must only change via the audited setContractorAssignments).
+    if (loadAttendance().some((a) => subIds.has(a.labourSubcategoryId))) {
+      throw new Error("CATEGORY_HAS_ATTENDANCE");
+    }
+    if (categoryHasAssignmentsDemo(id)) {
+      throw new Error("CATEGORY_HAS_ASSIGNMENTS");
+    }
     write(K.categories, loadCategories().filter((c) => c.id !== id));
     write(K.subcategories, loadSubcategories().filter((s) => s.categoryId !== id));
-    write(K.attendance, loadAttendance().filter((a) => !subIds.has(a.labourSubcategoryId)));
   },
 
   async reorderCategories(orderedIds) {
@@ -267,8 +306,12 @@ export const demoLaborRepository: LaborRepository = {
   },
 
   async deleteSubcategory(id) {
+    // History guard (parity with the server): block deletion when the
+    // subcategory has recorded attendance.
+    if (loadAttendance().some((a) => a.labourSubcategoryId === id)) {
+      throw new Error("SUBCATEGORY_HAS_ATTENDANCE");
+    }
     write(K.subcategories, loadSubcategories().filter((s) => s.id !== id));
-    write(K.attendance, loadAttendance().filter((a) => a.labourSubcategoryId !== id));
   },
 
   async reorderSubcategories(categoryId, orderedIds) {
@@ -289,6 +332,13 @@ export const demoLaborRepository: LaborRepository = {
     const categories = loadCategories();
     const subcategories = loadSubcategories();
     let attendance = loadAttendance();
+    // Eligibility parity with the server: only a contractor assigned to this
+    // project may be attributed; an ineligible id degrades to null (never
+    // rejects, matching the offline sync path). undefined = leave unchanged.
+    let effContractor = contractorId;
+    if (typeof effContractor === "string" && !isAttributionEligibleDemo(projectId, subcategoryId, effContractor)) {
+      effContractor = null;
+    }
     const existing = attendance.find(
       (a) => a.projectId === projectId && a.date === date && a.labourSubcategoryId === subcategoryId,
     );
@@ -299,7 +349,7 @@ export const demoLaborRepository: LaborRepository = {
       existing.quantityPresent = quantity;
       existing.estimatedCostPaise = Math.round((existing.dailyRatePaiseSnapshot ?? 0) * quantity);
       if (notes !== undefined) existing.notes = notes;
-      if (contractorId !== undefined) existing.contractorId = contractorId;
+      if (effContractor !== undefined) existing.contractorId = effContractor;
       existing.updatedAt = new Date().toISOString();
     } else {
       const rate = subcategories.find((s) => s.id === subcategoryId)?.dailyRatePaise ?? null;
@@ -312,7 +362,7 @@ export const demoLaborRepository: LaborRepository = {
         dailyRatePaiseSnapshot: rate,
         estimatedCostPaise: Math.round((rate ?? 0) * quantity),
         notes: notes ?? null,
-        contractorId: contractorId ?? null,
+        contractorId: effContractor ?? null,
         clientUuid: uid(),
         updatedAt: new Date().toISOString(),
       });

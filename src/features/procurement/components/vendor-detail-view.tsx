@@ -133,11 +133,11 @@ export function VendorDetailView({ id }: { id: string }) {
       )}
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <StatTile label="Total purchase"><MoneyText paise={vendor.totalPurchasedPaise} compact /></StatTile>
+        <StatTile label="Total purchase"><MoneyText paise={vendor.totalPurchasedPaise} /></StatTile>
         <StatTile label={filterName ? `Outstanding · ${filterName}` : "Outstanding"}>
           <span className={cn(scopedOutstanding > 0 && "text-warning-foreground")}>
-            <MoneyText paise={Math.max(0, scopedOutstanding)} compact />
-            {scopedOutstanding < 0 && <span className="ml-1 text-xs font-normal text-success-foreground">(advance <MoneyText paise={-scopedOutstanding} compact />)</span>}
+            <MoneyText paise={Math.max(0, scopedOutstanding)} />
+            {scopedOutstanding < 0 && <span className="ml-1 text-xs font-normal text-success-foreground">(advance <MoneyText paise={-scopedOutstanding} />)</span>}
           </span>
         </StatTile>
         <StatTile label="Projects served">{vendor.projectsServed}</StatTile>
@@ -218,9 +218,9 @@ export function VendorDetailView({ id }: { id: string }) {
                         <span className="block truncate font-medium">{r.project.name}</span>
                         <span className="block font-mono text-xs text-foreground-subtle">{r.project.code}</span>
                       </span>
-                      <span className="text-right font-mono"><MoneyText paise={r.purchaseValuePaise} compact /></span>
+                      <span className="text-right font-mono"><MoneyText paise={r.purchaseValuePaise} /></span>
                       <span className={cn("text-right font-mono", r.outstandingPaise > 0 && "text-warning-foreground")}>
-                        <MoneyText paise={Math.max(0, r.outstandingPaise)} compact />
+                        <MoneyText paise={Math.max(0, r.outstandingPaise)} />
                       </span>
                       <span className="text-right text-foreground-muted">{r.poCount}</span>
                       <span className="text-right text-xs text-foreground-muted">{r.lastSupplyDate ? formatDate(r.lastSupplyDate) : "—"}</span>
@@ -367,15 +367,15 @@ export function VendorDetailView({ id }: { id: string }) {
         <TabsContent value="outstanding">
           <div className="space-y-6">
             <div className="grid grid-cols-3 gap-3">
-              <StatTile label="0–30 days"><MoneyText paise={aging?.d0_30 ?? 0} compact /></StatTile>
+              <StatTile label="0–30 days"><MoneyText paise={aging?.d0_30 ?? 0} /></StatTile>
               <StatTile label="31–60 days">
                 <span className={cn((aging?.d31_60 ?? 0) > 0 && "text-warning-foreground")}>
-                  <MoneyText paise={aging?.d31_60 ?? 0} compact />
+                  <MoneyText paise={aging?.d31_60 ?? 0} />
                 </span>
               </StatTile>
               <StatTile label="60+ days">
                 <span className={cn((aging?.d60_plus ?? 0) > 0 && "text-danger-foreground")}>
-                  <MoneyText paise={aging?.d60_plus ?? 0} compact />
+                  <MoneyText paise={aging?.d60_plus ?? 0} />
                 </span>
               </StatTile>
             </div>
@@ -406,7 +406,7 @@ export function VendorDetailView({ id }: { id: string }) {
                       )}>
                         {r.ageDays}d
                       </span>
-                      <span className="w-28 text-right font-mono font-medium"><MoneyText paise={r.outstandingPaise} compact /></span>
+                      <span className="w-28 text-right font-mono font-medium"><MoneyText paise={r.outstandingPaise} /></span>
                     </Link>
                   ))
                 )}
@@ -463,7 +463,7 @@ function PORow({ po, showProject }: { po: import("../types").PurchaseOrderListIt
         </p>
       </div>
       <PaymentStatusBadge status={po.paymentStatus} />
-      <span className="font-mono text-sm"><MoneyText paise={po.totalPaise} compact /></span>
+      <span className="font-mono text-sm"><MoneyText paise={po.totalPaise} /></span>
       <StatusBadge meta={PO_STATUS_META} value={po.status} />
     </Link>
   );

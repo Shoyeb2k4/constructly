@@ -28,7 +28,7 @@ import { EmptyState } from "@/components/patterns/empty-state";
 import { RowsSkeleton } from "@/components/patterns/loading-state";
 import { MoneyText } from "@/components/patterns/money-text";
 import { cn } from "@/lib/utils";
-import { useProjects } from "@/features/projects/hooks";
+import { useProjects, useContractorAssignments } from "@/features/projects/hooks";
 import { useContractors } from "@/features/contractors/hooks";
 import { useAttendanceSheet, useSetQuantity, useCopyPreviousDay } from "../../hooks";
 import { useCan } from "@/features/rbac/permission-context";
@@ -39,6 +39,9 @@ import { FALLBACK_COLOR } from "../../constants";
 import type { SheetGroup, SheetRow } from "../../types";
 import { SyncChip } from "./sync-chip";
 import { AttendanceCalendar } from "./attendance-calendar";
+
+const NONE = "NONE";
+type ContractorOption = { id: string; name: string };
 
 function SubcategoryRow({
   row,
@@ -161,31 +164,60 @@ function CategoryGroup({
   onToggle,
   onCommit,
   canMark,
+  contractorOptions,
+  selectedContractorId,
+  onSelectContractor,
 }: {
   group: SheetGroup;
   collapsed: boolean;
   onToggle: () => void;
   onCommit: (subcategoryId: string, quantity: number, notes?: string | null) => void;
   canMark: boolean;
+  /** Contractors assigned to THIS category on the selected project. */
+  contractorOptions: ContractorOption[];
+  selectedContractorId: string | null;
+  onSelectContractor: (id: string | null) => void;
 }) {
   return (
     <div className="border-b border-border last:border-0">
-      <button
-        onClick={onToggle}
-        aria-expanded={!collapsed}
-        className="flex w-full items-center gap-3 px-3 py-3 text-left transition-colors hover:bg-surface-muted/40"
-      >
-        <ChevronDown
-          className={cn("size-4 shrink-0 text-foreground-subtle transition-transform", collapsed && "-rotate-90")}
-        />
-        <span className="size-2.5 shrink-0 rounded-full" style={{ background: group.color ?? FALLBACK_COLOR }} />
-        <span className="min-w-0 flex-1 truncate text-sm font-semibold">{group.name}</span>
-        {group.totalPresent > 0 && (
-          <span className="rounded-full bg-surface-muted px-2 py-0.5 font-mono text-xs font-medium tabular-nums">
-            {group.totalPresent}
-          </span>
+      <div className="flex w-full items-center gap-3 px-3 py-3">
+        <button
+          onClick={onToggle}
+          aria-expanded={!collapsed}
+          className="flex min-w-0 flex-1 items-center gap-3 text-left"
+        >
+          <ChevronDown
+            className={cn("size-4 shrink-0 text-foreground-subtle transition-transform", collapsed && "-rotate-90")}
+          />
+          <span className="size-2.5 shrink-0 rounded-full" style={{ background: group.color ?? FALLBACK_COLOR }} />
+          <span className="min-w-0 flex-1 truncate text-sm font-semibold">{group.name}</span>
+          {group.totalPresent > 0 && (
+            <span className="rounded-full bg-surface-muted px-2 py-0.5 font-mono text-xs font-medium tabular-nums">
+              {group.totalPresent}
+            </span>
+          )}
+        </button>
+        {/* Per-category contractor: options come from the project's assignments
+            for this category, so a contractor can never be recorded against a
+            category they aren't assigned to on this project. */}
+        {contractorOptions.length > 0 && (
+          <Select
+            value={selectedContractorId ?? NONE}
+            onValueChange={(v) => onSelectContractor(v === NONE ? null : v)}
+            disabled={!canMark}
+          >
+            <SelectTrigger className="h-8 w-40 shrink-0" aria-label={`Contractor for ${group.name}`}>
+              <SelectValue placeholder="No contractor" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={NONE}>No contractor</SelectItem>
+              {contractorOptions.map((c) => (
+                <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         )}
-      </button>
+      </div>
       {!collapsed &&
         group.rows.map((row) => (
           <SubcategoryRow
@@ -220,35 +252,74 @@ export function AttendanceView() {
   const projectName = active.find((p) => p.id === projectId)?.name ?? "";
 
   const { data: sheet, isLoading } = useAttendanceSheet(projectId, date);
-  const { data: contractors = [] } = useContractors({ status: "ACTIVE" });
+  // Contractors assigned to THIS project (the only ones selectable in Labour).
+  const { data: assignments = [] } = useContractorAssignments(projectId);
+  // All contractors — used ONLY to resolve the display name of a contractorId
+  // already recorded on a row that is no longer in the project's assignments
+  // (e.g. an assignment removed after attendance was recorded). Never widens
+  // the selectable options.
+  const { data: allContractors = [] } = useContractors({});
   const setQuantity = useSetQuantity(pid, date);
   const copyPrev = useCopyPreviousDay(pid, date);
 
-  // Sheet-level contractor attribution. Kept in sync with the loaded sheet via
-  // the derive-during-render pattern (no effect) so a fresh project/date or a
-  // server refresh reflects the persisted attribution.
-  const [contractorId, setContractorId] = React.useState<string | null>(null);
-  const attrKey = `${pid}|${date}|${sheet?.contractorId ?? ""}`;
-  const [syncedAttrKey, setSyncedAttrKey] = React.useState(attrKey);
-  if (syncedAttrKey !== attrKey) {
-    setSyncedAttrKey(attrKey);
-    setContractorId(sheet?.contractorId ?? null);
+  // categoryId → contractors assigned to it on this project.
+  const contractorsByCategory = React.useMemo(() => {
+    const m = new Map<string, ContractorOption[]>();
+    for (const a of assignments) {
+      const list = m.get(a.labourCategoryId) ?? [];
+      list.push({ id: a.contractorId, name: a.contractorName });
+      m.set(a.labourCategoryId, list);
+    }
+    return m;
+  }, [assignments]);
+  const nameById = React.useMemo(
+    () => new Map(allContractors.map((c) => [c.id, c.name])),
+    [allContractors],
+  );
+
+  // Per-category contractor overrides (categoryId → contractorId | null).
+  // Reset whenever the project/date changes so a stale selection can never
+  // survive a project switch (derive-during-render, no effect).
+  const [overrides, setOverrides] = React.useState<Record<string, string | null>>({});
+  const scopeKey = `${pid}|${date}`;
+  const [syncedScope, setSyncedScope] = React.useState(scopeKey);
+  if (syncedScope !== scopeKey) {
+    setSyncedScope(scopeKey);
+    setOverrides({});
   }
 
-  function changeContractor(next: string | null) {
-    setContractorId(next);
-    // Re-attribute every already-recorded row to the newly chosen contractor.
-    if (sheet) {
-      for (const g of sheet.groups) {
-        for (const r of g.rows) {
-          if (r.quantity > 0)
-            setQuantity.mutate({
-              subcategoryId: r.subcategoryId,
-              quantity: r.quantity,
-              notes: r.notes,
-              contractorId: next,
-            });
-        }
+  /** The contractor a category's rows are (or will be) attributed to. */
+  function effectiveContractor(group: SheetGroup): string | null {
+    if (group.categoryId in overrides) return overrides[group.categoryId];
+    const recorded = group.rows.find((r) => r.quantity > 0 && r.contractorId)?.contractorId;
+    if (recorded) return recorded;
+    const assigned = contractorsByCategory.get(group.categoryId) ?? [];
+    return assigned.length === 1 ? assigned[0].id : null;
+  }
+
+  /** Selectable + display options for a category's contractor picker. Options
+   *  are the project's assignments for that category; a stale recorded value is
+   *  appended so it still renders (but re-selecting is limited to assignments). */
+  function optionsFor(group: SheetGroup, selected: string | null): ContractorOption[] {
+    const assigned = contractorsByCategory.get(group.categoryId) ?? [];
+    if (selected && !assigned.some((c) => c.id === selected)) {
+      return [...assigned, { id: selected, name: nameById.get(selected) ?? "Unassigned contractor" }];
+    }
+    return assigned;
+  }
+
+  function selectContractorForGroup(group: SheetGroup, next: string | null) {
+    setOverrides((prev) => ({ ...prev, [group.categoryId]: next }));
+    // Re-attribute every already-recorded row in this category to the new
+    // contractor (mirrors the old sheet-level behaviour, now per category).
+    for (const r of group.rows) {
+      if (r.quantity > 0) {
+        setQuantity.mutate({
+          subcategoryId: r.subcategoryId,
+          quantity: r.quantity,
+          notes: r.notes,
+          contractorId: next,
+        });
       }
     }
   }
@@ -330,22 +401,6 @@ export function AttendanceView() {
               Copy yesterday
             </Button>
           )}
-          {contractors.length > 0 && (
-            <Select
-              value={contractorId ?? "NONE"}
-              onValueChange={(v) => changeContractor(v === "NONE" ? null : v)}
-            >
-              <SelectTrigger className="w-52" aria-label="Attribute to contractor">
-                <SelectValue placeholder="No contractor" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="NONE">No contractor</SelectItem>
-                {contractors.map((c) => (
-                  <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
           {canExport && (
             <div className="ml-auto flex items-center gap-2">
               <Button variant="ghost" size="sm" disabled={!sheet || sheet.totalPresent === 0}
@@ -361,6 +416,16 @@ export function AttendanceView() {
             </div>
           )}
         </div>
+
+        {assignments.length === 0 && (
+          <p className="rounded-lg border border-dashed border-border bg-surface-muted/40 px-3 py-2 text-xs text-foreground-muted">
+            No contractors are assigned to this project.{" "}
+            <Link href={`/projects/${pid}`} className="text-primary hover:underline">
+              Assign contractors
+            </Link>{" "}
+            to attribute this labour for weekly settlement.
+          </p>
+        )}
       </div>
 
       {isLoading ? (
@@ -378,18 +443,24 @@ export function AttendanceView() {
         />
       ) : (
         <div className="overflow-hidden rounded-xl border border-border bg-surface">
-          {sheet.groups.map((group) => (
-            <CategoryGroup
-              key={group.categoryId}
-              group={group}
-              collapsed={collapsed.has(group.categoryId)}
-              canMark={canMark}
-              onToggle={() => toggleGroup(group.categoryId)}
-              onCommit={(subcategoryId, quantity, notes) =>
-                setQuantity.mutate({ subcategoryId, quantity, notes, contractorId })
-              }
-            />
-          ))}
+          {sheet.groups.map((group) => {
+            const selected = effectiveContractor(group);
+            return (
+              <CategoryGroup
+                key={group.categoryId}
+                group={group}
+                collapsed={collapsed.has(group.categoryId)}
+                canMark={canMark}
+                contractorOptions={optionsFor(group, selected)}
+                selectedContractorId={selected}
+                onSelectContractor={(id) => selectContractorForGroup(group, id)}
+                onToggle={() => toggleGroup(group.categoryId)}
+                onCommit={(subcategoryId, quantity, notes) =>
+                  setQuantity.mutate({ subcategoryId, quantity, notes, contractorId: selected })
+                }
+              />
+            );
+          })}
         </div>
       )}
 

@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db/prisma";
 import { requirePermission, hasPermission } from "@/lib/auth/permissions";
 import type { SessionUser } from "@/lib/auth/types";
 import { rowTotals, sheetTotals, summarize } from "../calc";
+import { isAttributionEligible } from "./assignment-eligibility";
 import type {
   AttendanceFilters,
   AttendanceRecordItem,
@@ -84,7 +85,41 @@ export async function updateCategory(id: string, patch: UpdateCategoryInput): Pr
 
 export async function deleteCategory(id: string): Promise<void> {
   const user = await requirePermission("labour.archive");
-  await prisma.labourCategory.delete({ where: { id, companyId: user.company.id } });
+  // Physical deletion cascade-deletes subcategories → attendance AND
+  // project_contractor_assignments. Both must be preserved: attendance is
+  // labour history; assignments are config that must only ever change through
+  // the audited setContractorAssignments path (which logs
+  // project.contractors_updated). So a category is deletable ONLY when it has
+  // neither attendance nor assignments.
+  //
+  // Race safety: run the check + delete in one transaction and lock the parent
+  // rows FOR UPDATE. A concurrent assignment insert takes FOR KEY SHARE on the
+  // category row (blocked by our lock on it); a concurrent attendance insert
+  // takes FOR KEY SHARE on a subcategory row (blocked by our lock on the
+  // subcategories). So nothing can slip in between the check and the delete.
+  await prisma.$transaction(async (tx) => {
+    const locked = await tx.$queryRaw<{ id: string }[]>`
+      SELECT id FROM labour_categories
+      WHERE id = ${id}::uuid AND company_id = ${user.company.id}::uuid
+      FOR UPDATE`;
+    if (locked.length === 0) throw new Error("NOT_FOUND");
+    // Lock existing subcategories so concurrent attendance inserts block.
+    await tx.$queryRaw`
+      SELECT id FROM labour_subcategories
+      WHERE category_id = ${id}::uuid AND company_id = ${user.company.id}::uuid
+      FOR UPDATE`;
+
+    const attendance = await tx.labourAttendance.count({
+      where: { companyId: user.company.id, subcategory: { categoryId: id } },
+    });
+    if (attendance > 0) throw new Error("CATEGORY_HAS_ATTENDANCE");
+    const assignments = await tx.projectContractorAssignment.count({
+      where: { companyId: user.company.id, labourCategoryId: id },
+    });
+    if (assignments > 0) throw new Error("CATEGORY_HAS_ASSIGNMENTS");
+
+    await tx.labourCategory.delete({ where: { id, companyId: user.company.id } });
+  });
 }
 
 export async function reorderCategories(orderedIds: string[]): Promise<void> {
@@ -134,7 +169,23 @@ export async function updateSubcategory(id: string, patch: UpdateSubcategoryInpu
 
 export async function deleteSubcategory(id: string): Promise<void> {
   const user = await requirePermission("labour.archive");
-  await prisma.labourSubcategory.delete({ where: { id, companyId: user.company.id } });
+  // History guard (same rationale as deleteCategory): a subcategory with
+  // recorded attendance cannot be physically deleted (that cascade-deletes its
+  // attendance history). Assignments reference the CATEGORY, not the
+  // subcategory, so there's no assignment guard here. Race-safe via a FOR UPDATE
+  // lock on the subcategory row (concurrent attendance inserts block).
+  await prisma.$transaction(async (tx) => {
+    const locked = await tx.$queryRaw<{ id: string }[]>`
+      SELECT id FROM labour_subcategories
+      WHERE id = ${id}::uuid AND company_id = ${user.company.id}::uuid
+      FOR UPDATE`;
+    if (locked.length === 0) throw new Error("NOT_FOUND");
+    const attendance = await tx.labourAttendance.count({
+      where: { companyId: user.company.id, labourSubcategoryId: id },
+    });
+    if (attendance > 0) throw new Error("SUBCATEGORY_HAS_ATTENDANCE");
+    await tx.labourSubcategory.delete({ where: { id, companyId: user.company.id } });
+  });
 }
 
 export async function reorderSubcategories(categoryId: string, orderedIds: string[]): Promise<void> {
@@ -201,8 +252,22 @@ export async function setQuantity(
   }
   const key = { projectId, date: new Date(date), labourSubcategoryId: subcategoryId };
   if (quantity <= 0) {
+    // Deleting a row: attribution is moot, so no eligibility check (avoids
+    // rejecting a legitimate clear that happens to carry a contractorId).
     await prisma.labourAttendance.deleteMany({ where: { ...key, companyId: user.company.id } });
   } else {
+    // Eligibility (exact): a contractor may only be attributed to a project for
+    // the SUBCATEGORY'S CATEGORY — resolved server-side, never trusted from the
+    // client (blocks Civil-only "Pappu" being written against "Tiles"). Null is
+    // always allowed; historical rows are never revalidated (read paths don't
+    // call this). The UI only offers a category's assigned contractors — this is
+    // the server backstop against a stale/manipulated client.
+    if (
+      contractorId != null &&
+      !(await isAttributionEligible(user.company.id, projectId, contractorId, subcategoryId))
+    ) {
+      throw new Error("CONTRACTOR_NOT_ASSIGNED");
+    }
     // Snapshot the rate on FIRST recording; edits keep it (ADR-0022).
     const existing = await prisma.labourAttendance.findUnique({
       where: { projectId_date_labourSubcategoryId: key },

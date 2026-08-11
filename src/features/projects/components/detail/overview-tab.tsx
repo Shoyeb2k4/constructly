@@ -9,6 +9,7 @@ import {
   Mail,
   CalendarDays,
   ExternalLink,
+  HardHat,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { TagChip } from "../tag-chip";
@@ -17,6 +18,7 @@ import { SectionEditButton } from "./section-edit-sheet";
 import { ClientSiteEditSheet } from "./client-site-edit-sheet";
 import { DetailsEditSheet } from "./details-edit-sheet";
 import { LocationEditSheet } from "./location-edit-sheet";
+import { ContractorsEditSheet } from "./contractors-edit-sheet";
 import type { ProjectDetail } from "../../types";
 import { TYPE_LABEL } from "../../constants";
 import { formatDate, deadlineCountdown } from "../../format";
@@ -41,7 +43,7 @@ function Line({
   );
 }
 
-type Section = "client" | "details" | "location";
+type Section = "client" | "details" | "location" | "contractors";
 
 export function OverviewTab({
   project,
@@ -78,6 +80,40 @@ export function OverviewTab({
             <Line icon={Phone} label="Phone" value={project.clientPhone} />
             <Line icon={Mail} label="Email" value={project.clientEmail} />
             <Line icon={MapPin} label="Site address" value={project.siteAddress} />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex-row items-center justify-between">
+            <CardTitle>Contractors</CardTitle>
+            {canEdit && (
+              <SectionEditButton label="Edit contractors" onClick={() => setEditing("contractors")} />
+            )}
+          </CardHeader>
+          <CardContent className="py-0">
+            {project.contractorAssignments.length === 0 ? (
+              <p className="py-4 text-sm text-foreground-subtle">
+                No contractors assigned yet.
+              </p>
+            ) : (
+              <div className="divide-y divide-border">
+                {project.contractorAssignments.map((a) => (
+                  <div key={a.id} className="flex items-center justify-between gap-3 py-2.5">
+                    <span className="flex min-w-0 items-center gap-2 text-sm font-medium">
+                      <HardHat className="size-4 shrink-0 text-foreground-subtle" />
+                      <span className="truncate">{a.contractorName}</span>
+                    </span>
+                    <span className="flex shrink-0 items-center gap-1.5 text-sm text-foreground-muted">
+                      <span
+                        className="size-2 rounded-full"
+                        style={{ background: a.categoryColor ?? "var(--color-foreground-subtle)" }}
+                      />
+                      {a.categoryName}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>
@@ -171,6 +207,12 @@ export function OverviewTab({
             gpsLng={project.gpsLng}
             open={editing === "location"}
             onOpenChange={toggle("location")}
+          />
+          <ContractorsEditSheet
+            projectId={project.id}
+            initial={project.contractorAssignments}
+            open={editing === "contractors"}
+            onOpenChange={toggle("contractors")}
           />
         </>
       )}

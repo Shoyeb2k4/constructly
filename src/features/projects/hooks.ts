@@ -8,6 +8,7 @@ import {
 import { toast } from "sonner";
 import { projectsApi, projectKeys } from "./data";
 import type {
+  ContractorAssignmentInput,
   CreateProjectInput,
   ProjectDetail,
   ProjectFilters,
@@ -60,6 +61,36 @@ export function useSetProjectRetention() {
       toast.success("Retention policy updated");
     },
     onError: () => toast.error("Couldn't update the retention policy"),
+  });
+}
+
+/** A project's contractor↔category assignments. Also powers the Labour
+ *  attendance contractor list (which contractors work this project). */
+export function useContractorAssignments(projectId: string | null, enabled = true) {
+  return useQuery({
+    queryKey: projectKeys.contractorAssignments(projectId ?? "none"),
+    queryFn: () => projectsApi.listContractorAssignments(projectId!),
+    enabled: enabled && !!projectId,
+    staleTime: 60_000,
+  });
+}
+
+/** Replace a project's assignments (Contractors edit sheet). Refreshes the
+ *  detail and the assignment list so Labour picks up the change immediately. */
+export function useSetContractorAssignments(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (rows: ContractorAssignmentInput[]) =>
+      projectsApi.setContractorAssignments(projectId, rows),
+    onSuccess: (items) => {
+      qc.setQueryData(projectKeys.contractorAssignments(projectId), items);
+      qc.invalidateQueries({ queryKey: projectKeys.detail(projectId) });
+      qc.invalidateQueries({ queryKey: projectKeys.contractorAssignments(projectId) });
+      // Attendance derives its per-category contractor from assignments.
+      qc.invalidateQueries({ queryKey: ["labor"] });
+      toast.success("Contractors updated");
+    },
+    onError: () => toast.error("Couldn't update contractors"),
   });
 }
 

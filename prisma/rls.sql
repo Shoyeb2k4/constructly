@@ -148,6 +148,15 @@ create policy labour_subcategories_tenant on public.labour_subcategories
   for all using (company_id = public.current_company_id())
   with check (company_id = public.current_company_id());
 
+-- Project ↔ contractor assignments (eligibility/config). Project-scoped like
+-- labour_attendance/deadlines/documents: a PM can only see/mutate assignments
+-- for projects they can access (Owner sees all). RLS is a backstop — the server
+-- also enforces projects.edit + ownership via requireProjectWrite.
+alter table public.project_contractor_assignments enable row level security;
+create policy project_contractor_assignments_all on public.project_contractor_assignments
+  for all using (company_id = public.current_company_id() and public.can_access_project(project_id))
+  with check (company_id = public.current_company_id() and public.can_access_project(project_id));
+
 -- ── labour_attendance (tenant + PM-scoped via project access) ──────────
 alter table public.labour_attendance enable row level security;
 create policy labour_attendance_all on public.labour_attendance

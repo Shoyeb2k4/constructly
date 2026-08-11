@@ -1,5 +1,7 @@
 import type {
+  ContractorAssignmentInput,
   CreateProjectInput,
+  ProjectContractorAssignmentItem,
   ProjectDetail,
   ProjectFilters,
   ProjectListItem,
@@ -41,4 +43,12 @@ export interface ProjectsRepository {
   removeDocument(projectId: string, docId: string): Promise<ProjectDetail>;
 
   listManagers(): Promise<Manager[]>;
+
+  /** Project → contractor assignments (by work category). */
+  listContractorAssignments(projectId: string): Promise<ProjectContractorAssignmentItem[]>;
+  /** Transactional replace-all of a project's assignments. */
+  setContractorAssignments(
+    projectId: string,
+    rows: ContractorAssignmentInput[],
+  ): Promise<ProjectContractorAssignmentItem[]>;
 }
