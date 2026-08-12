@@ -10,6 +10,11 @@ import type {
   UpdateProjectInput,
 } from "./types";
 
+/** A create that failed because the explicit code is already taken. Returned
+ *  (not thrown) so it survives the Server Action boundary — thrown error
+ *  messages are masked in production, which would surface as a raw 500. */
+export type DuplicateCodeResult = { duplicateCode: true };
+
 /**
  * The projects data contract. Two implementations satisfy it:
  *  - demo (client, localStorage-backed) — used in demo mode
@@ -19,7 +24,7 @@ import type {
 export interface ProjectsRepository {
   list(filters?: ProjectFilters): Promise<ProjectListItem[]>;
   get(id: string): Promise<ProjectDetail | null>;
-  create(input: CreateProjectInput): Promise<ProjectDetail>;
+  create(input: CreateProjectInput): Promise<ProjectDetail | DuplicateCodeResult>;
   update(id: string, patch: UpdateProjectInput): Promise<ProjectDetail>;
   changeStage(id: string, stage: ProjectStage): Promise<ProjectListItem>;
   assignManager(id: string, pmId: string | null): Promise<ProjectListItem>;

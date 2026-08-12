@@ -1,12 +1,21 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { demoRepository as repo } from "./demo-repository";
+import type { ProjectDetail } from "../types";
 
 beforeEach(() => {
   localStorage.clear();
 });
 
+/** Create + narrow away the duplicate-code result (asserted explicitly in the
+ *  dedicated duplicate test), so call sites can use the project directly. */
+async function mk(input: Parameters<typeof repo.create>[0]): Promise<ProjectDetail> {
+  const res = await repo.create(input);
+  if ("duplicateCode" in res) throw new Error("unexpected duplicateCode in test");
+  return res;
+}
+
 const newProject = () =>
-  repo.create({
+  mk({
     name: "Test Tower",
     type: "COMMERCIAL",
     budgetPaise: 10_000_000,
@@ -62,7 +71,7 @@ describe("demoRepository", () => {
   // differ.
   it("auto-codes ignore custom/non-PRJ codes and never collide", async () => {
     // A custom code that sorts lexicographically above every PRJ-#### code.
-    const custom = await repo.create({
+    const custom = await mk({
       name: "Custom Code",
       code: "ZZZ-CUSTOM",
       type: "COMMERCIAL",
@@ -83,17 +92,18 @@ describe("demoRepository", () => {
     expect(new Set(codes).size).toBe(codes.length);
   });
 
-  it("rejects an explicit duplicate code with DUPLICATE_CODE", async () => {
+  it("returns a duplicateCode marker for an explicit duplicate code", async () => {
     const p = await newProject();
-    await expect(
-      repo.create({
-        name: "Clash",
-        code: p.code,
-        type: "COMMERCIAL",
-        budgetPaise: 0,
-        contractValuePaise: 0,
-      }),
-    ).rejects.toThrow(/DUPLICATE_CODE/);
+    const before = (await repo.list()).length;
+    const res = await repo.create({
+      name: "Clash",
+      code: p.code,
+      type: "COMMERCIAL",
+      budgetPaise: 0,
+      contractValuePaise: 0,
+    });
+    expect(res).toEqual({ duplicateCode: true }); // not thrown, not created
+    expect((await repo.list()).length).toBe(before);
   });
 
   it("archives and restores", async () => {

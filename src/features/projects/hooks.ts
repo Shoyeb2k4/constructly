@@ -100,7 +100,14 @@ export function useSetProjectContractors(projectId: string) {
 export function useCreateProject() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (input: CreateProjectInput) => projectsApi.create(input),
+    // The action RETURNS a duplicate-code marker (it can't throw across the
+    // Server Action boundary without becoming a masked 500). Re-throw it here,
+    // client-side, so the message is intact for onError + the form's catch.
+    mutationFn: async (input: CreateProjectInput) => {
+      const res = await projectsApi.create(input);
+      if ("duplicateCode" in res) throw new Error("DUPLICATE_CODE");
+      return res;
+    },
     onSuccess: (project) => {
       qc.invalidateQueries({ queryKey: projectKeys.all });
       toast.success("Project created", { description: project.name });

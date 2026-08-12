@@ -12,11 +12,21 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { demoRepository as projects } from "./demo/demo-repository";
 import { demoContractorsRepository as contractors } from "@/features/contractors/demo/demo-repository";
 import { demoLaborRepository as labor } from "@/features/labor/demo/demo-repository";
-import type { ProjectContractorInput } from "./types";
+import type { ProjectContractorInput, ProjectDetail } from "./types";
 
 beforeEach(() => {
   localStorage.clear();
 });
+
+/** Create + narrow away the duplicate-code result these happy-path creates
+ *  never hit, so call sites can use the project directly. */
+async function mkProject(
+  input: Parameters<typeof projects.create>[0],
+): Promise<ProjectDetail> {
+  const res = await projects["create"](input);
+  if ("duplicateCode" in res) throw new Error("unexpected duplicateCode in test");
+  return res;
+}
 
 async function setup() {
   const cats = await labor.listCategories();
@@ -62,7 +72,7 @@ describe("§33 — canonical Anjali Residency scenario", () => {
       },
       { contractorId: SADDAM.id, labourRates: [{ labourSubcategoryId: CENTERING, ratePaise: 95000 }] },
     ];
-    const anjali = await projects.create({ ...base, name: "Anjali Residency", contractors: config });
+    const anjali = await mkProject({ ...base, name: "Anjali Residency", contractors: config });
 
     await labor.setQuantity(anjali.id, DATE, MASON, 8, null, PAPPU.id);
     await labor.setQuantity(anjali.id, DATE, HELPER, 5, null, PAPPU.id);
@@ -93,7 +103,7 @@ describe("§33 — canonical Anjali Residency scenario", () => {
 
   it("editing a contractor's rate later never rewrites recorded attendance", async () => {
     const { PAPPU, CENTERING } = await setup();
-    const anjali = await projects.create({
+    const anjali = await mkProject({
       ...base,
       name: "Anjali",
       contractors: [{ contractorId: PAPPU.id, labourRates: [{ labourSubcategoryId: CENTERING, ratePaise: 85000 }] }],
@@ -114,12 +124,12 @@ describe("§33 — canonical Anjali Residency scenario", () => {
 describe("§34 — project-specific rates, config edits, eligibility", () => {
   it("same contractor + labour type has different rates on different projects", async () => {
     const { PAPPU, MASON } = await setup();
-    const anjali = await projects.create({
+    const anjali = await mkProject({
       ...base,
       name: "Anjali",
       contractors: [{ contractorId: PAPPU.id, labourRates: [{ labourSubcategoryId: MASON, ratePaise: 80000 }] }],
     });
-    const township = await projects.create({
+    const township = await mkProject({
       ...base,
       name: "Township",
       contractors: [{ contractorId: PAPPU.id, labourRates: [{ labourSubcategoryId: MASON, ratePaise: 90000 }] }],
@@ -134,7 +144,7 @@ describe("§34 — project-specific rates, config edits, eligibility", () => {
 
   it("project switching surfaces only that project's contractors", async () => {
     const { PAPPU, SADDAM, OTHER, MASON, CENTERING } = await setup();
-    const anjali = await projects.create({
+    const anjali = await mkProject({
       ...base,
       name: "Anjali",
       contractors: [
@@ -142,7 +152,7 @@ describe("§34 — project-specific rates, config edits, eligibility", () => {
         { contractorId: SADDAM.id, labourRates: [{ labourSubcategoryId: CENTERING, ratePaise: 95000 }] },
       ],
     });
-    const township = await projects.create({
+    const township = await mkProject({
       ...base,
       name: "Township",
       contractors: [{ contractorId: OTHER.id, labourRates: [{ labourSubcategoryId: MASON, ratePaise: 88000 }] }],
@@ -157,7 +167,7 @@ describe("§34 — project-specific rates, config edits, eligibility", () => {
 
   it("edits + removes contractor config transactionally", async () => {
     const { PAPPU, SADDAM, MASON, CENTERING } = await setup();
-    const p = await projects.create({ ...base, name: "Edit me" });
+    const p = await mkProject({ ...base, name: "Edit me" });
     await projects.setProjectContractors(p.id, [
       { contractorId: PAPPU.id, labourRates: [{ labourSubcategoryId: MASON, ratePaise: 80000 }] },
       { contractorId: SADDAM.id, labourRates: [{ labourSubcategoryId: CENTERING, ratePaise: 95000 }] },
@@ -177,7 +187,7 @@ describe("§34 — project-specific rates, config edits, eligibility", () => {
 
   it("drops unknown contractor + unconfigured labour types (company-ownership parity)", async () => {
     const { PAPPU, MASON } = await setup();
-    const ghost = await projects.create({
+    const ghost = await mkProject({
       ...base,
       name: "Ghost",
       contractors: [
@@ -194,7 +204,7 @@ describe("§34 — project-specific rates, config edits, eligibility", () => {
 
   it("degrades an ineligible contractor attribution to null; keeps eligible ones", async () => {
     const { PAPPU, OTHER, MASON } = await setup();
-    const anjali = await projects.create({
+    const anjali = await mkProject({
       ...base,
       name: "Anjali",
       contractors: [{ contractorId: PAPPU.id, labourRates: [{ labourSubcategoryId: MASON, ratePaise: 80000 }] }],
@@ -215,7 +225,7 @@ describe("taxonomy deletion guards respect contractor config (demo parity)", () 
     const { PAPPU } = await setup();
     const fresh = await labor.createCategory({ name: "Civil (fresh)" });
     const sub = await labor.createSubcategory({ categoryId: fresh.id, name: "Mason", dailyRatePaise: 80000 });
-    await projects.create({
+    await mkProject({
       ...base,
       name: "Assigned",
       contractors: [{ contractorId: PAPPU.id, labourRates: [{ labourSubcategoryId: sub.id, ratePaise: 80000 }] }],

@@ -22,6 +22,7 @@ import { Prisma } from "@/generated/prisma";
 import { spendByProject, projectSpend } from "@/features/budget/server-actions";
 import { purgeEligibleAt, isValidRetention } from "../retention";
 import { updateProjectInputSchema, projectContractorsSchema } from "../schema";
+import type { DuplicateCodeResult } from "../repository";
 
 /**
  * Server-side projects API. Authorization is RBAC-first: every action requires a
@@ -470,7 +471,7 @@ function isDuplicateCodeError(e: unknown): boolean {
 
 export async function createProject(
   input: CreateProjectInput,
-): Promise<ProjectDetail> {
+): Promise<ProjectDetail | DuplicateCodeResult> {
   const user = await requirePermission("projects.create");
   createProjectInputSchema.parse(input);
   // Validate contractor config BEFORE any write so a bad row aborts the whole
@@ -481,19 +482,22 @@ export async function createProject(
   );
 
   // Blank code (client sends undefined; guard "" too) → auto-generate. An
-  // explicit duplicate fails with a clear domain error, not a raw 500.
+  // explicit duplicate RETURNS a typed result (not a throw): Server Action error
+  // messages are masked in production, so a throw would reach the client as a
+  // raw 500 the form can't identify. Returning survives the boundary cleanly.
   const explicitCode = input.code?.trim() || null;
   if (explicitCode) {
     const clash = await prisma.project.findFirst({
       where: { companyId: user.company.id, code: explicitCode },
       select: { id: true },
     });
-    if (clash) throw new Error("DUPLICATE_CODE");
+    if (clash) return { duplicateCode: true };
   }
 
-  const created = await insertProjectWithCode(user, input, explicitCode, contractors);
-  await logActivity(user, created.id, "project.created", "created the project");
-  return (await getProject(created.id))!;
+  const outcome = await insertProjectWithCode(user, input, explicitCode, contractors);
+  if ("duplicateCode" in outcome) return outcome;
+  await logActivity(user, outcome.id, "project.created", "created the project");
+  return (await getProject(outcome.id))!;
 }
 
 /**
@@ -507,7 +511,7 @@ async function insertProjectWithCode(
   input: CreateProjectInput,
   explicitCode: string | null,
   contractors: ProjectContractorInput[],
-): Promise<{ id: string }> {
+): Promise<{ id: string } | DuplicateCodeResult> {
   const MAX_ATTEMPTS = 5;
   let lastErr: unknown;
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
@@ -545,10 +549,10 @@ async function insertProjectWithCode(
         return project;
       });
     } catch (e) {
-      // An explicit code that lost a race is a clean domain error; an auto code
-      // simply regenerates from the new MAX and retries.
+      // An explicit code that lost a race returns the typed duplicate result; an
+      // auto code simply regenerates from the new MAX and retries.
       if (isDuplicateCodeError(e)) {
-        if (explicitCode) throw new Error("DUPLICATE_CODE");
+        if (explicitCode) return { duplicateCode: true };
         lastErr = e;
         continue;
       }
