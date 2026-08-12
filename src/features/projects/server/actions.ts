@@ -437,14 +437,35 @@ export async function getProject(id: string): Promise<ProjectDetail | null> {
   };
 }
 
+/**
+ * Next auto project code (`PRJ-####`) for a company. Takes the numeric MAX over
+ * ONLY `PRJ-####`-pattern codes, so custom/legacy codes ("6565", "QA-LAB-1") are
+ * ignored and can never reset the counter to 1 into a collision.
+ *
+ * MUST run OUTSIDE an interactive `$transaction`: it issues its own query on the
+ * global client, and awaiting that from inside a transaction holds the pooled
+ * connection hostage and deadlocks until the tx times out (P2028 → 500).
+ */
 async function nextCode(companyId: string): Promise<string> {
-  const last = await prisma.project.findFirst({
-    where: { companyId },
-    orderBy: { code: "desc" },
-    select: { code: true },
-  });
-  const n = Number(/PRJ-(\d+)/.exec(last?.code ?? "")?.[1] ?? 0) + 1;
+  const rows = await prisma.$queryRaw<Array<{ max: number | null }>>(
+    Prisma.sql`
+      SELECT MAX(CAST(substring(code from '^PRJ-([0-9]+)$') AS INTEGER)) AS max
+      FROM projects
+      WHERE company_id = ${companyId}::uuid AND code ~ '^PRJ-[0-9]+$'
+    `,
+  );
+  const n = Number(rows[0]?.max ?? 0) + 1;
   return `PRJ-${String(n).padStart(4, "0")}`;
+}
+
+/** True for the unique-constraint violation on a project's (company, code). */
+function isDuplicateCodeError(e: unknown): boolean {
+  if (!(e instanceof Prisma.PrismaClientKnownRequestError) || e.code !== "P2002") {
+    return false;
+  }
+  const target = e.meta?.target;
+  const fields = Array.isArray(target) ? target.map(String) : [String(target ?? "")];
+  return fields.some((f) => f.includes("code"));
 }
 
 export async function createProject(
@@ -458,39 +479,83 @@ export async function createProject(
     user.company.id,
     projectContractorsSchema.parse(input.contractors ?? []),
   );
-  const created = await prisma.$transaction(async (tx) => {
-    const project = await tx.project.create({
-      data: {
-        companyId: user.company.id,
-        code: input.code ?? (await nextCode(user.company.id)),
-        name: input.name,
-        type: input.type,
-        clientName: input.clientName ?? null,
-        clientContact: input.clientContact ?? null,
-        clientPhone: input.clientPhone ?? null,
-        clientEmail: input.clientEmail ?? null,
-        siteAddress: input.siteAddress ?? null,
-        gpsLat: input.gpsLat ?? null,
-        gpsLng: input.gpsLng ?? null,
-        budgetPaise: BigInt(input.budgetPaise),
-        contractValuePaise: BigInt(input.contractValuePaise),
-        procurementBudgetPaise:
-          input.procurementBudgetPaise != null ? BigInt(input.procurementBudgetPaise) : null,
-        startDate: input.startDate ? new Date(input.startDate) : null,
-        expectedCompletionDate: input.expectedCompletionDate
-          ? new Date(input.expectedCompletionDate)
-          : null,
-        tags: input.tags ?? [],
-        pmId: input.pmId ?? null,
-        createdById: user.id,
-      },
+
+  // Blank code (client sends undefined; guard "" too) → auto-generate. An
+  // explicit duplicate fails with a clear domain error, not a raw 500.
+  const explicitCode = input.code?.trim() || null;
+  if (explicitCode) {
+    const clash = await prisma.project.findFirst({
+      where: { companyId: user.company.id, code: explicitCode },
       select: { id: true },
     });
-    await writeProjectContractors(tx, user.company.id, project.id, contractors);
-    return project;
-  });
+    if (clash) throw new Error("DUPLICATE_CODE");
+  }
+
+  const created = await insertProjectWithCode(user, input, explicitCode, contractors);
   await logActivity(user, created.id, "project.created", "created the project");
   return (await getProject(created.id))!;
+}
+
+/**
+ * Insert a project (+ contractor config) with a resolved code, retrying auto
+ * codes on a unique-code collision (covers the small race between generating a
+ * code and inserting it). The transaction body performs NO code lookup — doing
+ * that inside the tx deadlocks the pooled connection until it times out (P2028).
+ */
+async function insertProjectWithCode(
+  user: SessionUser,
+  input: CreateProjectInput,
+  explicitCode: string | null,
+  contractors: ProjectContractorInput[],
+): Promise<{ id: string }> {
+  const MAX_ATTEMPTS = 5;
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    const code = explicitCode ?? (await nextCode(user.company.id));
+    try {
+      return await prisma.$transaction(async (tx) => {
+        const project = await tx.project.create({
+          data: {
+            companyId: user.company.id,
+            code,
+            name: input.name,
+            type: input.type,
+            clientName: input.clientName ?? null,
+            clientContact: input.clientContact ?? null,
+            clientPhone: input.clientPhone ?? null,
+            clientEmail: input.clientEmail ?? null,
+            siteAddress: input.siteAddress ?? null,
+            gpsLat: input.gpsLat ?? null,
+            gpsLng: input.gpsLng ?? null,
+            budgetPaise: BigInt(input.budgetPaise),
+            contractValuePaise: BigInt(input.contractValuePaise),
+            procurementBudgetPaise:
+              input.procurementBudgetPaise != null ? BigInt(input.procurementBudgetPaise) : null,
+            startDate: input.startDate ? new Date(input.startDate) : null,
+            expectedCompletionDate: input.expectedCompletionDate
+              ? new Date(input.expectedCompletionDate)
+              : null,
+            tags: input.tags ?? [],
+            pmId: input.pmId ?? null,
+            createdById: user.id,
+          },
+          select: { id: true },
+        });
+        await writeProjectContractors(tx, user.company.id, project.id, contractors);
+        return project;
+      });
+    } catch (e) {
+      // An explicit code that lost a race is a clean domain error; an auto code
+      // simply regenerates from the new MAX and retries.
+      if (isDuplicateCodeError(e)) {
+        if (explicitCode) throw new Error("DUPLICATE_CODE");
+        lastErr = e;
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw lastErr ?? new Error("CODE_GENERATION_FAILED");
 }
 
 export async function updateProject(
@@ -579,48 +644,61 @@ export async function duplicateProject(id: string): Promise<ProjectDetail> {
       },
     },
   });
-  const created = await prisma.$transaction(async (tx) => {
-    const project = await tx.project.create({
-      data: {
-        companyId: user.company.id,
-        code: await nextCode(user.company.id),
-        name: `${src.name} (copy)`,
-        type: src.type,
-        clientName: src.clientName,
-        clientContact: src.clientContact,
-        clientPhone: src.clientPhone,
-        clientEmail: src.clientEmail,
-        siteAddress: src.siteAddress,
-        gpsLat: src.gpsLat,
-        gpsLng: src.gpsLng,
-        budgetPaise: src.budgetPaise,
-        contractValuePaise: src.contractValuePaise,
-        procurementBudgetPaise: src.procurementBudgetPaise,
-        tags: src.tags,
-        pmId: src.pmId,
-        createdById: user.id,
-      },
-      select: { id: true },
-    });
-    await writeProjectContractors(
-      tx,
-      user.company.id,
-      project.id,
-      src.projectContractors.map((pc) => ({
-        contractorId: pc.contractorId,
-        contractRatePaise: pc.contractRatePaise,
-        contractRateUnit: pc.contractRateUnit,
-        labourRates: pc.labourRates.map((lr) => ({
-          labourSubcategoryId: lr.labourSubcategoryId,
-          ratePaise: lr.ratePaise,
-          rateUnit: lr.rateUnit,
-        })),
-      })),
-    );
-    return project;
-  });
-  await logActivity(user, created.id, "project.duplicated", `duplicated from ${src.code}`);
-  return (await getProject(created.id))!;
+  const contractors: ProjectContractorInput[] = src.projectContractors.map((pc) => ({
+    contractorId: pc.contractorId,
+    contractRatePaise: pc.contractRatePaise,
+    contractRateUnit: pc.contractRateUnit,
+    labourRates: pc.labourRates.map((lr) => ({
+      labourSubcategoryId: lr.labourSubcategoryId,
+      ratePaise: lr.ratePaise,
+      rateUnit: lr.rateUnit,
+    })),
+  }));
+
+  // Same P2028-safe pattern as create: the auto code is resolved OUTSIDE the
+  // transaction, with a retry on a unique-code collision.
+  const MAX_ATTEMPTS = 5;
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    const code = await nextCode(user.company.id);
+    try {
+      const created = await prisma.$transaction(async (tx) => {
+        const project = await tx.project.create({
+          data: {
+            companyId: user.company.id,
+            code,
+            name: `${src.name} (copy)`,
+            type: src.type,
+            clientName: src.clientName,
+            clientContact: src.clientContact,
+            clientPhone: src.clientPhone,
+            clientEmail: src.clientEmail,
+            siteAddress: src.siteAddress,
+            gpsLat: src.gpsLat,
+            gpsLng: src.gpsLng,
+            budgetPaise: src.budgetPaise,
+            contractValuePaise: src.contractValuePaise,
+            procurementBudgetPaise: src.procurementBudgetPaise,
+            tags: src.tags,
+            pmId: src.pmId,
+            createdById: user.id,
+          },
+          select: { id: true },
+        });
+        await writeProjectContractors(tx, user.company.id, project.id, contractors);
+        return project;
+      });
+      await logActivity(user, created.id, "project.duplicated", `duplicated from ${src.code}`);
+      return (await getProject(created.id))!;
+    } catch (e) {
+      if (isDuplicateCodeError(e)) {
+        lastErr = e;
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw lastErr ?? new Error("CODE_GENERATION_FAILED");
 }
 
 export async function setArchived(

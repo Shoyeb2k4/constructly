@@ -57,6 +57,45 @@ describe("demoRepository", () => {
     expect(copy.code).not.toBe(p.code);
   });
 
+  // Regression for Bug 1: auto-code generation must ignore non-PRJ codes so it
+  // never resets the counter into a collision, and consecutive auto codes must
+  // differ.
+  it("auto-codes ignore custom/non-PRJ codes and never collide", async () => {
+    // A custom code that sorts lexicographically above every PRJ-#### code.
+    const custom = await repo.create({
+      name: "Custom Code",
+      code: "ZZZ-CUSTOM",
+      type: "COMMERCIAL",
+      budgetPaise: 0,
+      contractValuePaise: 0,
+    });
+    expect(custom.code).toBe("ZZZ-CUSTOM");
+
+    const a = await newProject();
+    const b = await newProject();
+    expect(a.code).toMatch(/^PRJ-\d{4}$/);
+    expect(b.code).toMatch(/^PRJ-\d{4}$/);
+    expect(a.code).not.toBe(b.code); // consecutive autos differ
+    expect(a.code).not.toBe("ZZZ-CUSTOM");
+
+    // No two projects ever share a code.
+    const codes = (await repo.list()).map((p) => p.code);
+    expect(new Set(codes).size).toBe(codes.length);
+  });
+
+  it("rejects an explicit duplicate code with DUPLICATE_CODE", async () => {
+    const p = await newProject();
+    await expect(
+      repo.create({
+        name: "Clash",
+        code: p.code,
+        type: "COMMERCIAL",
+        budgetPaise: 0,
+        contractValuePaise: 0,
+      }),
+    ).rejects.toThrow(/DUPLICATE_CODE/);
+  });
+
   it("archives and restores", async () => {
     const p = await newProject();
     await repo.setArchived(p.id, true);

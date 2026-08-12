@@ -1,9 +1,15 @@
 /** Presentation helpers for the projects feature. */
 
+// Pin to IST. Without an explicit timeZone the formatter uses the runtime's
+// zone — UTC on the server (Vercel), IST in the browser — so a timestamp near
+// the day boundary renders as two different dates on server vs client, which
+// hydration rejects (React #418). The app is India-first, so IST is also the
+// correct zone to display.
 const dateFmt = new Intl.DateTimeFormat("en-IN", {
   day: "2-digit",
   month: "short",
   year: "numeric",
+  timeZone: "Asia/Kolkata",
 });
 
 export function formatDate(iso: string | null): string {

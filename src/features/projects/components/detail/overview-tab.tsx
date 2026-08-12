@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import {
   MapPin,
   User as UserIcon,
@@ -54,8 +55,37 @@ export function OverviewTab({
   canEdit?: boolean;
 }) {
   const cd = deadlineCountdown(project.expectedCompletionDate);
-  const [editing, setEditing] = React.useState<Section | null>(null);
+
+  // Deep link from the Labour → Attendance "Configure contractors" CTA:
+  // /projects/:id?section=contractors&edit=1 opens the contractors editor and
+  // scrolls its card into view.
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const autoEditContractors =
+    searchParams.get("section") === "contractors" && searchParams.get("edit") === "1";
+
+  // Derive the initial open sheet during render (no setState-in-effect).
+  const [editing, setEditing] = React.useState<Section | null>(
+    autoEditContractors && canEdit ? "contractors" : null,
+  );
   const toggle = (s: Section) => (o: boolean) => setEditing(o ? s : null);
+
+  // The effect performs only external side-effects — scroll the card into view
+  // and strip the deep-link params (so a refresh or Back doesn't re-open it).
+  const deepLinkHandled = React.useRef(false);
+  React.useEffect(() => {
+    if (deepLinkHandled.current || !autoEditContractors) return;
+    deepLinkHandled.current = true;
+    document
+      .getElementById("contractors-card")
+      ?.scrollIntoView({ behavior: "smooth", block: "center" });
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("section");
+    params.delete("edit");
+    const qs = params.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+  }, [autoEditContractors, searchParams, pathname, router]);
 
   return (
     <div className="grid gap-6 lg:grid-cols-3">
@@ -84,7 +114,7 @@ export function OverviewTab({
           </CardContent>
         </Card>
 
-        <Card>
+        <Card id="contractors-card" className="scroll-mt-20">
           <CardHeader className="flex-row items-center justify-between">
             <CardTitle>Contractors</CardTitle>
             {canEdit && (

@@ -48,6 +48,7 @@ export function CreateProjectSheet({
     handleSubmit,
     control,
     reset,
+    setError,
     formState: { errors },
   } = useForm<ProjectFormValues>({
     resolver: zodResolver(projectFormSchema),
@@ -64,12 +65,21 @@ export function CreateProjectSheet({
 
   const onSubmit = handleSubmit(async (values) => {
     const parsed = projectFormSchema.parse({ ...values, tags });
-    const project = await create.mutateAsync({
-      ...formToInput(parsed),
-      contractors: cleanAssignments(assignments),
-    });
-    close();
-    router.push(`/projects/${project.id}`);
+    try {
+      const project = await create.mutateAsync({
+        ...formToInput(parsed),
+        contractors: cleanAssignments(assignments),
+      });
+      close();
+      router.push(`/projects/${project.id}`);
+    } catch (e) {
+      // A duplicate code is the one expected, user-fixable failure — anchor it to
+      // the Code field so the sheet stays open for a quick edit. Everything else
+      // is handled by the mutation's onError toast.
+      if (/DUPLICATE_CODE/i.test(e instanceof Error ? e.message : "")) {
+        setError("code", { message: "This project code is already in use" });
+      }
+    }
   });
 
   function addTag() {

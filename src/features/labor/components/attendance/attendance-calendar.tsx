@@ -55,10 +55,12 @@ export function AttendanceCalendar({
   }, [records]);
 
   const today = todayISO();
-  const monthLabel = new Date(cursor.year, cursor.month, 1).toLocaleDateString(undefined, {
-    month: "long",
-    year: "numeric",
-  });
+  // Build from a UTC noon anchor and format in IST so the label never drifts a
+  // month across a timezone boundary (and stays stable server↔client).
+  const monthLabel = new Date(Date.UTC(cursor.year, cursor.month, 1, 12)).toLocaleDateString(
+    "en-IN",
+    { month: "long", year: "numeric", timeZone: "Asia/Kolkata" },
+  );
 
   function shiftMonth(delta: number) {
     setCursor((c) => {

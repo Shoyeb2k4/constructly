@@ -105,7 +105,13 @@ export function useCreateProject() {
       qc.invalidateQueries({ queryKey: projectKeys.all });
       toast.success("Project created", { description: project.name });
     },
-    onError: () => toast.error("Couldn't create the project"),
+    // A duplicate code is surfaced inline on the form's Code field, so skip the
+    // generic toast for it.
+    onError: (e) => {
+      if (!/DUPLICATE_CODE/i.test(e instanceof Error ? e.message : "")) {
+        toast.error("Couldn't create the project");
+      }
+    },
   });
 }
 

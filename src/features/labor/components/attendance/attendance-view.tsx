@@ -3,6 +3,7 @@
 import "../../sync";
 import * as React from "react";
 import Link from "next/link";
+import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import {
   CalendarCheck,
   CalendarDays,
@@ -268,13 +269,28 @@ export function AttendanceView() {
     [projects],
   );
 
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const urlProject = searchParams.get("project");
+
+  // The user's in-session / last-remembered choice (used when the URL has no
+  // project). Selection is derived below so back/forward and deep links work
+  // without a setState-in-effect.
   const [selectedId, setSelectedId] = React.useState<string | null>(() => getLastProject());
   const [date, setDate] = React.useState(() => todayISO());
   const [collapsed, setCollapsed] = React.useState<Set<string>>(new Set());
   const [showCalendar, setShowCalendar] = React.useState(false);
 
+  // Selection priority: a valid `?project=` in the URL (deep links, the "Record
+  // attendance" link from the project page, back/forward) wins; otherwise the
+  // last-remembered project; otherwise the first active project. An unknown or
+  // inaccessible id falls through safely to the first active project.
+  const preferredId = urlProject ?? selectedId;
   const projectId =
-    selectedId && active.some((p) => p.id === selectedId) ? selectedId : (active[0]?.id ?? null);
+    preferredId && active.some((p) => p.id === preferredId)
+      ? preferredId
+      : (active[0]?.id ?? null);
   const pid = projectId ?? "";
   const projectName = active.find((p) => p.id === projectId)?.name ?? "";
 
@@ -290,6 +306,12 @@ export function AttendanceView() {
   function selectProject(id: string) {
     setSelectedId(id);
     setLastProject(id);
+    // Mirror the selection into the URL so it's shareable and survives refresh /
+    // back-forward. `replace` (not push) keeps history clean; scroll:false avoids
+    // jumping to the top on every switch.
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("project", id);
+    router.replace(`${pathname}?${params.toString()}`, { scroll: false });
   }
   /** Group collapse key (contractorId, or a stable token for unattributed). */
   const groupKey = (g: SheetGroup) => g.contractorId ?? "__unattributed__";
@@ -385,7 +407,10 @@ export function AttendanceView() {
         {sheet && !hasConfigured && (
           <p className="rounded-lg border border-dashed border-border bg-surface-muted/40 px-3 py-2 text-xs text-foreground-muted">
             No contractors are configured for this project.{" "}
-            <Link href={`/projects/${pid}`} className="text-primary hover:underline">
+            <Link
+              href={`/projects/${pid}?section=contractors&edit=1`}
+              className="text-primary hover:underline"
+            >
               Add contractors
             </Link>{" "}
             and the labour types they supply to record attendance.
@@ -402,7 +427,9 @@ export function AttendanceView() {
           description="Add contractors and their labour types to this project, then record attendance here."
           action={
             <Button asChild variant="primary" size="sm">
-              <Link href={`/projects/${pid}`}>Configure contractors</Link>
+              <Link href={`/projects/${pid}?section=contractors&edit=1`}>
+                Configure contractors
+              </Link>
             </Button>
           }
         />

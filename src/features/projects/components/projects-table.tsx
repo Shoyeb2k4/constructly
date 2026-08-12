@@ -12,7 +12,7 @@ import {
 } from "@/components/patterns/status-badge";
 import { cn } from "@/lib/utils";
 import type { ProjectListItem } from "../types";
-import { deadlineCountdown } from "../format";
+import { deadlineCountdown, formatDate } from "../format";
 import { useToggleFavorite } from "../hooks";
 import { BudgetMeter } from "./budget-meter";
 import { TagChip } from "./tag-chip";
@@ -69,7 +69,7 @@ function Row({
               <span
                 title={
                   project.purgeEligibleAt
-                    ? `Eligible for admin cleanup on ${new Date(project.purgeEligibleAt).toLocaleDateString()}`
+                    ? `Eligible for admin cleanup on ${formatDate(project.purgeEligibleAt)}`
                     : "Recoverable indefinitely"
                 }
                 className="shrink-0 rounded-full bg-danger-subtle px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-danger-foreground"

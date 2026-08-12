@@ -227,13 +227,19 @@ export const demoRepository: ProjectsRepository = {
 
   async create(input: CreateProjectInput) {
     const rows = load();
+    // Parity with the server: blank code auto-generates; an explicit duplicate
+    // is a clear domain error, not a silent overwrite.
+    const explicitCode = input.code?.trim() || null;
+    if (explicitCode && rows.some((p) => p.code === explicitCode)) {
+      throw new Error("DUPLICATE_CODE");
+    }
     const nowIso = new Date().toISOString();
     const pm = input.pmId
       ? DEMO_MANAGERS.find((m) => m.id === input.pmId) ?? null
       : null;
     const project: ProjectDetail = {
       id: uid(),
-      code: input.code ?? nextCode(rows),
+      code: explicitCode ?? nextCode(rows),
       name: input.name,
       type: input.type,
       stage: "CREATED",
