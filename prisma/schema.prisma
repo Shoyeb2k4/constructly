@@ -171,6 +171,8 @@ model User {
   companyRole            CompanyRole?      @relation("UserCompanyRole", fields: [companyRoleId], references: [id], onDelete: SetNull)
   roleAssignments        UserRole[]        @relation("UserRoleMember")
   rolesAssignedByMe      UserRole[]        @relation("UserRoleAssignedBy")
+  deletedLabourCategories    LabourCategory[]    @relation("LabourCategoryDeletedBy")
+  deletedLabourSubcategories LabourSubcategory[] @relation("LabourSubcategoryDeletedBy")
 
   @@index([companyId])
   @@index([companyRoleId])
@@ -517,15 +519,27 @@ model LabourCategory {
   name         String
   color        String?
   displayOrder Int      @default(0) @map("display_order")
+  /// Owner Force Delete soft-deletes (deactivates) a group: `deletedAt` set, the
+  /// row hidden from all master data / config / pickers, but KEPT so historical
+  /// attendance still resolves its name (never a physical delete — see
+  /// features/labor/server/actions.ts forceDeleteCategory). deletedById records
+  /// the acting Owner.
+  deletedAt    DateTime? @map("deleted_at")
+  deletedById  String?   @map("deleted_by_id") @db.Uuid
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
   company       Company                       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  deletedBy     User?                         @relation("LabourCategoryDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
   subcategories LabourSubcategory[]
   assignments   ProjectContractorAssignment[]
 
-  @@unique([companyId, name])
+  // Name uniqueness is enforced by a PARTIAL unique index (WHERE deleted_at IS
+  // NULL) so a name freed by a soft-delete can be reused — see
+  // prisma/migration-labour-force-delete.sql. Prisma can't express partial
+  // unique, so the compile-time @@unique is intentionally omitted here.
   @@index([companyId, displayOrder])
+  @@index([companyId, deletedAt])
   @@map("labour_categories")
 }
 
@@ -539,16 +553,25 @@ model LabourSubcategory {
   name           String
   dailyRatePaise Int?     @map("daily_rate_paise")
   displayOrder   Int      @default(0) @map("display_order")
+  /// Owner Force Delete soft-deletes (deactivates) a labour type: `deletedAt`
+  /// set, the row hidden from master data / config / pickers but KEPT so
+  /// historical attendance still resolves its name. See forceDeleteSubcategory.
+  deletedAt      DateTime? @map("deleted_at")
+  deletedById    String?   @map("deleted_by_id") @db.Uuid
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")
 
   company                Company                       @relation(fields: [companyId], references: [id], onDelete: Cascade)
   category               LabourCategory                @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  deletedBy              User?                         @relation("LabourSubcategoryDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
   attendance             LabourAttendance[]
   projectContractorRates ProjectContractorLabourRate[]
 
-  @@unique([categoryId, name])
+  // Name uniqueness within a group is a PARTIAL unique index (WHERE deleted_at
+  // IS NULL) — see prisma/migration-labour-force-delete.sql. Compile-time
+  // @@unique intentionally omitted (Prisma can't express partial unique).
   @@index([companyId, categoryId, displayOrder])
+  @@index([companyId, deletedAt])
   @@map("labour_subcategories")
 }
 

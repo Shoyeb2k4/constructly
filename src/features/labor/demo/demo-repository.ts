@@ -6,6 +6,8 @@ import type {
   CategoryWithSubs,
   CreateCategoryInput,
   CreateSubcategoryInput,
+  ForceDeleteImpact,
+  ForceDeleteKind,
   SheetGroup,
   SheetRow,
   UpdateCategoryInput,
@@ -115,6 +117,57 @@ function subcategoryHasAssignmentsDemo(subcategoryId: string): boolean {
   return loadProjectsRaw().some((p) =>
     p.contractors?.some((c) => c.labourRates.some((r) => r.labourSubcategoryId === subcategoryId)),
   );
+}
+
+/**
+ * Force-delete config removal (demo parity): the project-contractor labour rates
+ * are the "config" the server hard-deletes. Count (apply=false) or actually
+ * remove (apply=true) every rate referencing a subcategory in `subIds`, and
+ * report how many rates / distinct projects were affected.
+ */
+function collectRatesForSubs(subIds: Set<string>, apply: boolean): { rates: number; projects: number } {
+  const projects = loadProjectsRaw();
+  let rates = 0;
+  const affected = new Set<string>();
+  for (const p of projects) {
+    for (const c of p.contractors ?? []) {
+      const matching = c.labourRates.filter((r) => subIds.has(r.labourSubcategoryId));
+      if (matching.length === 0) continue;
+      rates += matching.length;
+      affected.add(p.id);
+      if (apply) c.labourRates = c.labourRates.filter((r) => !subIds.has(r.labourSubcategoryId));
+    }
+  }
+  if (apply && rates > 0) write(K.projects, projects);
+  return { rates, projects: affected.size };
+}
+
+/** Compute the Force Delete impact from the demo stores (no mutation). */
+function demoImpact(kind: ForceDeleteKind, id: string): ForceDeleteImpact {
+  const subs = loadSubcategories();
+  const name =
+    kind === "category"
+      ? loadCategories().find((c) => c.id === id && !c.deletedAt)?.name
+      : subs.find((s) => s.id === id && !s.deletedAt)?.name;
+  if (name === undefined) throw new Error("NOT_FOUND");
+  const subIds =
+    kind === "subcategory"
+      ? new Set([id])
+      : new Set(subs.filter((s) => s.categoryId === id && !s.deletedAt).map((s) => s.id));
+  const { rates, projects } = collectRatesForSubs(subIds, false);
+  const attendancePreserved = loadAttendance().filter((a) => subIds.has(a.labourSubcategoryId)).length;
+  return {
+    kind,
+    id,
+    name,
+    labourGroups: kind === "category" ? 1 : 0,
+    labourTypes: subIds.size,
+    projectContractorRates: rates,
+    projectContractorAssignments: 0, // demo has no separate assignment store
+    attendancePreserved,
+    settlementsPreserved: 0, // demo tracks no settlements in this repo
+    projectsAffected: projects,
+  };
 }
 
 /** Demo parity for server eligibility (subcategory-exact): does the contractor
@@ -329,16 +382,26 @@ function applyFilters(records: LabourAttendanceRecord[], f: AttendanceFilters): 
 
 export const demoLaborRepository: LaborRepository = {
   async listCategories(): Promise<CategoryWithSubs[]> {
-    const subs = loadSubcategories();
-    return [...loadCategories()].sort(byOrder).map((c) => ({
-      ...c,
-      subcategories: subs.filter((s) => s.categoryId === c.id).sort(byOrder),
-    }));
+    // Active master data only — soft-deleted groups/types stay in the store so
+    // history resolves their names, but are hidden here.
+    const subs = loadSubcategories().filter((s) => !s.deletedAt);
+    return [...loadCategories()]
+      .filter((c) => !c.deletedAt)
+      .sort(byOrder)
+      .map((c) => ({
+        ...c,
+        subcategories: subs.filter((s) => s.categoryId === c.id).sort(byOrder),
+      }));
   },
 
   async createCategory(input: CreateCategoryInput) {
     const rows = loadCategories();
-    if (rows.some((c) => c.name.trim().toLowerCase() === input.name.trim().toLowerCase())) {
+    // Only ACTIVE rows collide — a name freed by a soft-delete can be reused.
+    if (
+      rows.some(
+        (c) => !c.deletedAt && c.name.trim().toLowerCase() === input.name.trim().toLowerCase(),
+      )
+    ) {
       throw new Error("DUPLICATE_NAME");
     }
     const rec: CategoryRecord = {
@@ -391,6 +454,7 @@ export const demoLaborRepository: LaborRepository = {
     if (
       rows.some(
         (s) =>
+          !s.deletedAt &&
           s.categoryId === input.categoryId &&
           s.name.trim().toLowerCase() === input.name.trim().toLowerCase(),
       )
@@ -433,6 +497,40 @@ export const demoLaborRepository: LaborRepository = {
       throw new Error("SUBCATEGORY_HAS_ASSIGNMENTS");
     }
     write(K.subcategories, loadSubcategories().filter((s) => s.id !== id));
+  },
+
+  // ── Owner Force Delete (demo parity) ─────────────────────────────────────
+  async forceDeletePreview(kind: ForceDeleteKind, id: string): Promise<ForceDeleteImpact> {
+    return demoImpact(kind, id);
+  },
+
+  async forceDeleteCategory(id, ack) {
+    if (ack !== "DELETE") throw new Error("CONFIRMATION_REQUIRED");
+    const cats = loadCategories();
+    const cat = cats.find((c) => c.id === id && !c.deletedAt);
+    if (!cat) throw new Error("NOT_FOUND");
+    const subs = loadSubcategories();
+    const subIds = new Set(subs.filter((s) => s.categoryId === id && !s.deletedAt).map((s) => s.id));
+    // Remove pure config (project-contractor rates); attendance is left intact.
+    collectRatesForSubs(subIds, true);
+    // Soft-delete the group + its active types — kept for history readability.
+    const now = new Date().toISOString();
+    subs.forEach((s) => {
+      if (subIds.has(s.id)) s.deletedAt = now;
+    });
+    cat.deletedAt = now;
+    write(K.subcategories, subs);
+    write(K.categories, cats);
+  },
+
+  async forceDeleteSubcategory(id, ack) {
+    if (ack !== "DELETE") throw new Error("CONFIRMATION_REQUIRED");
+    const subs = loadSubcategories();
+    const sub = subs.find((s) => s.id === id && !s.deletedAt);
+    if (!sub) throw new Error("NOT_FOUND");
+    collectRatesForSubs(new Set([id]), true);
+    sub.deletedAt = new Date().toISOString();
+    write(K.subcategories, subs);
   },
 
   async reorderSubcategories(categoryId, orderedIds) {

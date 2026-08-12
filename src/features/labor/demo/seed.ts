@@ -6,6 +6,9 @@ export interface CategoryRecord {
   name: string;
   color: string | null;
   displayOrder: number;
+  /** Owner Force Delete soft-delete marker (ISO). Absent/null ⇒ active. Kept so
+   *  historical attendance still resolves the name (parity with the server). */
+  deletedAt?: string | null;
 }
 
 export interface SubcategoryRecord {
@@ -14,6 +17,8 @@ export interface SubcategoryRecord {
   name: string;
   dailyRatePaise: number | null;
   displayOrder: number;
+  /** Soft-delete marker (ISO). Absent/null ⇒ active. */
+  deletedAt?: string | null;
 }
 
 export interface LabourAttendanceRecord {

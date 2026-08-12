@@ -11,22 +11,37 @@ import type { Permission, PermissionModule } from "./permissions";
  * requirePermission(). Never rely on these checks for security.
  */
 const PermissionContext = React.createContext<ReadonlySet<string>>(new Set());
+/** Owner status — resolved server-side, never a permission (can't be delegated).
+ *  Gates Owner-exclusive UI like labour Force Delete. */
+const OwnerContext = React.createContext<boolean>(false);
 
 export function PermissionProvider({
   permissions,
+  isOwner = false,
   children,
 }: {
   permissions: string[];
+  isOwner?: boolean;
   children: React.ReactNode;
 }) {
   const set = React.useMemo(() => new Set(permissions), [permissions]);
-  return <PermissionContext.Provider value={set}>{children}</PermissionContext.Provider>;
+  return (
+    <OwnerContext.Provider value={isOwner}>
+      <PermissionContext.Provider value={set}>{children}</PermissionContext.Provider>
+    </OwnerContext.Provider>
+  );
 }
 
 /** Returns a `can(permission)` predicate bound to the current user's grants. */
 export function useCan(): (permission: Permission) => boolean {
   const set = React.useContext(PermissionContext);
   return React.useCallback((permission: Permission) => set.has(permission), [set]);
+}
+
+/** True when the current user is the protected Owner. UI convenience only — the
+ *  server always re-checks via requireOwner(). */
+export function useIsOwner(): boolean {
+  return React.useContext(OwnerContext);
 }
 
 /**

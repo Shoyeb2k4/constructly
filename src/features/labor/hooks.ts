@@ -9,6 +9,7 @@ import type {
   AttendanceSheet,
   CreateCategoryInput,
   CreateSubcategoryInput,
+  ForceDeleteKind,
   UpdateCategoryInput,
   UpdateSubcategoryInput,
 } from "./types";
@@ -17,6 +18,17 @@ import type {
 
 export function useCategories() {
   return useQuery({ queryKey: laborKeys.categories, queryFn: () => laborApi.listCategories() });
+}
+
+/** Impact preview for an Owner Force Delete. Fetches only when a target is set
+ *  (i.e. the confirmation dialog is open). */
+export function useForceDeletePreview(target: { kind: ForceDeleteKind; id: string } | null) {
+  return useQuery({
+    queryKey: ["labor", "force-delete-preview", target?.kind, target?.id],
+    queryFn: () => laborApi.forceDeletePreview(target!.kind, target!.id),
+    enabled: !!target,
+    staleTime: 0,
+  });
 }
 export function useAttendanceSheet(projectId: string | null, date: string) {
   return useQuery({
@@ -174,6 +186,36 @@ export function useHierarchyMutations() {
     onSettled: () => qc.invalidateQueries({ queryKey: laborKeys.all }),
   });
 
+  // Owner Force Delete — deactivates a referenced group/type, preserving history.
+  const forceDeleteFailToast = (e: unknown) => {
+    const msg = e instanceof Error ? e.message : "";
+    toast.error(
+      msg === "FORBIDDEN"
+        ? "Only the Owner can force delete"
+        : msg === "CONFIRMATION_REQUIRED"
+          ? "Type DELETE to confirm"
+          : "Couldn't delete — please try again",
+    );
+  };
+  const forceDeleteCategory = useMutation({
+    mutationFn: (v: { id: string; ack: string; name: string }) =>
+      laborApi.forceDeleteCategory(v.id, v.ack),
+    onSuccess: (_r, v) => {
+      invalidateLabour(qc);
+      toast.success(`"${v.name}" deleted`);
+    },
+    onError: forceDeleteFailToast,
+  });
+  const forceDeleteSubcategory = useMutation({
+    mutationFn: (v: { id: string; ack: string; name: string }) =>
+      laborApi.forceDeleteSubcategory(v.id, v.ack),
+    onSuccess: (_r, v) => {
+      invalidateLabour(qc);
+      toast.success(`"${v.name}" deleted`);
+    },
+    onError: forceDeleteFailToast,
+  });
+
   return {
     createCategory,
     updateCategory,
@@ -183,5 +225,7 @@ export function useHierarchyMutations() {
     updateSubcategory,
     deleteSubcategory,
     reorderSubcategories,
+    forceDeleteCategory,
+    forceDeleteSubcategory,
   };
 }

@@ -1,7 +1,8 @@
 "use server";
 
+import { Prisma } from "@/generated/prisma";
 import { prisma } from "@/lib/db/prisma";
-import { requirePermission, hasPermission } from "@/lib/auth/permissions";
+import { requirePermission, requireOwner, hasPermission } from "@/lib/auth/permissions";
 import type { SessionUser } from "@/lib/auth/types";
 import { rowTotals, sheetTotals, summarize } from "../calc";
 import { isAttributionEligible, resolveAttendanceRate } from "./assignment-eligibility";
@@ -12,6 +13,8 @@ import type {
   CategoryWithSubs,
   CreateCategoryInput,
   CreateSubcategoryInput,
+  ForceDeleteImpact,
+  ForceDeleteKind,
   LabourCategory,
   LabourSubcategory,
   LabourSummary,
@@ -59,10 +62,15 @@ const toSubcategory = (s: { id: string; categoryId: string; name: string; dailyR
 
 export async function listCategories(): Promise<CategoryWithSubs[]> {
   const user = await requirePermission("labour.view");
+  // Active master data only: force-deleted groups/types are soft-deleted
+  // (deletedAt set) and hidden here, but KEPT in the DB so historical attendance
+  // still resolves their names.
   const rows = await prisma.labourCategory.findMany({
-    where: { companyId: user.company.id },
+    where: { companyId: user.company.id, deletedAt: null },
     orderBy: { displayOrder: "asc" },
-    include: { subcategories: { orderBy: { displayOrder: "asc" } } },
+    include: {
+      subcategories: { where: { deletedAt: null }, orderBy: { displayOrder: "asc" } },
+    },
   });
   return rows.map((c) => ({ ...toCategory(c), subcategories: c.subcategories.map(toSubcategory) }));
 }
@@ -134,9 +142,10 @@ export async function reorderCategories(orderedIds: string[]): Promise<void> {
 
 export async function createSubcategory(input: CreateSubcategoryInput): Promise<LabourSubcategory> {
   const user = await requirePermission("labour.create");
-  // Tenant guard: the parent category must belong to the caller's company.
+  // Tenant guard: the parent category must belong to the caller's company and
+  // be active (can't add a labour type to a deactivated group).
   const category = await prisma.labourCategory.findFirst({
-    where: { id: input.categoryId, companyId: user.company.id },
+    where: { id: input.categoryId, companyId: user.company.id, deletedAt: null },
     select: { id: true },
   });
   if (!category) throw new Error("NOT_FOUND");
@@ -190,6 +199,210 @@ export async function deleteSubcategory(id: string): Promise<void> {
     });
     if (labourRates > 0) throw new Error("SUBCATEGORY_HAS_ASSIGNMENTS");
     await tx.labourSubcategory.delete({ where: { id, companyId: user.company.id } });
+  });
+}
+
+/* ── Owner Force Delete ──────────────────────────────────────────────────
+ * The Owner's ultimate-authority path: remove a referenced labour group/type
+ * from master data WITHOUT destroying attendance or financial history. The
+ * master row is SOFT-deleted (deletedAt set) — hidden everywhere but kept so
+ * historical attendance still resolves its name (rate + cost were already
+ * snapshotted). Only pure-config rows (ProjectContractorLabourRate,
+ * ProjectContractorAssignment) are truly deleted; attendance keeps its rate
+ * snapshot (its provenance FK is ON DELETE SET NULL). Owner-only + typed-DELETE
+ * confirmation, and every run writes an ActivityLog audit entry.
+ */
+
+/** Compute the removed-vs-preserved impact for a Force Delete (read helper,
+ *  usable with the request `prisma` client or a transaction `tx`). */
+async function computeImpact(
+  db: Prisma.TransactionClient,
+  companyId: string,
+  kind: ForceDeleteKind,
+  id: string,
+  name: string,
+): Promise<ForceDeleteImpact> {
+  // The set of labour-type ids in scope (the single type, or all under a group).
+  const subIds =
+    kind === "subcategory"
+      ? [id]
+      : (
+          await db.labourSubcategory.findMany({
+            where: { companyId, categoryId: id, deletedAt: null },
+            select: { id: true },
+          })
+        ).map((s) => s.id);
+
+  const [projectContractorRates, projectContractorAssignments, attendancePreserved] =
+    await Promise.all([
+      subIds.length
+        ? db.projectContractorLabourRate.count({
+            where: { companyId, labourSubcategoryId: { in: subIds } },
+          })
+        : Promise.resolve(0),
+      kind === "category"
+        ? db.projectContractorAssignment.count({ where: { companyId, labourCategoryId: id } })
+        : Promise.resolve(0),
+      subIds.length
+        ? db.labourAttendance.count({ where: { companyId, labourSubcategoryId: { in: subIds } } })
+        : Promise.resolve(0),
+    ]);
+
+  // Projects whose current config is being removed (rates + category assignments).
+  const [rateProjects, assignmentProjects] = await Promise.all([
+    subIds.length
+      ? db.projectContractorLabourRate.findMany({
+          where: { companyId, labourSubcategoryId: { in: subIds } },
+          select: { projectContractor: { select: { projectId: true } } },
+        })
+      : Promise.resolve([] as { projectContractor: { projectId: string } }[]),
+    kind === "category"
+      ? db.projectContractorAssignment.findMany({
+          where: { companyId, labourCategoryId: id },
+          select: { projectId: true },
+        })
+      : Promise.resolve([] as { projectId: string }[]),
+  ]);
+  const affectedProjectIds = new Set<string>([
+    ...rateProjects.map((r) => r.projectContractor.projectId),
+    ...assignmentProjects.map((a) => a.projectId),
+  ]);
+
+  // Settlements on projects where this labour was actually recorded (all
+  // preserved — settlements never reference the taxonomy). Honest reassurance.
+  const attendanceProjects = subIds.length
+    ? await db.labourAttendance.findMany({
+        where: { companyId, labourSubcategoryId: { in: subIds } },
+        select: { projectId: true },
+        distinct: ["projectId"],
+      })
+    : [];
+  const settlementsPreserved = attendanceProjects.length
+    ? await db.contractorSettlement.count({
+        where: { companyId, projectId: { in: attendanceProjects.map((p) => p.projectId) } },
+      })
+    : 0;
+
+  return {
+    kind,
+    id,
+    name,
+    labourGroups: kind === "category" ? 1 : 0,
+    labourTypes: subIds.length,
+    projectContractorRates,
+    projectContractorAssignments,
+    attendancePreserved,
+    settlementsPreserved,
+    projectsAffected: affectedProjectIds.size,
+  };
+}
+
+/** Owner-only impact preview shown before a Force Delete is confirmed. */
+export async function forceDeletePreview(
+  kind: ForceDeleteKind,
+  id: string,
+): Promise<ForceDeleteImpact> {
+  const user = await requireOwner();
+  const where = { id, companyId: user.company.id, deletedAt: null };
+  const row =
+    kind === "category"
+      ? await prisma.labourCategory.findFirst({ where, select: { name: true } })
+      : await prisma.labourSubcategory.findFirst({ where, select: { name: true } });
+  if (!row) throw new Error("NOT_FOUND");
+  return prisma.$transaction((tx) => computeImpact(tx, user.company.id, kind, id, row.name));
+}
+
+export async function forceDeleteCategory(id: string, ack: string): Promise<void> {
+  const user = await requireOwner();
+  if (ack !== "DELETE") throw new Error("CONFIRMATION_REQUIRED");
+  await prisma.$transaction(async (tx) => {
+    // Lock the group + its types so concurrent attendance/rate inserts block.
+    const locked = await tx.$queryRaw<{ id: string; name: string }[]>`
+      SELECT id, name FROM labour_categories
+      WHERE id = ${id}::uuid AND company_id = ${user.company.id}::uuid AND deleted_at IS NULL
+      FOR UPDATE`;
+    if (locked.length === 0) throw new Error("NOT_FOUND");
+    const name = locked[0].name;
+    await tx.$queryRaw`
+      SELECT id FROM labour_subcategories
+      WHERE category_id = ${id}::uuid AND company_id = ${user.company.id}::uuid
+      FOR UPDATE`;
+
+    const impact = await computeImpact(tx, user.company.id, "category", id, name);
+    const subs = await tx.labourSubcategory.findMany({
+      where: { companyId: user.company.id, categoryId: id },
+      select: { id: true },
+    });
+    const allSubIds = subs.map((s) => s.id);
+
+    // Hard-delete pure config (attendance.projectContractorLabourRateId → SET NULL).
+    if (allSubIds.length) {
+      await tx.projectContractorLabourRate.deleteMany({
+        where: { companyId: user.company.id, labourSubcategoryId: { in: allSubIds } },
+      });
+    }
+    await tx.projectContractorAssignment.deleteMany({
+      where: { companyId: user.company.id, labourCategoryId: id },
+    });
+
+    // Soft-delete master: the group + all its (active) types. History survives.
+    const now = new Date();
+    await tx.labourSubcategory.updateMany({
+      where: { companyId: user.company.id, categoryId: id, deletedAt: null },
+      data: { deletedAt: now, deletedById: user.id },
+    });
+    await tx.labourCategory.update({
+      where: { id, companyId: user.company.id },
+      data: { deletedAt: now, deletedById: user.id },
+    });
+
+    await tx.activityLog.create({
+      data: {
+        companyId: user.company.id,
+        actorId: user.id,
+        action: "labour_category.force_deleted",
+        entityType: "labour_category",
+        entityId: id,
+        summary: `force-deleted labour group "${name}"`,
+        meta: { ...impact, affectedSubcategoryIds: allSubIds } as Prisma.InputJsonValue,
+      },
+    });
+  });
+}
+
+export async function forceDeleteSubcategory(id: string, ack: string): Promise<void> {
+  const user = await requireOwner();
+  if (ack !== "DELETE") throw new Error("CONFIRMATION_REQUIRED");
+  await prisma.$transaction(async (tx) => {
+    const locked = await tx.$queryRaw<{ id: string; name: string }[]>`
+      SELECT id, name FROM labour_subcategories
+      WHERE id = ${id}::uuid AND company_id = ${user.company.id}::uuid AND deleted_at IS NULL
+      FOR UPDATE`;
+    if (locked.length === 0) throw new Error("NOT_FOUND");
+    const name = locked[0].name;
+
+    const impact = await computeImpact(tx, user.company.id, "subcategory", id, name);
+
+    // Hard-delete this type's rate config; attendance keeps its snapshot.
+    await tx.projectContractorLabourRate.deleteMany({
+      where: { companyId: user.company.id, labourSubcategoryId: id },
+    });
+    await tx.labourSubcategory.update({
+      where: { id, companyId: user.company.id },
+      data: { deletedAt: new Date(), deletedById: user.id },
+    });
+
+    await tx.activityLog.create({
+      data: {
+        companyId: user.company.id,
+        actorId: user.id,
+        action: "labour_subcategory.force_deleted",
+        entityType: "labour_subcategory",
+        entityId: id,
+        summary: `force-deleted labour type "${name}"`,
+        meta: impact as unknown as Prisma.InputJsonValue,
+      },
+    });
   });
 }
 

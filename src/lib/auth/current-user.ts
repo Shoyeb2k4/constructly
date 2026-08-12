@@ -48,6 +48,9 @@ export const getCurrentUser = cache(async (): Promise<SessionUser | null> => {
     roles: rolesForResolve.map((r) => ({ isOwner: r.isOwner, permissions: r.permissions })),
     legacyRole: appUser.role as "OWNER" | "PROJECT_MANAGER",
   });
+  // Owner is resolved, never delegated: an assigned owner role OR (pre-backfill)
+  // the legacy OWNER enum. Gates Owner-exclusive actions (labour Force Delete).
+  const isOwner = rolesForResolve.some((r) => r.isOwner) || appUser.role === "OWNER";
 
   return {
     id: appUser.id,
@@ -57,6 +60,7 @@ export const getCurrentUser = cache(async (): Promise<SessionUser | null> => {
     roleId: appUser.companyRoleId ?? null,
     roleName: appUser.companyRole?.name,
     permissions,
+    isOwner,
     company: { id: appUser.company.id, name: appUser.company.name },
   };
 });

@@ -57,3 +57,19 @@ export async function requirePermission(permission: Permission): Promise<Session
   if (!hasPermission(user, permission)) throw new Error("FORBIDDEN");
   return user;
 }
+
+/** Is this user the protected Owner? (Owner-exclusive, never delegated.) */
+export function isOwner(user: SessionUser | null | undefined): boolean {
+  return !!user?.isOwner;
+}
+
+/**
+ * Guard for Owner-exclusive server actions (e.g. labour Force Delete): resolve
+ * the session and require Owner authority, throwing "FORBIDDEN" otherwise.
+ * Distinct from requirePermission — Owner status can't be granted to a role.
+ */
+export async function requireOwner(): Promise<SessionUser> {
+  const user = await requireUser();
+  if (!user.isOwner) throw new Error("FORBIDDEN");
+  return user;
+}

@@ -5,6 +5,8 @@ import type {
   CategoryWithSubs,
   CreateCategoryInput,
   CreateSubcategoryInput,
+  ForceDeleteImpact,
+  ForceDeleteKind,
   LabourCategory,
   LabourSubcategory,
   LabourSummary,
@@ -31,6 +33,15 @@ export interface LaborRepository {
   /** Cascades: removes the subcategory's attendance (UI confirms). */
   deleteSubcategory(id: string): Promise<void>;
   reorderSubcategories(categoryId: string, orderedIds: string[]): Promise<void>;
+
+  // Owner Force Delete — deactivates referenced master data while preserving
+  // attendance/financial history. Owner-only; enforced server-side.
+  /** Read-only impact preview for a Force Delete (counts removed vs preserved). */
+  forceDeletePreview(kind: ForceDeleteKind, id: string): Promise<ForceDeleteImpact>;
+  /** Soft-delete a group + its types, removing dependent config. `ack` must be "DELETE". */
+  forceDeleteCategory(id: string, ack: string): Promise<void>;
+  /** Soft-delete a single labour type, removing dependent config. `ack` must be "DELETE". */
+  forceDeleteSubcategory(id: string, ack: string): Promise<void>;
 
   // Attendance (one row per project + date + subcategory)
   getSheet(projectId: string, date: string): Promise<AttendanceSheet>;

@@ -36,6 +36,36 @@ export interface CreateSubcategoryInput {
 /** categoryId in the patch moves the subcategory to another category. */
 export type UpdateSubcategoryInput = Partial<CreateSubcategoryInput>;
 
+/* ── Owner Force Delete ──────────────────────────────────────────────── */
+
+export type ForceDeleteKind = "category" | "subcategory";
+
+/**
+ * Impact preview for an Owner Force Delete. `remove*` counts are the current
+ * master/config rows that will be deactivated or deleted; `*Preserved` counts
+ * are the historical/financial records that survive untouched (labour history
+ * stays readable via the deactivated — not physically deleted — master row).
+ */
+export interface ForceDeleteImpact {
+  kind: ForceDeleteKind;
+  id: string;
+  name: string;
+  /** Labour groups removed (1 for a category, 0 for a single labour type). */
+  labourGroups: number;
+  /** Labour types (subcategories) deactivated. */
+  labourTypes: number;
+  /** Project-contractor rate configurations that will be removed. */
+  projectContractorRates: number;
+  /** Project-contractor category assignments that will be removed (category only). */
+  projectContractorAssignments: number;
+  /** Attendance records preserved as read-only history. */
+  attendancePreserved: number;
+  /** Contractor settlements preserved on affected projects. */
+  settlementsPreserved: number;
+  /** Distinct projects touched by the removed configuration. */
+  projectsAffected: number;
+}
+
 /* ── Attendance sheet (contractor-first) ─────────────────────────────── */
 
 /** One labour-type (subcategory) row under a contractor. quantity 0 = not

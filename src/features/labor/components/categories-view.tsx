@@ -28,6 +28,8 @@ import {
   Check,
   GripVertical,
   FolderPlus,
+  AlertTriangle,
+  Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -67,9 +69,9 @@ import {
   type SubcategoryFormValues,
 } from "../schema";
 import { CATEGORY_COLORS, FALLBACK_COLOR } from "../constants";
-import { useCategories, useHierarchyMutations } from "../hooks";
+import { useCategories, useHierarchyMutations, useForceDeletePreview } from "../hooks";
 import { laborKeys } from "../data";
-import { useCan } from "@/features/rbac/permission-context";
+import { useCan, useIsOwner } from "@/features/rbac/permission-context";
 import type { CategoryWithSubs, LabourCategory, LabourSubcategory } from "../types";
 
 /* ── Dialogs ─────────────────────────────────────────────────────────── */
@@ -253,24 +255,165 @@ function SortableItem({
   );
 }
 
+/* ── Delete confirmation ─────────────────────────────────────────────── */
+
+type ConfirmTarget =
+  | { kind: "category"; item: CategoryWithSubs }
+  | { kind: "subcategory"; item: LabourSubcategory };
+
+function ImpactRow({ label, value }: { label: string; value: number }) {
+  return (
+    <li className="flex items-center justify-between gap-3">
+      <span>{label}</span>
+      <span className="font-mono tabular-nums">{value}</span>
+    </li>
+  );
+}
+
+/**
+ * Owner delete flow. Fetches an impact preview: a genuinely unused item gets a
+ * plain delete; a referenced item becomes a FORCE DELETE that deactivates it
+ * (attendance + financial history preserved) behind a typed-DELETE confirmation.
+ */
+function OwnerDeleteDialog({
+  target,
+  onClose,
+}: {
+  target: ConfirmTarget | null;
+  onClose: () => void;
+}) {
+  const { deleteCategory, deleteSubcategory, forceDeleteCategory, forceDeleteSubcategory } =
+    useHierarchyMutations();
+  const previewTarget = target ? { kind: target.kind, id: target.item.id } : null;
+  const { data: impact, isLoading } = useForceDeletePreview(previewTarget);
+  // Fresh per target — the parent keys this component by target id, so the input
+  // resets on each open (no setState-in-effect).
+  const [ack, setAck] = React.useState("");
+
+  const name = target?.item.name ?? "";
+  const referenced =
+    !!impact &&
+    (impact.attendancePreserved > 0 ||
+      impact.projectContractorRates > 0 ||
+      impact.projectContractorAssignments > 0);
+  const pending =
+    deleteCategory.isPending ||
+    deleteSubcategory.isPending ||
+    forceDeleteCategory.isPending ||
+    forceDeleteSubcategory.isPending;
+  const canConfirm = !pending && !isLoading && (!referenced || ack.trim() === "DELETE");
+
+  function run() {
+    if (!target) return;
+    const done = { onSuccess: onClose };
+    if (referenced) {
+      const v = { id: target.item.id, ack: ack.trim(), name };
+      if (target.kind === "category") forceDeleteCategory.mutate(v, done);
+      else forceDeleteSubcategory.mutate(v, done);
+    } else if (target.kind === "category") {
+      deleteCategory.mutate(target.item.id, done);
+    } else {
+      deleteSubcategory.mutate(target.item.id, done);
+    }
+  }
+
+  return (
+    <Dialog open={!!target} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            {referenced && <AlertTriangle className="size-5 text-danger-foreground" />}
+            {referenced ? "Force delete" : "Delete"} {name}?
+          </DialogTitle>
+          <DialogDescription>
+            {isLoading
+              ? "Checking what this will affect…"
+              : referenced
+                ? "This item is in use. As Owner you can force-delete it — current configuration is removed, but attendance and financial history are preserved and stay readable."
+                : target?.kind === "category"
+                  ? "This removes the group and its labour types. It has no recorded attendance or configured rates."
+                  : "This labour type has no recorded attendance or configured rates."}
+          </DialogDescription>
+        </DialogHeader>
+
+        {isLoading ? (
+          <div className="flex items-center justify-center py-6 text-foreground-subtle">
+            <Loader2 className="size-5 animate-spin" />
+          </div>
+        ) : referenced && impact ? (
+          <div className="space-y-3 text-sm">
+            <div className="rounded-lg border border-border bg-surface-muted/40 p-3">
+              <p className="mb-1.5 font-medium text-danger-foreground">Will be permanently removed</p>
+              <ul className="space-y-1 text-foreground-muted">
+                {impact.labourGroups > 0 && <ImpactRow label="Labour groups" value={impact.labourGroups} />}
+                {impact.labourTypes > 0 && <ImpactRow label="Labour types" value={impact.labourTypes} />}
+                {impact.projectContractorRates > 0 && (
+                  <ImpactRow label="Project-contractor rate configs" value={impact.projectContractorRates} />
+                )}
+                {impact.projectContractorAssignments > 0 && (
+                  <ImpactRow label="Project category assignments" value={impact.projectContractorAssignments} />
+                )}
+                {impact.projectsAffected > 0 && (
+                  <ImpactRow label="Projects affected" value={impact.projectsAffected} />
+                )}
+              </ul>
+            </div>
+            <div className="rounded-lg border border-border bg-surface-muted/40 p-3">
+              <p className="mb-1.5 font-medium text-foreground-subtle">Preserved — history is kept</p>
+              <ul className="space-y-1 text-foreground-muted">
+                <ImpactRow label="Attendance records" value={impact.attendancePreserved} />
+                {impact.settlementsPreserved > 0 && (
+                  <ImpactRow label="Contractor settlements" value={impact.settlementsPreserved} />
+                )}
+              </ul>
+            </div>
+            <p className="text-xs text-foreground-subtle">This action cannot be undone.</p>
+            <div className="space-y-1.5">
+              <Label htmlFor="force-delete-ack">
+                Type <span className="font-mono font-semibold">DELETE</span> to confirm
+              </Label>
+              <Input
+                id="force-delete-ack"
+                autoFocus
+                autoComplete="off"
+                value={ack}
+                onChange={(e) => setAck(e.target.value)}
+                placeholder="DELETE"
+              />
+            </div>
+          </div>
+        ) : null}
+
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" onClick={onClose} disabled={pending}>
+            Cancel
+          </Button>
+          <Button variant="danger" onClick={run} disabled={!canConfirm}>
+            {pending && <Loader2 className="size-4 animate-spin" />}
+            {referenced ? "Force delete" : "Delete"}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 /* ── View ────────────────────────────────────────────────────────────── */
 
 export function CategoriesView() {
   const qc = useQueryClient();
   const canCreate = useCan()("labour.create");
+  const isOwner = useIsOwner();
   const { data: categories = [], isLoading } = useCategories();
-  const { deleteCategory, deleteSubcategory, reorderCategories, reorderSubcategories } = useHierarchyMutations();
+  const { deleteCategory, deleteSubcategory, reorderCategories, reorderSubcategories } =
+    useHierarchyMutations();
 
   const [catDialog, setCatDialog] = React.useState(false);
   const [editingCat, setEditingCat] = React.useState<LabourCategory | null>(null);
   const [subDialog, setSubDialog] = React.useState(false);
   const [editingSub, setEditingSub] = React.useState<LabourSubcategory | null>(null);
   const [subDefaultCat, setSubDefaultCat] = React.useState<string | null>(null);
-  const [confirm, setConfirm] = React.useState<
-    | { kind: "category"; item: CategoryWithSubs }
-    | { kind: "subcategory"; item: LabourSubcategory }
-    | null
-  >(null);
+  const [confirm, setConfirm] = React.useState<ConfirmTarget | null>(null);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
@@ -465,32 +608,43 @@ export function CategoriesView() {
         defaultCategoryId={subDefaultCat}
       />
 
-      <Dialog open={!!confirm} onOpenChange={(o) => !o && setConfirm(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete {confirm?.item.name}?</DialogTitle>
-            <DialogDescription>
-              {confirm?.kind === "category"
-                ? "This removes its labour types. A group whose labour types have recorded attendance or a configured contractor rate can't be deleted — labour history and project config are preserved."
-                : "A labour type with recorded attendance or a configured contractor rate can't be deleted — labour history and project config are preserved."}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="flex justify-end gap-2">
-            <Button variant="ghost" onClick={() => setConfirm(null)}>Cancel</Button>
-            <Button
-              variant="danger"
-              onClick={() => {
-                if (!confirm) return;
-                const done = { onSuccess: () => setConfirm(null) };
-                if (confirm.kind === "category") deleteCategory.mutate(confirm.item.id, done);
-                else deleteSubcategory.mutate(confirm.item.id, done);
-              }}
-            >
-              Delete
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+      {/* Owners get the impact-aware Force Delete flow (referenced items
+          deactivate, preserving history); everyone else keeps the plain
+          confirm that the server blocks when the item is referenced. */}
+      {isOwner ? (
+        <OwnerDeleteDialog
+          key={confirm?.item.id ?? "none"}
+          target={confirm}
+          onClose={() => setConfirm(null)}
+        />
+      ) : (
+        <Dialog open={!!confirm} onOpenChange={(o) => !o && setConfirm(null)}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Delete {confirm?.item.name}?</DialogTitle>
+              <DialogDescription>
+                {confirm?.kind === "category"
+                  ? "This removes its labour types. A group whose labour types have recorded attendance or a configured contractor rate can't be deleted — labour history and project config are preserved."
+                  : "A labour type with recorded attendance or a configured contractor rate can't be deleted — labour history and project config are preserved."}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => setConfirm(null)}>Cancel</Button>
+              <Button
+                variant="danger"
+                onClick={() => {
+                  if (!confirm) return;
+                  const done = { onSuccess: () => setConfirm(null) };
+                  if (confirm.kind === "category") deleteCategory.mutate(confirm.item.id, done);
+                  else deleteSubcategory.mutate(confirm.item.id, done);
+                }}
+              >
+                Delete
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
   );
 }

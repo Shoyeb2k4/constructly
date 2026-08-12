@@ -54,7 +54,7 @@ export default async function AppLayout({
       )}
       {/* Provider wraps the whole shell so the sidebar (permission-aware nav)
           and the page content both read the session's permissions. */}
-      <PermissionProvider permissions={user.permissions ?? []}>
+      <PermissionProvider permissions={user.permissions ?? []} isOwner={user.isOwner}>
         <AppShell user={user} branding={{ name: branding.name, logoUrl: branding.logoUrl }}>
           {children}
         </AppShell>
