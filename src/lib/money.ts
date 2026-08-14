@@ -69,3 +69,30 @@ function trim(n: number): string {
 export function sumPaise(values: Paise[]): Paise {
   return values.reduce((acc, v) => acc + Math.round(v), 0);
 }
+
+/**
+ * Prisma BigInt → Paise, refusing anything JavaScript cannot represent exactly.
+ *
+ * Money columns are BigInt in the database but `number` in every DTO, because
+ * neither BigInt nor Decimal survives the RSC boundary. A bare `Number(bigint)`
+ * past 2^53 silently returns a rounded value — a financial figure that is wrong
+ * with no error anywhere. This throws instead, naming the field, so a data-range
+ * problem surfaces as a bug report rather than a quietly incorrect balance.
+ *
+ * ₹90,071 crore is the ceiling, so this should never fire in practice; it exists
+ * so that if it ever does, it is loud.
+ */
+export function paiseFromBigInt(value: bigint, field: string): Paise {
+  if (value > BigInt(Number.MAX_SAFE_INTEGER) || value < BigInt(Number.MIN_SAFE_INTEGER)) {
+    throw new Error(
+      `MONEY_OUT_OF_RANGE: ${field} = ${value} exceeds the safe integer range and ` +
+        `cannot be converted without losing precision.`,
+    );
+  }
+  return Number(value);
+}
+
+/** As `paiseFromBigInt`, tolerating the null/undefined a Prisma aggregate returns. */
+export function paiseFromNullableBigInt(value: bigint | null | undefined, field: string): Paise {
+  return value == null ? 0 : paiseFromBigInt(value, field);
+}

@@ -15,7 +15,10 @@
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:push": "prisma db push",
-    "db:seed": "tsx prisma/seed.ts"
+    "db:seed": "tsx prisma/seed.ts",
+    "dev:demo": "node scripts/dev-demo.mjs",
+    "start:demo": "node scripts/start-demo.mjs",
+    "build:demo": "node scripts/build-demo.mjs"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

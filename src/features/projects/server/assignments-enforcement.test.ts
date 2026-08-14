@@ -34,9 +34,11 @@ const h = vi.hoisted(() => ({
     projectContractor: {
       deleteMany: vi.fn(),
       create: vi.fn(),
+      update: vi.fn(),
       findMany: vi.fn(),
     },
-    projectContractorLabourRate: { createMany: vi.fn() },
+    projectContractorLabourRate: { createMany: vi.fn(), update: vi.fn(), deleteMany: vi.fn() },
+    labourAttendance: { findFirst: vi.fn() },
     activityLog: { create: vi.fn() },
     $transaction: vi.fn(),
   },
@@ -71,8 +73,12 @@ beforeEach(() => {
   h.prisma.labourSubcategory.count.mockReset();
   h.prisma.projectContractor.deleteMany.mockReset().mockResolvedValue({ count: 0 });
   h.prisma.projectContractor.create.mockReset().mockResolvedValue({ id: "pc1" });
+  h.prisma.projectContractor.update.mockReset().mockResolvedValue({ id: "pc1" });
   h.prisma.projectContractor.findMany.mockReset().mockResolvedValue([]);
   h.prisma.projectContractorLabourRate.createMany.mockReset().mockResolvedValue({ count: 0 });
+  h.prisma.projectContractorLabourRate.update.mockReset().mockResolvedValue({ id: "lr1" });
+  h.prisma.projectContractorLabourRate.deleteMany.mockReset().mockResolvedValue({ count: 0 });
+  h.prisma.labourAttendance.findFirst.mockReset().mockResolvedValue(null);
   h.prisma.activityLog.create.mockReset().mockResolvedValue({ id: "a" });
   // Callback form runs fn(tx); array form runs the ops.
   h.prisma.$transaction.mockReset().mockImplementation(async (arg: unknown) =>
@@ -120,7 +126,8 @@ describe("setProjectContractors — company ownership (tenancy)", () => {
       { contractorId: K1, labourRates: [{ labourSubcategoryId: SUB1, ratePaise: 80000 }, { labourSubcategoryId: SUB1, ratePaise: 90000 }] },
       row(K1), // duplicate contractor
     ]);
-    expect(h.prisma.projectContractor.deleteMany).toHaveBeenCalled();
+    // Nothing pre-existed, so the diff drops nothing.
+    expect(h.prisma.projectContractor.deleteMany).not.toHaveBeenCalled();
     // One contractor created; its labour rates deduped to a single subcategory.
     expect(h.prisma.projectContractor.create).toHaveBeenCalledTimes(1);
     const rateCall = h.prisma.projectContractorLabourRate.createMany.mock.calls[0][0];

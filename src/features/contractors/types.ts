@@ -12,7 +12,9 @@ export type ContractorLedgerType =
   | "ADVANCE"
   | "LABOUR_BILL"
   | "ADJUSTMENT"
-  | "PAYMENT";
+  | "PAYMENT"
+  /** Written only by a settlement reversal; increases the advance balance. */
+  | "SETTLEMENT_REVERSAL";
 
 export interface Contractor {
   id: string;
@@ -34,12 +36,24 @@ export interface ContractorLedgerEntry {
   advanceBalanceAfterPaise: number;
   notes: string | null;
   settlementId: string | null;
+  /** Commercial scope. Both null = a company-wide (legacy) advance. */
+  projectId: string | null;
+  contractId: string | null;
+  contractTitle: string | null;
+  /** Explicit provenance — one meaning per field, never polymorphic. */
+  drawsFromEntryId: string | null;
+  reversesEntryId: string | null;
+  /** For a drawdown: the composition bucket it funded (may differ from contractId). */
+  fundsContractId: string | null;
   /** Enriched for display when the entry came from a settlement. */
   projectName: string | null;
   createdAt: string;
 }
 
 export interface ContractorSettlement {
+  /** Set once reversed. The settlement is kept, never deleted. */
+  reversedAt?: string | null;
+  reversalReason?: string | null;
   id: string;
   contractorId: string;
   contractorName: string;
@@ -75,6 +89,9 @@ export interface UpdateContractorInput {
 }
 
 export interface RecordAdvanceInput {
+  /** Optional commercial scope. contractId requires projectId. */
+  projectId?: string | null;
+  contractId?: string | null;
   contractorId: string;
   date: string;
   amountPaise: number;
@@ -90,14 +107,32 @@ export interface CreateSettlementInput {
   notes?: string | null;
 }
 
+/** An advance this settlement may not draw on, and the reason in plain words. */
+export interface UnusableAdvanceRow {
+  entryId: string;
+  remainingPaise: number;
+  contractId: string | null;
+  contractTitle: string | null;
+  reason: string;
+}
+
 /** Live preview shown while composing a settlement (before it's saved). */
 export interface SettlementPreview {
   labourBillPaise: number;
+  /** Every outstanding advance, whatever its scope. */
   outstandingAdvancePaise: number;
+  /**
+   * The most that can ACTUALLY be drawn: never more than the bill, and never
+   * more than the advances eligible for this period's labour. An agreement-scoped
+   * advance is excluded unless that agreement is part of the settlement, so this
+   * is usually smaller than the outstanding balance — and the difference is
+   * explained row by row in `unusableAdvances`.
+   */
   maxAdjustmentPaise: number;
   advanceAdjustmentPaise: number;
   netPaymentPaise: number;
   advanceBalanceAfterPaise: number;
+  unusableAdvances: UnusableAdvanceRow[];
 }
 
 export interface ContractorFilters {

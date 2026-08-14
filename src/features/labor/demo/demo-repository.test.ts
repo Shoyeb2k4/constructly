@@ -19,7 +19,23 @@ async function configure(
   subs: { id: string; dailyRatePaise: number | null }[],
   contractorId = RAMESH,
 ) {
+  // Skyline is seeded with Pappu, who already has recorded attendance — and
+  // dropping a contractor with attendance is refused. So keep whoever else is
+  // configured and only replace this contractor's entry.
+  const others = ((await projectsRepo.get(SKY))?.contractors ?? [])
+    .filter((pc) => pc.contractorId !== contractorId)
+    .map((pc) => ({
+      contractorId: pc.contractorId,
+      contractRatePaise: pc.contractRatePaise,
+      contractRateUnit: pc.contractRateUnit,
+      labourRates: pc.labourRates.map((lr) => ({
+        labourSubcategoryId: lr.labourSubcategoryId,
+        ratePaise: lr.ratePaise,
+        rateUnit: lr.rateUnit,
+      })),
+    }));
   await projectsRepo.setProjectContractors(SKY, [
+    ...others,
     {
       contractorId,
       labourRates: subs.map((s) => ({ labourSubcategoryId: s.id, ratePaise: s.dailyRatePaise ?? 0 })),
@@ -57,7 +73,7 @@ describe("labour hierarchy", () => {
   it("blocks physical deletion once attendance is recorded (history preserved)", async () => {
     const cat = await repo.createCategory({ name: "Roofing" });
     const sub = await repo.createSubcategory({ categoryId: cat.id, name: "Roofer", dailyRatePaise: 90000 });
-    await repo.setQuantity(SKY, today, sub.id, 2, null);
+    await repo.setQuantity({ projectId: SKY, date: today, subcategoryId: sub.id, quantity: 2 });
 
     await expect(repo.deleteSubcategory(sub.id)).rejects.toThrow("SUBCATEGORY_HAS_ATTENDANCE");
     await expect(repo.deleteCategory(cat.id)).rejects.toThrow("CATEGORY_HAS_ATTENDANCE");
@@ -96,10 +112,10 @@ describe("labour attendance (contractor-first)", () => {
     const cats = await repo.listCategories();
     await configure(cats[0].subcategories); // Ramesh supplies the 2 Carpenter types
     const sheet = await repo.getSheet(SKY, today);
-    expect(sheet.groups.length).toBe(1);
-    expect(sheet.groups[0].contractorId).toBe(RAMESH);
-    expect(sheet.groups[0].configured).toBe(true);
-    expect(sheet.groups[0].rows.length).toBe(2);
+    // Skyline is also seeded with Pappu, so the sheet groups by contractor.
+    const ramesh = sheet.groups.find((g) => g.contractorId === RAMESH)!;
+    expect(ramesh.configured).toBe(true);
+    expect(ramesh.rows.length).toBe(2);
     expect(sheet.totalPresent).toBe(0);
   });
 
@@ -108,8 +124,8 @@ describe("labour attendance (contractor-first)", () => {
     const mainCarp = cats[0].subcategories[0]; // ₹900
     const carpHelp = cats[0].subcategories[1]; // ₹550
     await configure([mainCarp, carpHelp]);
-    await repo.setQuantity(SKY, today, mainCarp.id, 12, null, RAMESH);
-    const sheet = await repo.setQuantity(SKY, today, carpHelp.id, 8, null, RAMESH);
+    await repo.setQuantity({ projectId: SKY, date: today, subcategoryId: mainCarp.id, quantity: 12, contractorId: RAMESH });
+    const sheet = await repo.setQuantity({ projectId: SKY, date: today, subcategoryId: carpHelp.id, quantity: 8, contractorId: RAMESH });
     const group = sheet.groups.find((g) => g.contractorId === RAMESH)!;
     expect(group.totalPresent).toBe(20);
     expect(group.estimatedCostPaise).toBe(12 * 90000 + 8 * 55000);
@@ -119,8 +135,8 @@ describe("labour attendance (contractor-first)", () => {
   it("quantity 0 deletes the record", async () => {
     const { sub } = await firstSub();
     await configure([sub]);
-    await repo.setQuantity(SKY, today, sub.id, 12, null, RAMESH);
-    const sheet = await repo.setQuantity(SKY, today, sub.id, 0, null, RAMESH);
+    await repo.setQuantity({ projectId: SKY, date: today, subcategoryId: sub.id, quantity: 12, contractorId: RAMESH });
+    const sheet = await repo.setQuantity({ projectId: SKY, date: today, subcategoryId: sub.id, quantity: 0, contractorId: RAMESH });
     expect(sheet.totalPresent).toBe(0);
     expect((await repo.listAttendance({ projectId: SKY, from: today, to: today })).length).toBe(0);
   });
@@ -128,7 +144,7 @@ describe("labour attendance (contractor-first)", () => {
   it("keeps the rate snapshot when the rate changes later", async () => {
     const { sub } = await firstSub();
     await configure([sub]);
-    await repo.setQuantity(SKY, today, sub.id, 10, null, RAMESH); // snapshot @ current rate
+    await repo.setQuantity({ projectId: SKY, date: today, subcategoryId: sub.id, quantity: 10, contractorId: RAMESH }); // snapshot @ current rate
     await repo.updateSubcategory(sub.id, { dailyRatePaise: (sub.dailyRatePaise ?? 0) + 50000 });
     const rec = (await repo.listAttendance({ projectId: SKY, from: today, to: today }))[0];
     expect(rec.dailyRatePaiseSnapshot).toBe(sub.dailyRatePaise); // original

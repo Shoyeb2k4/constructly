@@ -24,7 +24,7 @@ export async function exportSheetPdf(sheet: AttendanceSheet, projectName: string
     body.push([{ content: g.contractorName, colSpan: 5, styles: { fontStyle: "bold", fillColor: [244, 245, 247] } }]);
     rows.forEach((r) =>
       body.push([
-        `  ${r.name}`,
+        r.agreementTitle ? `  ${r.name} (${r.agreementTitle})` : `  ${r.name}`,
         String(r.quantity),
         r.dailyRatePaise != null ? rs(r.dailyRatePaise) : "—",
         rs(estimateCostPaise(r.dailyRatePaise, r.quantity)),
@@ -55,7 +55,7 @@ export function exportSheetExcel(sheet: AttendanceSheet, projectName: string) {
     ["Constructly — Daily labour attendance"],
     [`${projectName} · ${sheet.date}`],
     [],
-    ["Contractor", "Labour type", "Category", "Present", "Day rate (Rs.)", "Est. cost (Rs.)", "Notes"],
+    ["Contractor", "Agreement", "Labour type", "Category", "Present", "Day rate (Rs.)", "Est. cost (Rs.)", "Notes"],
   ];
   for (const g of sheet.groups) {
     const active = g.rows.filter((r) => r.quantity > 0);
@@ -63,6 +63,7 @@ export function exportSheetExcel(sheet: AttendanceSheet, projectName: string) {
     active.forEach((r) =>
       rows.push([
         g.contractorName,
+        r.agreementTitle ?? "—",
         r.name,
         r.categoryName,
         r.quantity,
@@ -71,9 +72,9 @@ export function exportSheetExcel(sheet: AttendanceSheet, projectName: string) {
         r.notes ?? "",
       ]),
     );
-    rows.push([`${g.contractorName} total`, "", "", g.totalPresent, null, toRupees(g.estimatedCostPaise), ""]);
+    rows.push([`${g.contractorName} total`, "", "", "", g.totalPresent, null, toRupees(g.estimatedCostPaise), ""]);
   }
-  rows.push([], ["Grand total", "", "", sheet.totalPresent, null, toRupees(sheet.estimatedCostPaise), ""]);
+  rows.push([], ["Grand total", "", "", "", sheet.totalPresent, null, toRupees(sheet.estimatedCostPaise), ""]);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), "Attendance");
   XLSX.writeFile(wb, `attendance-${projectName.replace(/\s+/g, "-").toLowerCase()}-${sheet.date}.xlsx`);
@@ -120,11 +121,12 @@ export async function exportRangePdf({ records, summary, from, to, scope }: Rang
     headStyles: { fillColor: [46, 91, 255] },
   });
   autoTable(doc, {
-    head: [["Date", "Project", "Contractor", "Category", "Labour type", "Present", "Notes"]],
+    head: [["Date", "Project", "Contractor", "Agreement", "Category", "Labour type", "Present", "Notes"]],
     body: records.map((r) => [
       r.date,
       r.projectName,
       r.contractorName ?? "—",
+      r.agreementTitle ?? "—",
       r.categoryName,
       r.subcategoryName,
       String(r.quantityPresent),
@@ -157,11 +159,12 @@ export function exportRangeExcel({ records, summary, from, to, scope }: RangeExp
   XLSX.utils.book_append_sheet(
     wb,
     XLSX.utils.aoa_to_sheet([
-      ["Date", "Project", "Contractor", "Category", "Labour type", "Present", "Notes"],
+      ["Date", "Project", "Contractor", "Agreement", "Category", "Labour type", "Present", "Notes"],
       ...records.map((r) => [
         r.date,
         r.projectName,
         r.contractorName ?? "—",
+        r.agreementTitle ?? "—",
         r.categoryName,
         r.subcategoryName,
         r.quantityPresent,

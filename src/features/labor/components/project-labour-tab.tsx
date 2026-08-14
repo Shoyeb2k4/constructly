@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { MoneyText } from "@/components/patterns/money-text";
 import { cn } from "@/lib/utils";
 import { formatDate } from "@/features/projects/format";
+import { ProjectContractsCard } from "@/features/contracts/components/project-contracts-card";
 import { useLabourSummary } from "../hooks";
 
 /** Project-scoped labour summary: man-days, cost, categories, recent trend. */
@@ -110,6 +111,8 @@ export function ProjectLabourTab({ projectId }: { projectId: string }) {
           </div>
         </>
       )}
+
+      <ProjectContractsCard projectId={projectId} />
     </div>
   );
 }

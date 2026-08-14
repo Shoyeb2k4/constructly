@@ -9,6 +9,7 @@ import {
   CalendarDays,
   ChevronDown,
   CopyPlus,
+  FileSignature,
   HardHat,
   Minus,
   Plus,
@@ -40,6 +41,7 @@ import { getLastProject, setLastProject, todayISO } from "../../last-project";
 import type { SheetGroup, SheetRow } from "../../types";
 import { SyncChip } from "./sync-chip";
 import { AttendanceCalendar } from "./attendance-calendar";
+import { AddLabourTypeDialog } from "./add-labour-type-dialog";
 
 /** One labour-type row: name, read-only rate, and the headcount stepper. */
 function SubcategoryRow({
@@ -195,20 +197,63 @@ function OrphanRow({
   );
 }
 
+/**
+ * One contractor: their agreements, and the labour each covers.
+ *
+ * The hierarchy the user reads is Contractor → Agreement → Labour Type → Rate →
+ * headcount. How the agreement step is presented depends on how many there are,
+ * because the cost of an extra tap is real on a site at 7am:
+ *
+ *  • none  — the attendance-only contractor. No agreement UI at all; this is
+ *            exactly the flow that existed before agreements, unchanged.
+ *  • one   — auto-selected and named, so nothing is hidden but nothing is asked.
+ *  • many  — the user picks. Nothing is pre-selected and no labour type is shown
+ *            until they do, because the system must never decide which
+ *            agreement a day's work belonged to.
+ */
 function ContractorGroup({
   group,
   collapsed,
   onToggle,
   onCommit,
   canMark,
+  projectId,
+  canConfigure,
 }: {
   group: SheetGroup;
   collapsed: boolean;
   onToggle: () => void;
-  /** (subcategoryId, quantity, notes) — the contractor is the group itself. */
-  onCommit: (subcategoryId: string, quantity: number, notes?: string | null) => void;
+  /** The contractor is the group itself; the agreement travels with the row. */
+  onCommit: (
+    row: { subcategoryId: string; contractId: string | null },
+    quantity: number,
+    notes?: string | null,
+  ) => void;
   canMark: boolean;
+  projectId: string;
+  /** May add a labour type to this sheet (contracts.edit or projects.edit). */
+  canConfigure: boolean;
 }) {
+  const [addOpen, setAddOpen] = React.useState(false);
+  const many = group.requiresAgreementChoice;
+  const [chosen, setChosen] = React.useState<string | null>(
+    // Exactly one eligible agreement → auto-select it, no extra click.
+    many ? null : (group.agreements[0]?.contractId ?? null),
+  );
+
+  // The sheet can change under us (project/date switch, sync). Re-derive the
+  // selection when the eligible set does — the render-time adjust pattern.
+  const agreementKey = group.agreements.map((a) => a.contractId).join(",");
+  const [prevKey, setPrevKey] = React.useState(agreementKey);
+  if (prevKey !== agreementKey) {
+    setPrevKey(agreementKey);
+    setChosen(many ? null : (group.agreements[0]?.contractId ?? null));
+  }
+
+  const visible = group.agreements.length > 0
+    ? group.rows.filter((r) => r.contractId === chosen)
+    : group.rows;
+
   return (
     <div className="border-b border-border last:border-0">
       <button
@@ -232,29 +277,90 @@ function ContractorGroup({
           </span>
         )}
       </button>
-      {!collapsed && group.rows.length === 0 && (
+
+      {!collapsed && group.agreements.length > 0 && (
+        <div className="px-3 pb-2 pl-8">
+          {many ? (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <FileSignature className="size-3.5 shrink-0 text-foreground-subtle" />
+              {group.agreements.map((a) => (
+                <button
+                  key={a.contractId}
+                  onClick={() => setChosen(a.contractId)}
+                  aria-pressed={chosen === a.contractId}
+                  className={cn(
+                    "rounded-full border px-2.5 py-1 text-xs transition-colors",
+                    chosen === a.contractId
+                      ? "border-primary bg-primary/10 font-medium text-primary"
+                      : "border-border text-foreground-muted hover:bg-surface-muted",
+                  )}
+                >
+                  {a.title}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="flex items-center gap-1.5 text-xs text-foreground-subtle">
+              <FileSignature className="size-3.5 shrink-0" />
+              {group.agreements[0].title}
+              {group.agreements[0].reference && ` · ${group.agreements[0].reference}`}
+            </p>
+          )}
+        </div>
+      )}
+
+      {!collapsed && many && chosen == null && (
+        <p className="px-3 pb-3 pl-8 text-xs text-foreground-subtle">
+          This contractor holds {group.agreements.length}{" "}
+          agreements here. Choose which one today&rsquo;s labour belongs to — it can&rsquo;t be
+          assumed.
+        </p>
+      )}
+      {!collapsed && visible.length === 0 && !(many && chosen == null) && (
         <p className="px-3 pb-3 pl-8 text-xs text-foreground-subtle">
           No labour types configured for this contractor.
         </p>
       )}
       {!collapsed &&
-        group.rows.map((row) =>
+        visible.map((row) =>
           group.configured ? (
             <SubcategoryRow
-              key={row.subcategoryId}
+              key={`${row.contractId ?? ""}|${row.subcategoryId}`}
               row={row}
               canMark={canMark}
-              onCommit={(qty, notes) => onCommit(row.subcategoryId, qty, notes)}
+              onCommit={(qty, notes) => onCommit(row, qty, notes)}
             />
           ) : (
             <OrphanRow
-              key={row.subcategoryId}
+              key={`${row.contractId ?? ""}|${row.subcategoryId}`}
               row={row}
               canMark={canMark}
-              onClear={() => onCommit(row.subcategoryId, 0)}
+              onClear={() => onCommit(row, 0)}
             />
           ),
         )}
+
+      {/* A missing labour type is fixed here, not on a separate admin screen —
+          and never by inventing an agreement just to hold it. */}
+      {!collapsed && group.configured && canConfigure && group.contractorId && !(many && chosen == null) && (
+        <div className="px-3 pb-3 pl-8">
+          <button
+            onClick={() => setAddOpen(true)}
+            className="text-xs text-primary transition-colors hover:underline"
+          >
+            + Add labour type
+          </button>
+          <AddLabourTypeDialog
+            open={addOpen}
+            onOpenChange={setAddOpen}
+            projectId={projectId}
+            contractorId={group.contractorId}
+            contractorName={group.contractorName}
+            contractId={chosen}
+            agreementTitle={group.agreements.find((a) => a.contractId === chosen)?.title ?? null}
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -263,6 +369,8 @@ export function AttendanceView() {
   const can = useCan();
   const canMark = can("attendance.mark");
   const canExport = can("attendance.export");
+  // Adding a labour type to the sheet edits agreement scope or project config.
+  const canConfigure = can("contracts.edit") || can("projects.edit");
   const { data: projects = [] } = useProjects({});
   const active = React.useMemo(
     () => projects.filter((p) => !p.archivedAt && p.stage !== "CLOSED"),
@@ -443,9 +551,17 @@ export function AttendanceView() {
                 group={group}
                 collapsed={collapsed.has(key)}
                 canMark={canMark}
+                projectId={pid}
+                canConfigure={canConfigure}
                 onToggle={() => toggleGroup(key)}
-                onCommit={(subcategoryId, quantity, notes) =>
-                  setQuantity.mutate({ subcategoryId, quantity, notes, contractorId: group.contractorId })
+                onCommit={(row, quantity, notes) =>
+                  setQuantity.mutate({
+                    subcategoryId: row.subcategoryId,
+                    quantity,
+                    notes,
+                    contractorId: group.contractorId,
+                    contractId: row.contractId,
+                  })
                 }
               />
             );

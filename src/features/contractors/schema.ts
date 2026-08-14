@@ -15,11 +15,29 @@ export const updateContractorSchema = z.object({
   status: z.enum(["ACTIVE", "INACTIVE"]).optional(),
 });
 
-export const recordAdvanceSchema = z.object({
-  contractorId: z.string().uuid(),
-  date: isoDate,
-  amountPaise: paise.min(1, "Amount is required"),
-  notes: z.string().trim().max(500).optional().nullable(),
+/**
+ * A LABOUR ADVANCE: cash handed over to pre-pay future labour, netted off a
+ * later settlement. Optionally scoped so the money keeps its commercial owner.
+ *
+ * An agreement scope requires its project — money for a specific agreement is
+ * always money on that agreement's project.
+ */
+export const recordAdvanceSchema = z
+  .object({
+    contractorId: z.string().uuid(),
+    date: isoDate,
+    amountPaise: paise.min(1, "Amount is required"),
+    notes: z.string().trim().max(500).optional().nullable(),
+    projectId: z.string().uuid().optional().nullable(),
+    contractId: z.string().uuid().optional().nullable(),
+  })
+  .refine((v) => !v.contractId || !!v.projectId, {
+    message: "An agreement-scoped advance must also name its project",
+    path: ["projectId"],
+  });
+
+export const reverseSettlementSchema = z.object({
+  reason: z.string().trim().min(1, "A reversal reason is required").max(500),
 });
 
 export const createSettlementSchema = z

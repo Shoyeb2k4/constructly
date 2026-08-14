@@ -15,6 +15,7 @@ const h = vi.hoisted(() => ({
     labourAttendance: { findMany: vi.fn(), findFirst: vi.fn(), findUnique: vi.fn(), deleteMany: vi.fn(), upsert: vi.fn(), create: vi.fn(), update: vi.fn() },
     projectContractor: { findMany: vi.fn() },
     projectContractorLabourRate: { findFirst: vi.fn() },
+    contractorContract: { findMany: vi.fn() },
     project: { findFirst: vi.fn() },
   },
 }));
@@ -41,6 +42,7 @@ beforeEach(() => {
   h.prisma.labourCategory.findMany.mockResolvedValue([]);
   h.prisma.labourAttendance.findMany.mockResolvedValue([]);
   h.prisma.projectContractor.findMany.mockResolvedValue([]);
+  h.prisma.contractorContract.findMany.mockResolvedValue([]);
   h.prisma.project.findFirst.mockResolvedValue({ id: "p1" });
 });
 
@@ -68,7 +70,7 @@ describe("labour master-data permissions", () => {
 describe("attendance permissions are a separate namespace", () => {
   it("a labour-only user (no attendance.mark) cannot mark attendance", async () => {
     h.user = u(["labour.view", "labour.create", "labour.edit", "labour.archive"]);
-    await expect(setQuantity("p1", "2026-07-20", "sub1", 3)).rejects.toThrow("FORBIDDEN");
+    await expect(setQuantity({ projectId: "p1", date: "2026-07-20", subcategoryId: "sub1", quantity: 3 })).rejects.toThrow("FORBIDDEN");
   });
 
   it("an attendance-only user (no labour.create) cannot create categories", async () => {
@@ -87,14 +89,14 @@ describe("attendance ownership + view scope", () => {
   it("marking is blocked on a project the PM is not assigned to", async () => {
     h.user = u(["attendance.view", "attendance.mark"]);
     h.prisma.project.findFirst.mockResolvedValue(null); // not assigned
-    await expect(setQuantity("p1", "2026-07-20", "sub1", 3)).rejects.toThrow("FORBIDDEN");
+    await expect(setQuantity({ projectId: "p1", date: "2026-07-20", subcategoryId: "sub1", quantity: 3 })).rejects.toThrow("FORBIDDEN");
     expect(h.prisma.labourAttendance.upsert).not.toHaveBeenCalled();
   });
 
   it("marking on an assigned project proceeds (quantity 0 clears the record)", async () => {
     h.user = u(["attendance.view", "attendance.mark"]);
     h.prisma.project.findFirst.mockResolvedValue({ id: "p1" });
-    await setQuantity("p1", "2026-07-20", "sub1", 0);
+    await setQuantity({ projectId: "p1", date: "2026-07-20", subcategoryId: "sub1", quantity: 0 });
     expect(h.prisma.labourAttendance.deleteMany).toHaveBeenCalled();
   });
 

@@ -14,6 +14,20 @@
       "runtimeArgs": ["run", "start"],
       "port": 3000,
       "autoPort": true
+    },
+    {
+      "name": "constructly-demo",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev:demo"],
+      "port": 3000,
+      "autoPort": true
+    },
+    {
+      "name": "constructly-demo-prod",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "start:demo"],
+      "port": 3000,
+      "autoPort": true
     }
   ]
 }

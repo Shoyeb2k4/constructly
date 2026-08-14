@@ -49,5 +49,14 @@ export const labourAttendanceMutationSchema = z.object({
   notes: z.string().max(300).nullable().optional(),
   /** Optional contractor this labour is attributed to (for weekly settlement). */
   contractorId: z.string().uuid().nullable().optional(),
+  /**
+   * The agreement this labour belongs to. Part of the row IDENTITY, so it must
+   * travel with every queued mutation — an offline edit that dropped it would
+   * come back online and overwrite a different agreement's row.
+   *
+   * Absent/null is a legitimate value (attendance-only), never a placeholder for
+   * "figure it out on the server": an agreement is never inferred.
+   */
+  contractId: z.string().uuid().nullable().optional(),
 });
 export type LabourAttendanceMutation = z.infer<typeof labourAttendanceMutationSchema>;

@@ -33,6 +33,20 @@ export interface LabourAttendanceRecord {
   notes: string | null;
   /** Optional contractor attribution for weekly settlement. */
   contractorId?: string | null;
+  /**
+   * The commercial agreement this labour belongs to. Part of the row IDENTITY:
+   * one contractor holding two agreements on a project records the same labour
+   * type on the same date under each, and neither may overwrite the other.
+   * null = attendance-only, the legacy path, still fully supported.
+   */
+  contractId?: string | null;
+  /**
+   * The settlement that financially recognised this row. Once set the row is
+   * immutable — settlement is the canonical recognition of attendance money, so
+   * editing recognised value behind a settlement's back is refused. A governed
+   * settlement reversal clears it again.
+   */
+  settlementId?: string | null;
   clientUuid: string;
   updatedAt: string;
 }
@@ -95,5 +109,72 @@ export function demoLabourAttendance(): LabourAttendanceRecord[] {
       if (offset >= -10) push(ORION, ORION_BASE[i], "ori");
     });
   }
+  records.push(...pappuSkylineWeek());
   return records;
+}
+
+/* ── Pappu's settlement week on Skyline ─────────────────────────────────── */
+
+const PAPPU = "c-pappu";
+const MASON = "65000000-0000-0000-0000-000000000005";
+const MASON_HELPER = "65000000-0000-0000-0000-000000000006";
+
+/** Contractor-specific rates — above the shared defaults, which is the whole
+ *  point of putting a rate on the agreement rather than on the labour type. */
+export const PAPPU_SKYLINE_RATES = {
+  [MASON]: toPaise(1_000),
+  [MASON_HELPER]: toPaise(500),
+} as const;
+
+/**
+ * One settleable week of Pappu's labour on Skyline, sized to an exact
+ * ₹6,00,000 bill so the settlement → reversal → correction cycle is walkable.
+ *
+ * The most recent day deliberately records 180 masons where 80 turned up — the
+ * mistyped headcount the correction workflow exists for. Fixing it to 80 brings
+ * the week to exactly ₹5,00,000.
+ *
+ * Weekends are NOT skipped here: the rows must sit inside the settlement sheet's
+ * default seven-day window whichever day the demo is opened.
+ */
+function pappuSkylineWeek(): LabourAttendanceRecord[] {
+  const rows: LabourAttendanceRecord[] = [];
+  const masonRate = PAPPU_SKYLINE_RATES[MASON];
+  const helperRate = PAPPU_SKYLINE_RATES[MASON_HELPER];
+
+  for (let offset = -6; offset <= -2; offset++) {
+    const date = ymd(offset);
+    const masons = offset === -2 ? 180 : 80; // ← the mistyped day
+    rows.push(
+      {
+        id: `pappu-mason-${date}`,
+        projectId: SKYLINE,
+        date,
+        labourSubcategoryId: MASON,
+        quantityPresent: masons,
+        dailyRatePaiseSnapshot: masonRate,
+        estimatedCostPaise: masonRate * masons,
+        notes: null,
+        contractorId: PAPPU,
+        settlementId: null,
+        clientUuid: `seed-pappu-mason-${date}`,
+        updatedAt: new Date().toISOString(),
+      },
+      {
+        id: `pappu-helper-${date}`,
+        projectId: SKYLINE,
+        date,
+        labourSubcategoryId: MASON_HELPER,
+        quantityPresent: 40,
+        dailyRatePaiseSnapshot: helperRate,
+        estimatedCostPaise: helperRate * 40,
+        notes: null,
+        contractorId: PAPPU,
+        settlementId: null,
+        clientUuid: `seed-pappu-helper-${date}`,
+        updatedAt: new Date().toISOString(),
+      },
+    );
+  }
+  return rows;
 }

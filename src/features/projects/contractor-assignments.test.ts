@@ -74,10 +74,10 @@ describe("§33 — canonical Anjali Residency scenario", () => {
     ];
     const anjali = await mkProject({ ...base, name: "Anjali Residency", contractors: config });
 
-    await labor.setQuantity(anjali.id, DATE, MASON, 8, null, PAPPU.id);
-    await labor.setQuantity(anjali.id, DATE, HELPER, 5, null, PAPPU.id);
-    await labor.setQuantity(anjali.id, DATE, CENTERING, 4, null, PAPPU.id);
-    await labor.setQuantity(anjali.id, DATE, CENTERING, 3, null, SADDAM.id);
+    await labor.setQuantity({ projectId: anjali.id, date: DATE, subcategoryId: MASON, quantity: 8, contractorId: PAPPU.id });
+    await labor.setQuantity({ projectId: anjali.id, date: DATE, subcategoryId: HELPER, quantity: 5, contractorId: PAPPU.id });
+    await labor.setQuantity({ projectId: anjali.id, date: DATE, subcategoryId: CENTERING, quantity: 4, contractorId: PAPPU.id });
+    await labor.setQuantity({ projectId: anjali.id, date: DATE, subcategoryId: CENTERING, quantity: 3, contractorId: SADDAM.id });
 
     const rows = await recordsFor(anjali.id);
     expect(rows).toHaveLength(4); // four INDEPENDENT rows
@@ -108,7 +108,7 @@ describe("§33 — canonical Anjali Residency scenario", () => {
       name: "Anjali",
       contractors: [{ contractorId: PAPPU.id, labourRates: [{ labourSubcategoryId: CENTERING, ratePaise: 85000 }] }],
     });
-    await labor.setQuantity(anjali.id, DATE, CENTERING, 4, null, PAPPU.id);
+    await labor.setQuantity({ projectId: anjali.id, date: DATE, subcategoryId: CENTERING, quantity: 4, contractorId: PAPPU.id });
 
     // Raise Pappu's Centering rate to ₹900/day.
     await projects.setProjectContractors(anjali.id, [
@@ -135,8 +135,8 @@ describe("§34 — project-specific rates, config edits, eligibility", () => {
       contractors: [{ contractorId: PAPPU.id, labourRates: [{ labourSubcategoryId: MASON, ratePaise: 90000 }] }],
     });
 
-    await labor.setQuantity(anjali.id, DATE, MASON, 2, null, PAPPU.id);
-    await labor.setQuantity(township.id, DATE, MASON, 2, null, PAPPU.id);
+    await labor.setQuantity({ projectId: anjali.id, date: DATE, subcategoryId: MASON, quantity: 2, contractorId: PAPPU.id });
+    await labor.setQuantity({ projectId: township.id, date: DATE, subcategoryId: MASON, quantity: 2, contractorId: PAPPU.id });
 
     expect(find(await recordsFor(anjali.id), MASON, PAPPU.id)?.dailyRatePaiseSnapshot).toBe(80000);
     expect(find(await recordsFor(township.id), MASON, PAPPU.id)?.dailyRatePaiseSnapshot).toBe(90000);
@@ -211,11 +211,11 @@ describe("§34 — project-specific rates, config edits, eligibility", () => {
     });
 
     // OTHER supplies nothing on this project → not eligible → coerced to null.
-    await labor.setQuantity(anjali.id, DATE, MASON, 2, null, OTHER.id);
+    await labor.setQuantity({ projectId: anjali.id, date: DATE, subcategoryId: MASON, quantity: 2, contractorId: OTHER.id });
     expect(find(await recordsFor(anjali.id), MASON, null)?.contractorId ?? null).toBeNull();
 
     // Pappu supplies Mason here → attribution kept.
-    await labor.setQuantity(anjali.id, DATE, MASON, 2, null, PAPPU.id);
+    await labor.setQuantity({ projectId: anjali.id, date: DATE, subcategoryId: MASON, quantity: 2, contractorId: PAPPU.id });
     expect(find(await recordsFor(anjali.id), MASON, PAPPU.id)?.contractorId).toBe(PAPPU.id);
   });
 });

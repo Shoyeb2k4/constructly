@@ -48,56 +48,116 @@ async function applyLabourAttendance(clientUuid: string, payload: unknown, user:
   });
   if (!project) throw new Error("FORBIDDEN");
 
-  // Eligibility (offline-safe, subcategory-exact): a contractor may only be
-  // attributed to a subcategory THEY SUPPLY on the project (a
-  // ProjectContractorLabourRate exists; resolved server-side, never trusted from
-  // the client). Unlike the interactive action we DON'T reject — a queued
-  // mutation whose config was later removed would become a poison message that
-  // never syncs. Instead we degrade: keep the attendance (the valuable offline
-  // data) and drop the now-invalid attribution.
-  const { isAttributionEligible, resolveAttendanceRate } = await import(
-    "@/features/labor/server/assignment-eligibility"
-  );
+  // Eligibility, offline-safe. Unlike the interactive action we DON'T reject —
+  // a queued mutation whose config was later removed would become a poison
+  // message that never syncs. Instead we degrade: keep the attendance (the
+  // valuable offline data) and drop the now-invalid attribution. Nothing is ever
+  // guessed onto a different contractor or agreement.
+  //
+  // The AGREEMENT is checked first, and when it holds it settles the contractor
+  // too. An agreement's scope is its own authority on which labour types the
+  // contractor supplies — requiring a project-contractor rate as well would mean
+  // configuring the same fact twice, and silently dropping attribution for any
+  // labour type priced only by the agreement.
+  const { isAgreementAttributionEligible, isAttributionEligible, resolveAttendanceRate } =
+    await import("@/features/labor/server/assignment-eligibility");
   let contractorId = p.contractorId ?? null;
-  if (contractorId != null) {
-    if (!(await isAttributionEligible(user.company.id, p.projectId, contractorId, p.labourSubcategoryId))) {
+  let contractId = p.contractId ?? null;
+
+  const agreementHolds =
+    contractorId != null &&
+    contractId != null &&
+    (await isAgreementAttributionEligible(
+      user.company.id,
+      p.projectId,
+      contractorId,
+      contractId,
+      p.labourSubcategoryId,
+    ));
+
+  if (!agreementHolds) {
+    // No usable agreement — fall back to the project-contractor rate check
+    // (subcategory-exact, resolved server-side, never trusted from the client).
+    contractId = null;
+    if (
+      contractorId != null &&
+      !(await isAttributionEligible(user.company.id, p.projectId, contractorId, p.labourSubcategoryId))
+    ) {
       contractorId = null;
     }
   }
 
   const date = new Date(p.date);
-  if (p.quantityPresent <= 0) {
-    await prisma.labourAttendance.deleteMany({
-      where: {
-        companyId: user.company.id,
-        projectId: p.projectId,
-        date,
-        labourSubcategoryId: p.labourSubcategoryId,
-        contractorId,
-      },
-    });
-    return;
-  }
-  // Identity now includes the contractor; find the exact row (contractorId may
-  // be null for legacy/degraded rows — findFirst handles the nullable key).
-  const existing = await prisma.labourAttendance.findFirst({
+
+  // Settled labour is financially immutable — a settlement has already billed
+  // (and possibly credited to an agreement) exactly these rows. Unlike the
+  // eligibility degrade above we do NOT silently rewrite the mutation: the
+  // offline client's intent can't be satisfied at all, so drop it rather than
+  // corrupt a settled figure. The row it targets already holds the settled
+  // value, so nothing offline is lost.
+  //
+  // The check spans EVERY agreement for this contractor/date/type, not just the
+  // targeted one: if the day is settled under another agreement, applying this
+  // mutation would create a second row and double-count the same work.
+  const settled = await prisma.labourAttendance.findFirst({
     where: {
       companyId: user.company.id,
       projectId: p.projectId,
       date,
       labourSubcategoryId: p.labourSubcategoryId,
       contractorId,
+      settlementId: { not: null },
     },
-    select: { id: true, dailyRatePaiseSnapshot: true, projectContractorLabourRateId: true },
+    select: { id: true },
+  });
+  if (settled) return;
+
+  // Identity is FIVE fields: project, date, labour type, contractor AND
+  // agreement. Every WHERE below carries all five — dropping `contractId` would
+  // make an offline edit for one agreement overwrite, or clear, another's row.
+  const identity = {
+    companyId: user.company.id,
+    projectId: p.projectId,
+    date,
+    labourSubcategoryId: p.labourSubcategoryId,
+    contractorId,
+    contractId,
+  };
+
+  if (p.quantityPresent <= 0) {
+    await prisma.labourAttendance.deleteMany({ where: identity });
+    return;
+  }
+  // findFirst, not the compound-unique accessor: Prisma types both nullable
+  // identity columns as non-null there, so it cannot target a NULL-contractor or
+  // NULL-agreement row.
+  const existing = await prisma.labourAttendance.findFirst({
+    where: identity,
+    select: {
+      id: true,
+      dailyRatePaiseSnapshot: true,
+      projectContractorLabourRateId: true,
+      contractScopeRateRevisionId: true,
+    },
   });
   // Snapshot the effective rate on first recording; edits keep it (ADR-0022).
-  const { ratePaise: snapshot, projectContractorLabourRateId: rateId } = existing
+  // A new row resolves against the ROW'S OWN DATE — an offline entry that syncs
+  // days later must still be valued at the rate in force when the work happened.
+  const resolved = existing
     ? {
         ratePaise: existing.dailyRatePaiseSnapshot,
         projectContractorLabourRateId: existing.projectContractorLabourRateId,
+        contractScopeRateRevisionId: existing.contractScopeRateRevisionId,
       }
-    : await resolveAttendanceRate(user.company.id, p.projectId, contractorId, p.labourSubcategoryId);
-  const estimatedCostPaise = Math.round((snapshot ?? 0) * p.quantityPresent);
+    : await resolveAttendanceRate(
+        user.company.id,
+        p.projectId,
+        contractorId,
+        p.labourSubcategoryId,
+        contractId,
+        p.date,
+      );
+  const estimatedCostPaise = Math.round((resolved.ratePaise ?? 0) * p.quantityPresent);
 
   if (existing) {
     await prisma.labourAttendance.update({
@@ -111,14 +171,11 @@ async function applyLabourAttendance(clientUuid: string, payload: unknown, user:
   } else {
     await prisma.labourAttendance.create({
       data: {
-        companyId: user.company.id,
-        projectId: p.projectId,
-        date,
-        labourSubcategoryId: p.labourSubcategoryId,
-        contractorId,
+        ...identity,
         quantityPresent: p.quantityPresent,
-        dailyRatePaiseSnapshot: snapshot,
-        projectContractorLabourRateId: rateId,
+        dailyRatePaiseSnapshot: resolved.ratePaise,
+        projectContractorLabourRateId: resolved.projectContractorLabourRateId,
+        contractScopeRateRevisionId: resolved.contractScopeRateRevisionId,
         estimatedCostPaise,
         notes: p.notes ?? null,
         clientUuid,

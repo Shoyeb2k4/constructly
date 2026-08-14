@@ -116,3 +116,22 @@ export function usePreviewSettlement() {
     mutationFn: (input: SettlementPreviewInput) => contractorsApi.previewSettlement(input),
   });
 }
+
+/**
+ * Reverse a settlement. Un-recognises the labour, restores each drawdown, and
+ * turns the already-paid net cash into an unapplied advance — so the money the
+ * contractor is holding never disappears from the ledger.
+ */
+export function useReverseSettlement() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason: string }) =>
+      contractorsApi.reverseSettlement(id, reason),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: contractorKeys.all });
+      toast.success("Settlement reversed — its attendance is editable again");
+    },
+    onError: (e: unknown) =>
+      toast.error(e instanceof Error && e.message ? e.message : "Couldn't reverse settlement"),
+  });
+}

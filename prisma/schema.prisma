@@ -114,6 +114,7 @@ model Company {
   contractors                  Contractor[]
   contractorLedger             ContractorLedgerEntry[]
   contractorSettlements        ContractorSettlement[]
+  settlementBreakdowns         ContractorSettlementBreakdown[]
   labourCategories             LabourCategory[]
   labourSubcategories          LabourSubcategory[]
   labourAttendance             LabourAttendance[]
@@ -125,6 +126,13 @@ model Company {
   contractorAssignments        ProjectContractorAssignment[]
   projectContractors           ProjectContractor[]
   projectContractorLabourRates ProjectContractorLabourRate[]
+  contractorContracts          ContractorContract[]
+  contractorContractPayments   ContractorContractPayment[]
+  contractScopeItems           ContractScopeItem[]
+  contractScopeRateRevisions   ContractScopeRateRevision[]
+  contractMilestones           ContractMilestone[]
+  contractAmendments           ContractAmendment[]
+  pclrRateRevisions            ProjectContractorLabourRateRevision[]
 
   @@map("companies")
 }
@@ -173,6 +181,22 @@ model User {
   rolesAssignedByMe      UserRole[]        @relation("UserRoleAssignedBy")
   deletedLabourCategories    LabourCategory[]    @relation("LabourCategoryDeletedBy")
   deletedLabourSubcategories LabourSubcategory[] @relation("LabourSubcategoryDeletedBy")
+  createdContracts           ContractorContract[]        @relation("ContractCreatedBy")
+  deletedContracts           ContractorContract[]        @relation("ContractDeletedBy")
+  cancelledContracts         ContractorContract[]        @relation("ContractCancelledBy")
+  reversedSettlements        ContractorSettlement[]      @relation("SettlementReversedBy")
+  createdContractPayments    ContractorContractPayment[] @relation("ContractPaymentCreatedBy")
+  deletedContractPayments    ContractorContractPayment[] @relation("ContractPaymentDeletedBy")
+  createdScopeItems          ContractScopeItem[]         @relation("ScopeItemCreatedBy")
+  deletedScopeItems          ContractScopeItem[]         @relation("ScopeItemDeletedBy")
+  createdScopeRates          ContractScopeRateRevision[] @relation("ScopeRateCreatedBy")
+  createdMilestones          ContractMilestone[]         @relation("MilestoneCreatedBy")
+  completedMilestones        ContractMilestone[]         @relation("MilestoneCompletedBy")
+  deletedMilestones          ContractMilestone[]         @relation("MilestoneDeletedBy")
+  requestedAmendments        ContractAmendment[]         @relation("AmendmentRequestedBy")
+  approvedAmendments         ContractAmendment[]         @relation("AmendmentApprovedBy")
+  deletedAmendments          ContractAmendment[]         @relation("AmendmentDeletedBy")
+  pclrRateRevisions          ProjectContractorLabourRateRevision[] @relation("PclrRevisionChangedBy")
 
   @@index([companyId])
   @@index([companyRoleId])
@@ -319,6 +343,15 @@ model Project {
   contractorSettlements ContractorSettlement[]
   contractorAssignments ProjectContractorAssignment[]
   projectContractors    ProjectContractor[]
+  contracts             ContractorContract[]
+  contractPayments      ContractorContractPayment[]
+  contractScopeItems    ContractScopeItem[]
+  contractScopeRates    ContractScopeRateRevision[]
+  contractMilestones    ContractMilestone[]
+  contractAmendments    ContractAmendment[]
+  pclrRevisions         ProjectContractorLabourRateRevision[]
+  contractorLedger      ContractorLedgerEntry[]
+  settlementBreakdowns  ContractorSettlementBreakdown[]
 
   @@unique([companyId, code])
   @@index([companyId, stage])
@@ -424,7 +457,7 @@ model Contractor {
   status              ContractorStatus @default(ACTIVE)
   /// Opening advance carried in at contractor creation (integer paise). Seeds
   /// the first ledger entry; the ledger is the authoritative running balance.
-  openingAdvancePaise Int              @default(0) @map("opening_advance_paise")
+  openingAdvancePaise BigInt           @default(0) @map("opening_advance_paise")
   createdAt           DateTime         @default(now()) @map("created_at")
   updatedAt           DateTime         @updatedAt @map("updated_at")
 
@@ -434,47 +467,94 @@ model Contractor {
   attendance         LabourAttendance[]
   assignments        ProjectContractorAssignment[]
   projectContractors ProjectContractor[]
+  contracts          ContractorContract[]
+  contractPayments   ContractorContractPayment[]
 
   @@index([companyId, status])
   @@map("contractors")
 }
 
 /// Kinds of contractor ledger movements. Sign convention for the advance
-/// balance: OPENING_ADVANCE / ADVANCE increase it; ADJUSTMENT decreases it;
-/// LABOUR_BILL and PAYMENT are informational (no advance-balance effect).
+/// balance: OPENING_ADVANCE / ADVANCE / SETTLEMENT_REVERSAL increase it;
+/// ADJUSTMENT decreases it; LABOUR_BILL and PAYMENT are informational (no
+/// advance-balance effect).
 enum ContractorLedgerType {
   OPENING_ADVANCE
   ADVANCE
   LABOUR_BILL
   ADJUSTMENT
   PAYMENT
+  /// Written only by reverseSettlement, in two shapes: restoring a drawdown to
+  /// the advance it came from, and turning already-paid net cash back into an
+  /// unapplied advance. Both INCREASE the balance.
+  SETTLEMENT_REVERSAL
 }
 
-/// Append-only, immutable contractor ledger. Each entry snapshots the advance
-/// balance AFTER it, so history never needs recomputation (ADR: financial
-/// integrity). Advances and adjustments are company/contractor-scoped; labour
-/// bills and payments arise from a settlement (see settlementId).
+/// Append-only, immutable contractor ledger.
+///
+/// Scope: an entry may be company-wide (both projectId and contractId NULL —
+/// the legacy shape, unchanged), project-scoped, or agreement-scoped. Money the
+/// contractor was given for specific work keeps that attribution, and a
+/// settlement consumes advances strictly-to-broad (see allocateAdvanceDrawdown).
+///
+/// A LABOUR ADVANCE here is NOT agreement credit. It pre-pays future labour and
+/// is netted off a settlement; the agreement is credited by the attendance that
+/// settlement recognises. Direct commercial payment against an agreement is a
+/// ContractorContractPayment instead.
 model ContractorLedgerEntry {
   id                       String               @id @default(uuid()) @db.Uuid
   companyId                String               @map("company_id") @db.Uuid
   contractorId             String               @map("contractor_id") @db.Uuid
   date                     DateTime             @db.Date
   type                     ContractorLedgerType
-  /// Unsigned magnitude in paise; the sign is implied by `type`.
-  amountPaise              Int                  @map("amount_paise")
-  /// Running advance balance immediately after this entry (integer paise).
-  advanceBalanceAfterPaise Int                  @map("advance_balance_after_paise")
+  /// Unsigned magnitude in paise; the sign is implied by `type`. BigInt: a
+  /// single settlement payment can exceed the Int32 ceiling of ₹2,14,74,836.
+  amountPaise              BigInt               @map("amount_paise")
+  /// HISTORICAL FOOTPRINT — the balance immediately after this entry, as written.
+  /// NEVER the source of truth for the CURRENT balance: reversals append later
+  /// entries, so this value is deliberately not updated. Current balance is
+  /// always the fold over the entries (advanceBalancePaise).
+  advanceBalanceAfterPaise BigInt               @map("advance_balance_after_paise")
   notes                    String?
   settlementId             String?              @map("settlement_id") @db.Uuid
+  /// Scope. Enforced in SQL by CHECK (contract_id IS NULL OR project_id IS NOT
+  /// NULL), and by composite FKs proving the agreement belongs to this same
+  /// company + contractor + project.
+  projectId                String?              @map("project_id") @db.Uuid
+  contractId               String?              @map("contract_id") @db.Uuid
+  /// EXPLICIT provenance — one meaning per field, never polymorphic.
+  /// ADJUSTMENT → the advance entry it consumes.
+  drawsFromEntryId         String?              @map("draws_from_entry_id") @db.Uuid
+  /// SETTLEMENT_REVERSAL → the ADJUSTMENT it restores. NULL on the
+  /// unapplied-cash entry, which is traced through settlementId instead.
+  reversesEntryId          String?              @map("reverses_entry_id") @db.Uuid
+  /// ADJUSTMENT → the composition BUCKET this drawdown funded (NULL = the
+  /// unattributed bucket). Distinct from contractId, which is the scope of the
+  /// advance CONSUMED: a project or legacy advance may fund an agreement's
+  /// share, so the two differ and both must be recorded.
+  fundsContractId          String?              @map("funds_contract_id") @db.Uuid
   createdById              String               @map("created_by_id") @db.Uuid
   createdAt                DateTime             @default(now()) @map("created_at")
 
   company    Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
   contractor Contractor            @relation(fields: [contractorId], references: [id], onDelete: Cascade)
-  settlement ContractorSettlement? @relation(fields: [settlementId], references: [id], onDelete: Cascade)
+  /// Restrict, not Cascade: financial ledger history must never disappear
+  /// because a settlement row is deleted. Correction is reversal, not deletion.
+  settlement ContractorSettlement? @relation(fields: [settlementId], references: [id], onDelete: Restrict)
+  project    Project?              @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  /// Self-references so a provenance chain can never point at a missing row.
+  drawsFrom  ContractorLedgerEntry?  @relation("LedgerDrawsFrom", fields: [drawsFromEntryId], references: [id], onDelete: Restrict)
+  drawnBy    ContractorLedgerEntry[] @relation("LedgerDrawsFrom")
+  reverses   ContractorLedgerEntry?  @relation("LedgerReverses", fields: [reversesEntryId], references: [id], onDelete: Restrict)
+  reversedBy ContractorLedgerEntry[] @relation("LedgerReverses")
+  /// Scope of the advance itself.
+  contract   ContractorContract?     @relation("LedgerScopedTo", fields: [contractId], references: [id], onDelete: Restrict)
+  /// Bucket a drawdown funded — may differ from `contract` (see fundsContractId).
+  fundsContract ContractorContract?  @relation("LedgerFundsBucket", fields: [fundsContractId], references: [id], onDelete: Restrict)
 
   @@index([companyId, contractorId, createdAt])
   @@index([companyId, settlementId])
+  @@index([companyId, contractorId, contractId])
   @@map("contractor_ledger_entries")
 }
 
@@ -490,25 +570,78 @@ model ContractorSettlement {
   periodStart              DateTime @map("period_start") @db.Date
   periodEnd                DateTime @map("period_end") @db.Date
   /// Σ estimated labour cost for this contractor on this project in the period.
-  labourBillPaise          Int      @map("labour_bill_paise")
+  labourBillPaise          BigInt   @map("labour_bill_paise")
   /// Advance drawn down against the bill (≤ min(outstanding advance, bill)).
-  advanceAdjustmentPaise   Int      @default(0) @map("advance_adjustment_paise")
+  advanceAdjustmentPaise   BigInt   @default(0) @map("advance_adjustment_paise")
   /// Net cash paid = labourBill − advanceAdjustment.
-  netPaymentPaise          Int      @map("net_payment_paise")
-  /// Contractor advance balance after this settlement (integer paise).
-  advanceBalanceAfterPaise Int      @map("advance_balance_after_paise")
+  netPaymentPaise          BigInt   @map("net_payment_paise")
+  /// HISTORICAL FOOTPRINT, as written. Not the current balance — see the note
+  /// on ContractorLedgerEntry.advanceBalanceAfterPaise.
+  advanceBalanceAfterPaise BigInt   @map("advance_balance_after_paise")
   notes                    String?
+  /// Reversal. The settlement is never deleted: it keeps its figures, its
+  /// ledger entries and its breakdown, and simply stops being live.
+  reversedAt               DateTime? @map("reversed_at")
+  reversedById             String?   @map("reversed_by_id") @db.Uuid
+  reversalReason           String?   @map("reversal_reason")
   createdById              String   @map("created_by_id") @db.Uuid
   createdAt                DateTime @default(now()) @map("created_at")
 
   company    Company                 @relation(fields: [companyId], references: [id], onDelete: Cascade)
   contractor Contractor              @relation(fields: [contractorId], references: [id], onDelete: Cascade)
   project    Project                 @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  reversedBy User?                   @relation("SettlementReversedBy", fields: [reversedById], references: [id], onDelete: SetNull)
   ledger     ContractorLedgerEntry[]
+  /// Attendance rows this settlement financially RECOGNISED. Stamped once, at
+  /// creation; a stamped row is immutable to ordinary attendance editing.
+  attendance LabourAttendance[]
+  /// Immutable record of the composition this settlement acted on.
+  breakdown  ContractorSettlementBreakdown[]
 
   @@index([companyId, contractorId, createdAt])
   @@index([companyId, projectId])
   @@map("contractor_settlements")
+}
+
+/// What a settlement knew about its own composition, AT THE TIME IT RAN.
+///
+/// One row per composition bucket: an agreement, or NULL for labour that wasn't
+/// attributed to any agreement. Written inside createSettlement's transaction
+/// and never rewritten afterwards.
+///
+/// This exists because reversal must not reconstruct composition from today's
+/// LabourAttendance.contractId. Historical attribution can legitimately change
+/// those values later, so a settlement attributed AFTER it ran would otherwise
+/// reverse against a composition it never actually used, and cash would be
+/// attributed to the wrong agreement.
+///
+/// Invariants, enforced on write:
+///   Σ labourBillPaise        = settlement.labourBillPaise
+///   Σ advanceAdjustmentPaise = settlement.advanceAdjustmentPaise
+///   Σ netPaymentPaise        = settlement.netPaymentPaise
+///   per row: labourBill      = advanceAdjustment + netPayment
+model ContractorSettlementBreakdown {
+  id                     String   @id @default(uuid()) @db.Uuid
+  companyId              String   @map("company_id") @db.Uuid
+  /// Denormalized from the settlement so RLS uses the flat project-scoped shape.
+  projectId              String   @map("project_id") @db.Uuid
+  settlementId           String   @map("settlement_id") @db.Uuid
+  /// The composition bucket. NULL = the unattributed bucket.
+  contractId             String?  @map("contract_id") @db.Uuid
+  labourBillPaise        BigInt   @map("labour_bill_paise")
+  advanceAdjustmentPaise BigInt   @map("advance_adjustment_paise")
+  netPaymentPaise        BigInt   @map("net_payment_paise")
+  createdAt              DateTime @default(now()) @map("created_at")
+
+  company    Company              @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  project    Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  settlement ContractorSettlement @relation(fields: [settlementId], references: [id], onDelete: Restrict)
+  contract   ContractorContract?  @relation(fields: [contractId], references: [id], onDelete: Restrict)
+
+  // UNIQUE (settlement_id, contract_id) NULLS NOT DISTINCT lives in SQL — Prisma
+  // cannot express NULLS NOT DISTINCT, and the null bucket must be unique too.
+  @@index([companyId, settlementId])
+  @@map("contractor_settlement_breakdowns")
 }
 
 /// A labour category (trade group), e.g. Carpenter, Electrician, Mason.
@@ -566,6 +699,7 @@ model LabourSubcategory {
   deletedBy              User?                         @relation("LabourSubcategoryDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
   attendance             LabourAttendance[]
   projectContractorRates ProjectContractorLabourRate[]
+  contractScopeItems     ContractScopeItem[]
 
   // Name uniqueness within a group is a PARTIAL unique index (WHERE deleted_at
   // IS NULL) — see prisma/migration-labour-force-delete.sql. Compile-time
@@ -619,6 +753,10 @@ model ProjectContractor {
   /// Unit for the agreement rate: "sqft" | "lumpsum" | … (free text). Null when
   /// no agreement rate is set.
   contractRateUnit  String?  @map("contract_rate_unit")
+  // Intentionally NO paymentModel: a contractor↔project relationship cannot have
+  // one billing method. It may carry attendance-only labour, one or several
+  // commercial agreements, or both at once — the method belongs to each
+  // ContractorContract, never to the relationship.
   createdAt         DateTime @default(now()) @map("created_at")
   updatedAt         DateTime @updatedAt @map("updated_at")
 
@@ -654,6 +792,7 @@ model ProjectContractorLabourRate {
   projectContractor ProjectContractor  @relation(fields: [projectContractorId], references: [id], onDelete: Cascade)
   subcategory       LabourSubcategory  @relation(fields: [labourSubcategoryId], references: [id], onDelete: Cascade)
   attendance        LabourAttendance[]
+  revisions         ProjectContractorLabourRateRevision[]
 
   @@unique([projectContractorId, labourSubcategoryId])
   @@index([companyId, projectContractorId])
@@ -685,6 +824,22 @@ model LabourAttendance {
   /// rate came from. Null when the rate fell back to the subcategory's global
   /// rate, or for legacy rows. SetNull on delete so history survives config edits.
   projectContractorLabourRateId String?  @map("project_contractor_labour_rate_id") @db.Uuid
+  /// The commercial agreement this labour is attributed to. NULL = attendance-only
+  /// (the pre-existing path, unchanged). Part of the row IDENTITY so one
+  /// contractor holding two agreements on a project can record the same labour
+  /// type on the same date under each. SetNull so history survives.
+  contractId                    String?  @map("contract_id") @db.Uuid
+  /// TIER-1 rate provenance: the effective-dated agreement rate revision the
+  /// snapshot came from (mirrors projectContractorLabourRateId for tier 2).
+  contractScopeRateRevisionId   String?  @map("contract_scope_rate_revision_id") @db.Uuid
+  /// The settlement that financially RECOGNISED this row's labour value.
+  /// Stamped once, inside createSettlement's transaction, on rows not already
+  /// stamped. Two jobs: (1) agreement Attendance Credit counts only settled rows
+  /// — settlement is the canonical record of attendance money; (2) a stamped row
+  /// is financially IMMUTABLE, so recognised value can never drift away from the
+  /// settlement that recognised it. Changing settled labour requires a governed
+  /// settlement reversal, never a plain attendance edit.
+  settlementId                  String?  @map("settlement_id") @db.Uuid
   /// Headcount present. Float to allow half-day (0.5) increments; 0.5 steps
   /// are exactly representable, and legacy whole-number rows are unaffected.
   quantityPresent               Float    @map("quantity_present")
@@ -703,24 +858,422 @@ model LabourAttendance {
   subcategory LabourSubcategory            @relation(fields: [labourSubcategoryId], references: [id], onDelete: Cascade)
   contractor  Contractor?                  @relation(fields: [contractorId], references: [id], onDelete: SetNull)
   rate        ProjectContractorLabourRate? @relation(fields: [projectContractorLabourRateId], references: [id], onDelete: SetNull)
+  contract    ContractorContract?          @relation(fields: [contractId], references: [id], onDelete: SetNull)
+  scopeRate   ContractScopeRateRevision?   @relation(fields: [contractScopeRateRevisionId], references: [id], onDelete: SetNull)
+  settlement  ContractorSettlement?        @relation(fields: [settlementId], references: [id], onDelete: SetNull)
 
-  // Identity = (project, date, subcategory, contractor). The DB enforces this as
-  // UNIQUE … NULLS NOT DISTINCT (see prisma/migration-attendance-contractor-
-  // identity.sql) so the legacy contractorId-NULL rows keep
-  // one-row-per-(project,date,subcategory). Prisma has no schema syntax for
-  // NULLS NOT DISTINCT, and the compound-unique accessor it generates
-  // (projectId_date_labourSubcategoryId_contractorId) types contractorId as
-  // NON-null — so it CANNOT target a NULL-contractor row. The write paths
-  // therefore never use that accessor: setQuantity / applyLabourAttendance /
-  // copyPreviousDay do findFirst (nullable-safe) → update-by-id or create, and
-  // clears use deleteMany (WHERE contractor_id IS NULL). The DB unique index is
-  // the concurrency backstop; a rare race surfaces as a create error that the
-  // interactive path reports and the offline outbox retries into an update.
-  @@unique([projectId, date, labourSubcategoryId, contractorId])
+  // Identity = (project, date, subcategory, contractor, contract). The DB
+  // enforces this as UNIQUE … NULLS NOT DISTINCT (see prisma/migration-
+  // contractor-contracts.sql, which supersedes the 4-column index from
+  // migration-attendance-contractor-identity.sql) so NULL-contractor and
+  // NULL-contract rows still keep one-row-per-(project,date,subcategory).
+  // Prisma has no schema syntax for NULLS NOT DISTINCT, and the compound-unique
+  // accessor it generates (projectId_date_labourSubcategoryId_contractorId_
+  // contractId) types BOTH nullable columns as NON-null — so it CANNOT target a
+  // NULL-contractor or NULL-contract row. The write paths therefore never use
+  // that accessor: setQuantity / applyLabourAttendance / copyPreviousDay do
+  // findFirst (nullable-safe) → update-by-id or create, and clears use
+  // deleteMany. Every such WHERE must carry contractId, or clearing one
+  // agreement's row silently deletes another agreement's row for the same
+  // date+subcategory. The DB unique index is the concurrency backstop; a rare
+  // race surfaces as a create error that the interactive path reports and the
+  // offline outbox retries into an update.
+  @@unique([projectId, date, labourSubcategoryId, contractorId, contractId])
   @@index([companyId, contractorId, date])
   @@index([companyId, projectId, date])
   @@index([companyId, date])
+  @@index([companyId, contractId, date])
+  @@index([companyId, settlementId])
   @@map("labour_attendance")
+}
+
+/// Lifecycle of a contractor's commercial agreement (work package).
+/// SETTLED is not a free label: setContractStatus permits COMPLETED → SETTLED
+/// only when currentDue is 0 AND every non-cancelled milestone is COMPLETED. It
+/// is an administrative close-out sign-off, distinct from the DERIVED financial
+/// state (due / settled / ahead) that reconciliation computes continuously.
+enum ContractStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  ON_HOLD
+  COMPLETED
+  SETTLED
+  CANCELLED
+}
+
+/// PHYSICAL progress of an earned-value checkpoint — deliberately not a
+/// financial state. Payments are cumulative at agreement level and never live in
+/// per-milestone wallets, so "settled" is derived from cumulative reconciliation
+/// at the checkpoint, never stamped here by a user.
+enum MilestoneStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+/// Why an agreement's commercial terms were revised.
+enum AmendmentType {
+  VARIATION
+  SCOPE_CHANGE
+  RATE_CHANGE
+  TIME_EXTENSION
+  OTHER
+}
+
+/// Amendment approval state. Only APPROVED rows move the contract value —
+/// maker/checker: proposing needs contracts.edit, approving contracts.amend_approve.
+enum AmendmentStatus {
+  PROPOSED
+  APPROVED
+  REJECTED
+}
+
+/// Classification of a fixed-contract payment. Informational (drives labelling
+/// and the lifetime advance/other split) — none of these change the contract
+/// value; only the contract amount itself does.
+enum ContractPaymentType {
+  ADVANCE
+  INTERIM
+  MILESTONE
+  WEEKLY
+  DAILY
+  FINAL
+  OTHER
+}
+
+/// A contractor's COMMERCIAL AGREEMENT (work package) on a project — "Pappu
+/// Contractor → Project A → Structure, ₹60,00,000, 6 slabs". One contractor may
+/// hold several agreements on one project; each is financially isolated (own
+/// scope, rates, rate history, milestones, payments, reconciliation), and one
+/// agreement's advance must never offset another's liability.
+///
+/// Coexists with attendance-only engagement: a contractor can supply labour on a
+/// project with no agreement at all (ProjectContractorLabourRate), which is why
+/// there is no per-relationship "payment model" — the relationship cannot have
+/// one, only the individual agreements can.
+///
+/// Value: `originalAmountPaise` is IMMUTABLE after creation; every change flows
+/// through an approved ContractAmendment. `currentAmountPaise` is the authorised
+/// value (original + Σ approved deltas), denormalized because every list and
+/// summary read needs it — written ONLY inside approveAmendment's transaction,
+/// and re-derived on the read path as a drift guard.
+model ContractorContract {
+  id                     String         @id @default(uuid()) @db.Uuid
+  companyId              String         @map("company_id") @db.Uuid
+  contractorId           String         @map("contractor_id") @db.Uuid
+  projectId              String         @map("project_id") @db.Uuid
+  title                  String
+  /// Human agreement/reference number, if the company uses one.
+  reference              String?
+  scope                  String?
+  /// Informational quantity (e.g. 20 bathrooms, 17.5 running metres). NUMERIC,
+  /// never Float — binary floating point has no place in ERP quantities.
+  quantity               Decimal?       @db.Decimal(12, 3)
+  /// Informational unit label (e.g. "Bathrooms", "sq.ft"). Null when unset.
+  unit                   String?
+  /// Value agreed at signing (integer paise). IMMUTABLE — never edited in place.
+  originalAmountPaise    BigInt         @map("original_amount_paise")
+  /// Currently AUTHORISED value = original + Σ APPROVED amendment deltas. Both
+  /// the earned-value ceiling and the credit ceiling are measured against this.
+  currentAmountPaise     BigInt         @map("current_amount_paise")
+  startDate              DateTime?      @map("start_date") @db.Date
+  expectedCompletionDate DateTime?      @map("expected_completion_date") @db.Date
+  status                 ContractStatus @default(NOT_STARTED)
+  notes                  String?
+  completedAt            DateTime?      @map("completed_at")
+  settledAt              DateTime?      @map("settled_at")
+  cancelledAt            DateTime?      @map("cancelled_at")
+  cancelledById          String?        @map("cancelled_by_id") @db.Uuid
+  cancelledReason        String?        @map("cancelled_reason")
+  createdById            String         @map("created_by_id") @db.Uuid
+  /// Soft-delete, reserved for an agreement created by mistake and never used.
+  /// Once it has financial history the business path is CANCELLED, and
+  /// deleteContract refuses (HAS_FINANCIAL_HISTORY).
+  deletedAt              DateTime?      @map("deleted_at")
+  deletedById            String?        @map("deleted_by_id") @db.Uuid
+  createdAt              DateTime       @default(now()) @map("created_at")
+  updatedAt              DateTime       @updatedAt @map("updated_at")
+
+  company     Company                     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  contractor  Contractor                  @relation(fields: [contractorId], references: [id], onDelete: Cascade)
+  project     Project                     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdBy   User                        @relation("ContractCreatedBy", fields: [createdById], references: [id])
+  deletedBy   User?                       @relation("ContractDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
+  cancelledBy User?                       @relation("ContractCancelledBy", fields: [cancelledById], references: [id], onDelete: SetNull)
+  payments    ContractorContractPayment[]
+  scopeItems  ContractScopeItem[]
+  rateRevisions ContractScopeRateRevision[]
+  milestones  ContractMilestone[]
+  amendments  ContractAmendment[]
+  attendance  LabourAttendance[]
+  scopedLedgerEntries ContractorLedgerEntry[] @relation("LedgerScopedTo")
+  fundedLedgerEntries ContractorLedgerEntry[] @relation("LedgerFundsBucket")
+  settlementBreakdowns ContractorSettlementBreakdown[]
+
+  // Backs the composite FKs from contractor_ledger_entries proving an
+  // agreement-scoped entry belongs to the same company + contractor + project.
+  @@unique([id, companyId, contractorId, projectId])
+  @@index([companyId, contractorId])
+  @@index([companyId, projectId])
+  @@index([companyId, status])
+  @@index([companyId, contractorId, projectId])
+  @@map("contractor_contracts")
+}
+
+/// A labour type (subcategory) covered by an agreement's commercial scope, and
+/// the TIER-1 rate carrier. Coexists with ProjectContractorLabourRate (tier 2,
+/// attendance-only): agreement scope is self-sufficient eligibility, so a
+/// contractor needs no separate project-contractor rate to work under an
+/// agreement.
+///
+/// `currentRatePaise` is a read accelerator only — the authoritative rate history
+/// is ContractScopeRateRevision, and attendance resolves the revision effective
+/// on the row's OWN date. Uniqueness of (contract, subcategory) among live rows
+/// is a PARTIAL unique index in SQL (WHERE deleted_at IS NULL); Prisma cannot
+/// express partial unique, so it is deliberately absent here (precedent:
+/// LabourCategory / LabourSubcategory).
+model ContractScopeItem {
+  id                  String    @id @default(uuid()) @db.Uuid
+  companyId           String    @map("company_id") @db.Uuid
+  /// Denormalized from the contract so RLS uses the same flat project policy as
+  /// every other project-scoped table.
+  projectId           String    @map("project_id") @db.Uuid
+  contractId          String    @map("contract_id") @db.Uuid
+  labourSubcategoryId String    @map("labour_subcategory_id") @db.Uuid
+  /// Rate of the revision effective TODAY (integer paise). Int, not BigInt:
+  /// this is a DAY RATE (Int32 ceiling ₹21,47,483/day), matching
+  /// LabourSubcategory.dailyRatePaise and ProjectContractorLabourRate.ratePaise
+  /// so rate resolution stays free of BigInt conversion.
+  currentRatePaise    Int       @map("current_rate_paise")
+  rateUnit            String    @default("day") @map("rate_unit")
+  notes               String?
+  deletedAt           DateTime? @map("deleted_at")
+  deletedById         String?   @map("deleted_by_id") @db.Uuid
+  createdById         String    @map("created_by_id") @db.Uuid
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  company     Company                     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  project     Project                     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  contract    ContractorContract          @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  subcategory LabourSubcategory           @relation(fields: [labourSubcategoryId], references: [id], onDelete: Cascade)
+  createdBy   User                        @relation("ScopeItemCreatedBy", fields: [createdById], references: [id])
+  deletedBy   User?                       @relation("ScopeItemDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
+  revisions   ContractScopeRateRevision[]
+
+  @@index([companyId, contractId])
+  @@index([companyId, labourSubcategoryId])
+  @@map("contract_scope_items")
+}
+
+/// APPEND-ONLY effective-dated rate history for an agreement scope item. An
+/// agreed rate is never overwritten: a revision is a new row, and a correction
+/// is another new row. Deliberately has NO soft-delete — erasable rate history
+/// is exactly what this model exists to prevent.
+///
+/// Resolution is derived, not stored: the rate in force on a date is the latest
+/// effectiveFrom <= date, tiebroken by createdAt desc. There is no effectiveTo
+/// column, so there is no closing-date invariant that can drift.
+model ContractScopeRateRevision {
+  id            String   @id @default(uuid()) @db.Uuid
+  companyId     String   @map("company_id") @db.Uuid
+  projectId     String   @map("project_id") @db.Uuid
+  contractId    String   @map("contract_id") @db.Uuid
+  scopeItemId   String   @map("scope_item_id") @db.Uuid
+  /// Day rate in paise. Int for the same reason as ContractScopeItem.
+  ratePaise     Int      @map("rate_paise")
+  rateUnit      String   @default("day") @map("rate_unit")
+  effectiveFrom DateTime @map("effective_from") @db.Date
+  reason        String?
+  createdById   String   @map("created_by_id") @db.Uuid
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  company    Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  project    Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  contract   ContractorContract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  scopeItem  ContractScopeItem  @relation(fields: [scopeItemId], references: [id], onDelete: Cascade)
+  createdBy  User               @relation("ScopeRateCreatedBy", fields: [createdById], references: [id])
+  attendance LabourAttendance[]
+
+  @@index([companyId, scopeItemId, effectiveFrom])
+  @@index([companyId, contractId])
+  @@map("contract_scope_rate_revisions")
+}
+
+/// An earned-value checkpoint inside an agreement. Generic by design — "Slab 1",
+/// "10 bathrooms complete", "Conduit work" are all just titles; nothing here is
+/// slab-specific. Values need NOT be equal across milestones.
+///
+/// Earned value = Σ valuePaise WHERE status = COMPLETED. A milestone is NOT a
+/// payment bucket: payments are cumulative at agreement level, and the optional
+/// payment→milestone link is context for reporting only. Completing a milestone
+/// is blocked when cumulative earned would exceed the authorised contract value
+/// (EARNED_VALUE_EXCEEDS_CONTRACT) — raise an amendment first.
+model ContractMilestone {
+  id              String          @id @default(uuid()) @db.Uuid
+  companyId       String          @map("company_id") @db.Uuid
+  projectId       String          @map("project_id") @db.Uuid
+  contractId      String          @map("contract_id") @db.Uuid
+  sequence        Int             @default(0)
+  title           String
+  description     String?
+  /// Value recognised as earned when this milestone completes (integer paise).
+  valuePaise      BigInt          @map("value_paise")
+  plannedDate     DateTime?       @map("planned_date") @db.Date
+  status          MilestoneStatus @default(NOT_STARTED)
+  completedAt     DateTime?       @map("completed_at")
+  completedById   String?         @map("completed_by_id") @db.Uuid
+  cancelledAt     DateTime?       @map("cancelled_at")
+  cancelledReason String?         @map("cancelled_reason")
+  notes           String?
+  createdById     String          @map("created_by_id") @db.Uuid
+  deletedAt       DateTime?       @map("deleted_at")
+  deletedById     String?         @map("deleted_by_id") @db.Uuid
+  createdAt       DateTime        @default(now()) @map("created_at")
+  updatedAt       DateTime        @updatedAt @map("updated_at")
+
+  company     Company                     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  project     Project                     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  contract    ContractorContract          @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  createdBy   User                        @relation("MilestoneCreatedBy", fields: [createdById], references: [id])
+  completedBy User?                       @relation("MilestoneCompletedBy", fields: [completedById], references: [id], onDelete: SetNull)
+  deletedBy   User?                       @relation("MilestoneDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
+  payments    ContractorContractPayment[]
+
+  @@index([companyId, contractId, sequence])
+  @@index([companyId, projectId])
+  @@index([companyId, status])
+  @@map("contract_milestones")
+}
+
+/// A variation / amendment to an agreement's commercial value. The ONLY way the
+/// authorised value changes — updateContract refuses an amount outright
+/// (USE_AMENDMENT), so no value change can happen without a reason, an effective
+/// date, and an approver.
+///
+/// Maker/checker: proposing needs contracts.edit, approving needs
+/// contracts.amend_approve. Only APPROVED rows move currentAmountPaise, and
+/// approval re-checks that the snapshot it was proposed against is still current
+/// (AMENDMENT_STALE) so two concurrent approvals can't both apply.
+model ContractAmendment {
+  id                  String          @id @default(uuid()) @db.Uuid
+  companyId           String          @map("company_id") @db.Uuid
+  projectId           String          @map("project_id") @db.Uuid
+  contractId          String          @map("contract_id") @db.Uuid
+  sequence            Int             @default(0)
+  type                AmendmentType   @default(VARIATION)
+  /// Authorised value BEFORE this amendment, snapshotted at proposal time.
+  previousAmountPaise BigInt          @map("previous_amount_paise")
+  revisedAmountPaise  BigInt          @map("revised_amount_paise")
+  /// revised − previous. SIGNED (a variation may reduce scope). Stored so
+  /// cumulative sums need no per-row subtraction.
+  deltaPaise          BigInt          @map("delta_paise")
+  /// Required — a value change with no stated reason is not auditable.
+  reason              String
+  effectiveDate       DateTime        @map("effective_date") @db.Date
+  status              AmendmentStatus @default(PROPOSED)
+  requestedById       String          @map("requested_by_id") @db.Uuid
+  approvedById        String?         @map("approved_by_id") @db.Uuid
+  approvedAt          DateTime?       @map("approved_at")
+  rejectedReason      String?         @map("rejected_reason")
+  deletedAt           DateTime?       @map("deleted_at")
+  deletedById         String?         @map("deleted_by_id") @db.Uuid
+  createdAt           DateTime        @default(now()) @map("created_at")
+  updatedAt           DateTime        @updatedAt @map("updated_at")
+
+  company     Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  project     Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  contract    ContractorContract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  requestedBy User               @relation("AmendmentRequestedBy", fields: [requestedById], references: [id])
+  approvedBy  User?              @relation("AmendmentApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  deletedBy   User?              @relation("AmendmentDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
+
+  @@index([companyId, contractId, effectiveDate])
+  @@index([companyId, status])
+  @@map("contract_amendments")
+}
+
+/// APPEND-ONLY audit trail for TIER-2 (attendance-only) rate changes. Records who
+/// changed a ProjectContractorLabourRate, to what, and when — so "what was
+/// Pappu's Centring rate in March?" is answerable for contractors who work
+/// without an agreement too.
+///
+/// Deliberately NOT used for rate resolution: tier 2 still resolves the CURRENT
+/// rate and snapshots it onto the attendance row (ADR-0022), which already makes
+/// historical cost immutable. Only agreements get effective-dated resolution.
+model ProjectContractorLabourRateRevision {
+  id                            String   @id @default(uuid()) @db.Uuid
+  companyId                     String   @map("company_id") @db.Uuid
+  projectId                     String   @map("project_id") @db.Uuid
+  projectContractorLabourRateId String   @map("project_contractor_labour_rate_id") @db.Uuid
+  labourSubcategoryId           String   @map("labour_subcategory_id") @db.Uuid
+  ratePaise                     Int      @map("rate_paise")
+  rateUnit                      String   @default("day") @map("rate_unit")
+  effectiveFrom                 DateTime @map("effective_from") @db.Date
+  changedById                   String   @map("changed_by_id") @db.Uuid
+  createdAt                     DateTime @default(now()) @map("created_at")
+
+  company   Company                     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  project   Project                     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  rate      ProjectContractorLabourRate @relation(fields: [projectContractorLabourRateId], references: [id], onDelete: Cascade)
+  changedBy User                        @relation("PclrRevisionChangedBy", fields: [changedById], references: [id])
+
+  @@index([companyId, projectContractorLabourRateId, effectiveFrom])
+  @@map("project_contractor_labour_rate_revisions")
+}
+
+/// A payment recorded against a fixed contract. Modeled on VendorPayment: reuses
+/// PaymentMode, stores integer-paise BigInt, and carries an optional clientUuid
+/// idempotency key (partial-unique in SQL). contractorId/projectId are
+/// DENORMALIZED from the parent contract so project-isolated and cross-project
+/// (lifetime) sums need no joins. Soft-delete (deletedAt) is the REVERSAL: a
+/// reversed payment stops contributing to Total Paid / Balance / Lifetime while
+/// the row + audit entry survive.
+model ContractorContractPayment {
+  id              String              @id @default(uuid()) @db.Uuid
+  companyId       String              @map("company_id") @db.Uuid
+  contractId      String              @map("contract_id") @db.Uuid
+  contractorId    String              @map("contractor_id") @db.Uuid
+  projectId       String              @map("project_id") @db.Uuid
+  amountPaise     BigInt              @map("amount_paise")
+  type            ContractPaymentType @default(OTHER)
+  paymentMode     PaymentMode         @default(BANK_TRANSFER) @map("payment_mode")
+  referenceNumber String?             @map("reference_number")
+  date            DateTime            @db.Date
+  notes           String?
+  /// Optional milestone this payment was recorded against. CONTEXT ONLY — it
+  /// never enters the cumulative math, because a milestone is an earned-value
+  /// checkpoint, not a payment bucket. SetNull so deleting a milestone never
+  /// destroys a payment.
+  milestoneId     String?             @map("milestone_id") @db.Uuid
+  /// Client-generated idempotency key. PARTIAL unique index
+  /// (WHERE client_uuid IS NOT NULL) in the SQL migration dedups repeated
+  /// submissions per contract.
+  clientUuid      String?             @map("client_uuid")
+  createdById     String              @map("created_by_id") @db.Uuid
+  /// Soft-delete = reversal. Set to exclude from all financial totals while
+  /// preserving the record and its audit trail.
+  deletedAt       DateTime?           @map("deleted_at")
+  deletedById     String?             @map("deleted_by_id") @db.Uuid
+  reversalReason  String?             @map("reversal_reason")
+  createdAt       DateTime            @default(now()) @map("created_at")
+  updatedAt       DateTime            @updatedAt @map("updated_at")
+
+  company    Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  contract   ContractorContract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  contractor Contractor         @relation(fields: [contractorId], references: [id], onDelete: Cascade)
+  project    Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  milestone  ContractMilestone? @relation(fields: [milestoneId], references: [id], onDelete: SetNull)
+  createdBy  User               @relation("ContractPaymentCreatedBy", fields: [createdById], references: [id])
+  deletedBy  User?              @relation("ContractPaymentDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
+
+  @@index([companyId, contractId])
+  @@index([companyId, projectId])
+  @@index([companyId, contractorId])
+  @@index([companyId, date])
+  @@index([companyId, milestoneId])
+  @@map("contractor_contract_payments")
 }
 
 enum VendorStatus {

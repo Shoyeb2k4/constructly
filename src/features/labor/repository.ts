@@ -10,6 +10,7 @@ import type {
   LabourCategory,
   LabourSubcategory,
   LabourSummary,
+  SetQuantityInput,
   UpdateCategoryInput,
   UpdateSubcategoryInput,
 } from "./types";
@@ -43,17 +44,10 @@ export interface LaborRepository {
   /** Soft-delete a single labour type, removing dependent config. `ack` must be "DELETE". */
   forceDeleteSubcategory(id: string, ack: string): Promise<void>;
 
-  // Attendance (one row per project + date + subcategory)
+  // Attendance — one row per (project, date, labour type, contractor, agreement)
   getSheet(projectId: string, date: string): Promise<AttendanceSheet>;
-  /** Upsert a headcount; quantity 0 deletes the row. */
-  setQuantity(
-    projectId: string,
-    date: string,
-    subcategoryId: string,
-    quantity: number,
-    notes?: string | null,
-    contractorId?: string | null,
-  ): Promise<AttendanceSheet>;
+  /** Upsert a headcount; quantity 0 deletes that exact row. */
+  setQuantity(input: SetQuantityInput): Promise<AttendanceSheet>;
   copyPreviousDay(projectId: string, date: string): Promise<AttendanceSheet>;
 
   // Range views, reports, exports

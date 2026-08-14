@@ -106,6 +106,60 @@ export const PERMISSION_CATALOG = [
     ],
   },
   {
+    module: "contractors",
+    label: "Contractors",
+    // Contractor identity, the advance ledger and weekly settlements. Distinct
+    // from `contracts.*` (commercial agreements) because these are the CASH
+    // instruments: advances handed over, labour settled, and the governed
+    // reversal that corrects a settlement.
+    //
+    // `view` is PROJECT-SCOPED — it shows a contractor's position on projects the
+    // caller can access, not their entire history. `view_all` is what unlocks
+    // cross-project lifetime figures and company-wide (unattributed) advances.
+    actions: [
+      { key: "contractors.view", label: "View" },
+      { key: "contractors.view_all", label: "View all projects & company-wide advances" },
+      { key: "contractors.create", label: "Create" },
+      { key: "contractors.edit", label: "Edit" },
+      { key: "contractors.advance", label: "Record labour advance" },
+      { key: "contractors.settle", label: "Create settlement" },
+      // Reversal un-recognises settled labour and turns paid cash back into an
+      // outstanding advance. Deliberately separate from `settle`.
+      { key: "contractors.settle_reverse", label: "Reverse settlement", danger: true },
+      // Assigns already-settled attendance to an agreement without touching any
+      // monetary value. Owner/Admin only.
+      { key: "contractors.attribute_history", label: "Attribute settled history", danger: true },
+    ],
+  },
+  {
+    module: "contracts",
+    label: "Agreements",
+    // Contractor commercial agreements: scope, effective-dated rates, earned-value
+    // milestones, payments and reconciliation. Kept out of the vendor `payments.*`
+    // namespace because the parties and the money are different.
+    //
+    // `edit` covers work details, scope, rates, milestone setup and PROPOSING an
+    // amendment. `complete` gates milestone/agreement status changes.
+    // `amend_approve` and `cancel` are separate on purpose — see below.
+    actions: [
+      { key: "contracts.view", label: "View" },
+      { key: "contracts.create", label: "Create" },
+      { key: "contracts.edit", label: "Edit" },
+      { key: "contracts.complete", label: "Complete / change status" },
+      // Maker–checker. Raising an agreement's value is the ONLY way past the
+      // earned-value and credit ceilings, so whoever edits an agreement must not
+      // also be able to authorise the increase (cf. payments.approve vs .edit).
+      { key: "contracts.amend_approve", label: "Approve / reject amendment", danger: true },
+      // Distinct from `complete` (a benign status change) and from `delete`
+      // (only ever for a never-used record): cancelling an agreement that
+      // carries real financial history is its own authority.
+      { key: "contracts.cancel", label: "Cancel agreement", danger: true },
+      { key: "contracts.delete", label: "Delete", danger: true },
+      { key: "contracts.pay", label: "Record payment" },
+      { key: "contracts.pay_delete", label: "Reverse payment", danger: true },
+    ],
+  },
+  {
     module: "vendors",
     label: "Vendors",
     // Lifecycle (not just CRUD): vendors are long-lived master data. Prefer

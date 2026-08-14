@@ -45,6 +45,36 @@ function base(
   };
 }
 
+/** The labour taxonomy the labour module seeds — kept in step by id, not name. */
+const SUB = {
+  mainCarpenter: "65000000-0000-0000-0000-000000000001",
+  carpenterHelper: "65000000-0000-0000-0000-000000000002",
+  mason: "65000000-0000-0000-0000-000000000005",
+  masonHelper: "65000000-0000-0000-0000-000000000006",
+  painter: "65000000-0000-0000-0000-000000000007",
+};
+const CAT = {
+  carpenter: { id: "6c000000-0000-0000-0000-000000000001", name: "Carpenter" },
+  mason: { id: "6c000000-0000-0000-0000-000000000003", name: "Mason" },
+  painter: { id: "6c000000-0000-0000-0000-000000000004", name: "Painter" },
+};
+
+const rate = (
+  id: string,
+  labourSubcategoryId: string,
+  subcategoryName: string,
+  category: { id: string; name: string },
+  rupeesPerDay: number,
+) => ({
+  id,
+  labourSubcategoryId,
+  subcategoryName,
+  categoryId: category.id,
+  categoryName: category.name,
+  ratePaise: toPaise(rupeesPerDay),
+  rateUnit: "day",
+});
+
 export function demoSeed(): ProjectDetail[] {
   return [
     base({
@@ -81,6 +111,39 @@ export function demoSeed(): ProjectDetail[] {
         { id: "a1", action: "stage.changed", summary: "advanced to Construction", actorName: "Aarav Mehta", createdAt: iso(-30) },
         { id: "a2", action: "document.added", summary: "uploaded structural-plan-rev4.pdf", actorName: "Priya Nair", createdAt: iso(-10) },
       ],
+      // Two contractors, deliberately different shapes:
+      //  • Pappu holds TWO open agreements here (Structure, Compound Wall), so
+      //    the attendance sheet must ask which one a day belongs to.
+      //  • Ramesh holds NONE — the attendance-only contractor, working exactly
+      //    as he did before agreements existed.
+      // The rates below are the project-level fallback; where an agreement
+      // prices the same labour type, its effective-dated rate wins.
+      contractors: [
+        {
+          id: "pc-pappu-skyline",
+          contractorId: "c-pappu",
+          contractorName: "Pappu Contractor",
+          contractRatePaise: null,
+          contractRateUnit: null,
+          labourRates: [
+            rate("pcr-pappu-mason", SUB.mason, "Mason", CAT.mason, 1_000),
+            rate("pcr-pappu-helper", SUB.masonHelper, "Mason Helper", CAT.mason, 500),
+            rate("pcr-pappu-carpenter", SUB.mainCarpenter, "Main Carpenter", CAT.carpenter, 700),
+            rate("pcr-pappu-painter", SUB.painter, "Painter", CAT.painter, 650),
+          ],
+        },
+        {
+          id: "pc-ramesh-skyline",
+          contractorId: "c-ramesh",
+          contractorName: "Ramesh Construction Crew",
+          contractRatePaise: null,
+          contractRateUnit: null,
+          labourRates: [
+            rate("pcr-ramesh-carpenter", SUB.mainCarpenter, "Main Carpenter", CAT.carpenter, 900),
+            rate("pcr-ramesh-carp-helper", SUB.carpenterHelper, "Carpenter Helper", CAT.carpenter, 550),
+          ],
+        },
+      ],
     }),
     base({
       id: "10000000-0000-0000-0000-000000000002",
@@ -98,6 +161,18 @@ export function demoSeed(): ProjectDetail[] {
       clientName: "Orion Systems Pvt Ltd",
       siteAddress: "Hosur Road, Bengaluru, KA",
       deadlines: [{ id: "d4", title: "Steel procurement close", dueDate: dateOnly(21), completedAt: null }],
+      // Pappu again, but with exactly ONE open agreement here (Orion Structure)
+      // — so it auto-selects and costs the user no extra tap.
+      contractors: [
+        {
+          id: "pc-pappu-orion",
+          contractorId: "c-pappu",
+          contractorName: "Pappu Contractor",
+          contractRatePaise: null,
+          contractRateUnit: null,
+          labourRates: [rate("pcr-pappu-orion-mason", SUB.mason, "Mason", CAT.mason, 1_100)],
+        },
+      ],
     }),
     base({
       id: "10000000-0000-0000-0000-000000000003",

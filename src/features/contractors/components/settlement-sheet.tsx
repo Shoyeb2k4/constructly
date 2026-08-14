@@ -176,6 +176,23 @@ export function SettlementSheet({
                 </div>
                 <Row label="Net payment" paise={shown.netPaymentPaise} strong />
                 <Row label="Remaining advance" paise={shown.advanceBalanceAfterPaise} />
+
+                {/* Why the ceiling is below the outstanding balance. An advance
+                    left correctly attributed and unspent beats one spent against
+                    the wrong work, but the user is owed the reason. */}
+                {shown.unusableAdvances.length > 0 && (
+                  <div className="mt-3 space-y-1.5 rounded-lg bg-surface px-3 py-2.5">
+                    <p className="text-[11px] font-medium uppercase tracking-wide text-foreground-subtle">
+                      Not drawn on
+                    </p>
+                    {shown.unusableAdvances.map((u) => (
+                      <p key={u.entryId} className="text-xs text-foreground-muted">
+                        <MoneyText paise={u.remainingPaise} className="font-medium text-foreground" />
+                        {u.contractTitle && ` scoped to ${u.contractTitle}`} — {u.reason}
+                      </p>
+                    ))}
+                  </div>
+                )}
               </>
             )}
           </div>

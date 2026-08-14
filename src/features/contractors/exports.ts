@@ -22,6 +22,7 @@ const TYPE_LABEL: Record<ContractorLedgerType, string> = {
   LABOUR_BILL: "Labour bill",
   ADJUSTMENT: "Advance adjusted",
   PAYMENT: "Payment made",
+  SETTLEMENT_REVERSAL: "Settlement reversed",
 };
 
 function excel(aoa: (string | number)[][], sheetName: string, filename: string) {

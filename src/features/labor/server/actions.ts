@@ -5,7 +5,11 @@ import { prisma } from "@/lib/db/prisma";
 import { requirePermission, requireOwner, hasPermission } from "@/lib/auth/permissions";
 import type { SessionUser } from "@/lib/auth/types";
 import { rowTotals, sheetTotals, summarize } from "../calc";
-import { isAttributionEligible, resolveAttendanceRate } from "./assignment-eligibility";
+import {
+  isAgreementAttributionEligible,
+  isAttributionEligible,
+  resolveAttendanceRate,
+} from "./assignment-eligibility";
 import type {
   AttendanceFilters,
   AttendanceRecordItem,
@@ -18,6 +22,7 @@ import type {
   LabourCategory,
   LabourSubcategory,
   LabourSummary,
+  SetQuantityInput,
   SheetGroup,
   SheetRow,
   UpdateCategoryInput,
@@ -50,6 +55,53 @@ async function assertProjectAccess(user: SessionUser, projectId: string) {
 async function isPeriodLocked(companyId: string, projectId: string, date: string): Promise<boolean> {
   return false;
 }
+
+/**
+ * Refuse to touch attendance that a settlement has already recognised.
+ *
+ * A settlement is the canonical financial record of labour money: its bill was
+ * computed from these rows, and where the contractor holds an agreement those
+ * same rows are its Attendance Credit. Letting the underlying quantity change
+ * afterwards would silently move the credited figure away from the settled one.
+ *
+ * This is narrower and stricter than the (unimplemented) period lock: it applies
+ * to individual settled rows, and no permission overrides it. The escape hatch
+ * is a governed settlement reversal.
+ */
+async function assertNotSettled(companyId: string, key: AttendanceKey): Promise<void> {
+  const settled = await prisma.labourAttendance.findFirst({
+    where: { ...key, companyId, settlementId: { not: null } },
+    select: { id: true },
+  });
+  if (settled) throw new Error("ATTENDANCE_SETTLED");
+}
+
+/**
+ * The full identity of one attendance row. FIVE fields, always — a WHERE that
+ * omits `contractId` would clear or overwrite a different agreement's row for
+ * the same contractor, date and labour type.
+ */
+type AttendanceKey = {
+  projectId: string;
+  date: Date;
+  labourSubcategoryId: string;
+  contractorId: string | null;
+  contractId: string | null;
+};
+
+const attendanceKey = (
+  projectId: string,
+  date: string,
+  labourSubcategoryId: string,
+  contractorId: string | null,
+  contractId: string | null,
+): AttendanceKey => ({
+  projectId,
+  date: new Date(date),
+  labourSubcategoryId,
+  contractorId,
+  contractId,
+});
 
 const toCategory = (c: { id: string; name: string; color: string | null; displayOrder: number }): LabourCategory => ({
   id: c.id, name: c.name, color: c.color, displayOrder: c.displayOrder,
@@ -420,8 +472,18 @@ export async function reorderSubcategories(categoryId: string, orderedIds: strin
 
 /* ── Attendance ──────────────────────────────────────────────────────── */
 
+/**
+ * The daily sheet: Project → Contractor → Agreement → Labour Type → Rate.
+ *
+ * A contractor with agreements gets one section per agreement, offering exactly
+ * the labour types that agreement's scope covers at the rate in force ON THIS
+ * DATE. A contractor with none keeps the pre-existing attendance-only path,
+ * driven by their project labour rates — unchanged, and still the whole story
+ * for every company that never adopts agreements.
+ */
 async function buildSheet(companyId: string, projectId: string, date: string): Promise<AttendanceSheet> {
-  const [projectContractors, todays] = await Promise.all([
+  const on = new Date(date);
+  const [projectContractors, agreements, todays] = await Promise.all([
     prisma.projectContractor.findMany({
       where: { companyId, projectId },
       include: {
@@ -437,56 +499,142 @@ async function buildSheet(companyId: string, projectId: string, date: string): P
       },
       orderBy: { contractor: { name: "asc" } },
     }),
+    // Every open agreement on this project, with its scope and the rate history
+    // needed to resolve each item as at `date`. One read, not one per row.
+    prisma.contractorContract.findMany({
+      where: {
+        companyId,
+        projectId,
+        deletedAt: null,
+        status: { in: ["NOT_STARTED", "IN_PROGRESS", "ON_HOLD", "COMPLETED"] },
+        scopeItems: { some: { deletedAt: null } },
+      },
+      select: {
+        id: true,
+        contractorId: true,
+        title: true,
+        reference: true,
+        status: true,
+        scopeItems: {
+          where: { deletedAt: null },
+          select: {
+            labourSubcategoryId: true,
+            subcategory: {
+              select: { name: true, categoryId: true, displayOrder: true, category: { select: { name: true } } },
+            },
+            revisions: {
+              where: { effectiveFrom: { lte: on } },
+              select: { ratePaise: true },
+              orderBy: [{ effectiveFrom: "desc" }, { createdAt: "desc" }],
+              take: 1,
+            },
+          },
+          orderBy: { subcategory: { displayOrder: "asc" } },
+        },
+      },
+      orderBy: [{ startDate: "asc" }, { createdAt: "asc" }],
+    }),
     prisma.labourAttendance.findMany({
-      where: { companyId, projectId, date: new Date(date) },
+      where: { companyId, projectId, date: on },
       include: {
         subcategory: { select: { name: true, categoryId: true, category: { select: { name: true } } } },
         contractor: { select: { name: true } },
+        contract: { select: { title: true } },
       },
     }),
   ]);
 
-  // Index recorded rows by contractor|subcategory; track which are represented
-  // by a configured (contractor, labour-type) so leftovers can be surfaced.
-  const attKey = (contractorId: string | null, subId: string) => `${contractorId ?? ""}|${subId}`;
-  const byKey = new Map(todays.map((a) => [attKey(a.contractorId, a.labourSubcategoryId), a]));
+  // Recorded rows, indexed on the FULL identity — contractor, labour type AND
+  // agreement. Keying on any subset would show one agreement's headcount under
+  // another's row.
+  const attKey = (contractorId: string | null, subId: string, contractId: string | null) =>
+    `${contractorId ?? ""}|${subId}|${contractId ?? ""}`;
+  const byKey = new Map(
+    todays.map((a) => [attKey(a.contractorId, a.labourSubcategoryId, a.contractId), a]),
+  );
   const consumed = new Set<string>();
 
+  const agreementsByContractor = new Map<string, typeof agreements>();
+  for (const a of agreements) {
+    const list = agreementsByContractor.get(a.contractorId) ?? [];
+    list.push(a);
+    agreementsByContractor.set(a.contractorId, list);
+  }
+
   const groups: SheetGroup[] = projectContractors.map((pc) => {
-    const rows: SheetRow[] = pc.labourRates.map((lr) => {
-      const k = attKey(pc.contractorId, lr.labourSubcategoryId);
-      const rec = byKey.get(k);
-      if (rec) consumed.add(k);
-      return {
-        subcategoryId: lr.labourSubcategoryId,
-        name: lr.subcategory.name,
-        categoryId: lr.subcategory.categoryId,
-        categoryName: lr.subcategory.category.name,
-        // Effective rate: the record's snapshot when recorded, else the
-        // project+contractor configured rate.
-        dailyRatePaise: rec ? rec.dailyRatePaiseSnapshot : lr.ratePaise,
-        quantity: rec?.quantityPresent ?? 0,
-        notes: rec?.notes ?? null,
-      };
-    });
+    const mine = agreementsByContractor.get(pc.contractorId) ?? [];
+    const rows: SheetRow[] = [];
+
+    for (const ag of mine) {
+      for (const item of ag.scopeItems) {
+        const k = attKey(pc.contractorId, item.labourSubcategoryId, ag.id);
+        const rec = byKey.get(k);
+        if (rec) consumed.add(k);
+        rows.push({
+          subcategoryId: item.labourSubcategoryId,
+          name: item.subcategory.name,
+          categoryId: item.subcategory.categoryId,
+          categoryName: item.subcategory.category.name,
+          contractId: ag.id,
+          agreementTitle: ag.title,
+          // Already recorded → its own snapshot, immutable. Not yet → the
+          // agreement rate in force on THIS date, not today's.
+          dailyRatePaise: rec ? rec.dailyRatePaiseSnapshot : (item.revisions[0]?.ratePaise ?? null),
+          quantity: rec?.quantityPresent ?? 0,
+          notes: rec?.notes ?? null,
+        });
+      }
+    }
+
+    // The attendance-only path. Offered as blank rows only when this contractor
+    // has NO agreements — once they do, that labour has a commercial home and a
+    // parallel unattributed row would just be a way to record it twice.
+    // Existing unattributed rows still surface below, so history stays editable.
+    if (mine.length === 0) {
+      for (const lr of pc.labourRates) {
+        const k = attKey(pc.contractorId, lr.labourSubcategoryId, null);
+        const rec = byKey.get(k);
+        if (rec) consumed.add(k);
+        rows.push({
+          subcategoryId: lr.labourSubcategoryId,
+          name: lr.subcategory.name,
+          categoryId: lr.subcategory.categoryId,
+          categoryName: lr.subcategory.category.name,
+          contractId: null,
+          agreementTitle: null,
+          dailyRatePaise: rec ? rec.dailyRatePaiseSnapshot : lr.ratePaise,
+          quantity: rec?.quantityPresent ?? 0,
+          notes: rec?.notes ?? null,
+        });
+      }
+    }
+
     return {
       contractorId: pc.contractorId,
       contractorName: pc.contractor.name,
       contractRatePaise: pc.contractRatePaise,
       contractRateUnit: pc.contractRateUnit,
       configured: true,
+      agreements: mine.map((a) => ({
+        contractId: a.id,
+        title: a.title,
+        reference: a.reference,
+        status: a.status,
+      })),
+      // Two or more and the user must say which; the system never picks.
+      requiresAgreementChoice: mine.length > 1,
       rows,
       ...rowTotals(rows),
     };
   });
 
-  // Leftover recorded rows not covered by any configured (contractor, type):
-  // a contractor/type de-configured after recording, or legacy unattributed
-  // rows (contractorId null). Grouped so history stays visible & clearable, but
-  // marked configured:false so they read as "no longer configured".
+  // Leftover recorded rows not covered above: a contractor/type/agreement
+  // de-configured after recording, or legacy unattributed rows (contractorId
+  // null). Grouped so history stays visible & clearable, but marked
+  // configured:false so they read as "no longer configured".
   const orphans = new Map<string, { contractorId: string | null; name: string; rows: SheetRow[] }>();
   for (const a of todays) {
-    const k = attKey(a.contractorId, a.labourSubcategoryId);
+    const k = attKey(a.contractorId, a.labourSubcategoryId, a.contractId);
     if (consumed.has(k)) continue;
     const gk = a.contractorId ?? "";
     const g = orphans.get(gk) ?? {
@@ -499,6 +647,8 @@ async function buildSheet(companyId: string, projectId: string, date: string): P
       name: a.subcategory.name,
       categoryId: a.subcategory.categoryId,
       categoryName: a.subcategory.category.name,
+      contractId: a.contractId,
+      agreementTitle: a.contract?.title ?? null,
       dailyRatePaise: a.dailyRatePaiseSnapshot,
       quantity: a.quantityPresent,
       notes: a.notes,
@@ -512,6 +662,8 @@ async function buildSheet(companyId: string, projectId: string, date: string): P
       contractRatePaise: null,
       contractRateUnit: null,
       configured: false,
+      agreements: [],
+      requiresAgreementChoice: false,
       rows: g.rows,
       ...rowTotals(g.rows),
     });
@@ -529,33 +681,43 @@ async function buildSheet(companyId: string, projectId: string, date: string): P
  */
 async function writeAttendanceRow(
   companyId: string,
-  projectId: string,
-  key: { projectId: string; date: Date; labourSubcategoryId: string; contractorId: string | null },
-  contractorId: string | null,
-  subcategoryId: string,
+  key: AttendanceKey,
+  date: string,
   quantity: number,
   notes: string | null | undefined,
 ): Promise<void> {
+  // The WHERE is the full five-field identity, so a second agreement's row for
+  // the same contractor/date/labour type is a different row, not this one.
   const existing = await prisma.labourAttendance.findFirst({
-    where: {
-      companyId,
-      projectId,
-      date: key.date,
-      labourSubcategoryId: subcategoryId,
-      contractorId,
+    where: { ...key, companyId },
+    select: {
+      id: true,
+      dailyRatePaiseSnapshot: true,
+      projectContractorLabourRateId: true,
+      contractScopeRateRevisionId: true,
     },
-    select: { id: true, dailyRatePaiseSnapshot: true, projectContractorLabourRateId: true },
   });
 
   let snapshot: number | null;
   let rateId: string | null;
+  let scopeRevisionId: string | null;
   if (existing) {
+    // ADR-0022: the snapshot is history. A later rate revision never rewrites it.
     snapshot = existing.dailyRatePaiseSnapshot;
     rateId = existing.projectContractorLabourRateId;
+    scopeRevisionId = existing.contractScopeRateRevisionId;
   } else {
-    const resolved = await resolveAttendanceRate(companyId, projectId, contractorId, subcategoryId);
+    const resolved = await resolveAttendanceRate(
+      companyId,
+      key.projectId,
+      key.contractorId,
+      key.labourSubcategoryId,
+      key.contractId,
+      date,
+    );
     snapshot = resolved.ratePaise;
     rateId = resolved.projectContractorLabourRateId;
+    scopeRevisionId = resolved.contractScopeRateRevisionId;
   }
   // Round: half-day quantities can produce fractional paise.
   const estimatedCostPaise = Math.round((snapshot ?? 0) * quantity);
@@ -569,13 +731,15 @@ async function writeAttendanceRow(
     await prisma.labourAttendance.create({
       data: {
         companyId,
-        projectId,
+        projectId: key.projectId,
         date: key.date,
-        labourSubcategoryId: subcategoryId,
-        contractorId,
+        labourSubcategoryId: key.labourSubcategoryId,
+        contractorId: key.contractorId,
+        contractId: key.contractId,
         quantityPresent: quantity,
         dailyRatePaiseSnapshot: snapshot,
         projectContractorLabourRateId: rateId,
+        contractScopeRateRevisionId: scopeRevisionId,
         estimatedCostPaise,
         notes: notes ?? null,
         clientUuid: crypto.randomUUID(),
@@ -591,14 +755,8 @@ export async function getSheet(projectId: string, date: string): Promise<Attenda
   return buildSheet(user.company.id, projectId, date);
 }
 
-export async function setQuantity(
-  projectId: string,
-  date: string,
-  subcategoryId: string,
-  quantity: number,
-  notes?: string | null,
-  contractorId?: string | null,
-): Promise<AttendanceSheet> {
+export async function setQuantity(input: SetQuantityInput): Promise<AttendanceSheet> {
+  const { projectId, date, subcategoryId, quantity, notes } = input;
   const user = await requirePermission("attendance.mark");
   await assertProjectAccess(user, projectId);
   // Locked periods can only be modified with the elevated attendance.edit
@@ -606,13 +764,48 @@ export async function setQuantity(
   if (await isPeriodLocked(user.company.id, projectId, date)) {
     await requirePermission("attendance.edit");
   }
-  const cid = contractorId ?? null;
-  const key = { projectId, date: new Date(date), labourSubcategoryId: subcategoryId, contractorId: cid };
+  const cid = input.contractorId ?? null;
+  // An agreement without a contractor is meaningless — an agreement IS a
+  // contractor's work package — so a stray contractId on an unattributed row is
+  // dropped rather than stored as an orphan attribution.
+  const agreementId = cid != null ? (input.contractId ?? null) : null;
+  const key = attendanceKey(projectId, date, subcategoryId, cid, agreementId);
+
+  // Settled labour is financially IMMUTABLE. Once a settlement has recognised a
+  // row, that money has been billed and (where the contractor holds an
+  // agreement) credited against it. Editing the row afterwards would leave the
+  // settlement saying ₹6,00,000 while reconciliation said something else, which
+  // is exactly the drift the settlement-owns-attendance rule exists to prevent.
+  //
+  // Unconditional — no permission bypasses it. Corrections go through a
+  // settlement reversal, not a quiet edit. Re-attribution is refused for the
+  // same reason: moving a settled row to another agreement would move recognised
+  // credit away from the settlement that recognised it.
+  await assertNotSettled(user.company.id, key);
+  if (agreementId != null) await assertNotSettledElsewhere(user.company.id, key);
+
   if (quantity <= 0) {
     // Deleting a row: attribution is moot, so no eligibility check (avoids
-    // rejecting a legitimate clear). Keyed by contractor so clearing one
-    // contractor's row never touches another's on the same subcategory/date.
+    // rejecting a legitimate clear). Keyed on the FULL identity so clearing one
+    // agreement's row never touches another agreement's — or another
+    // contractor's — row for the same date and labour type.
     await prisma.labourAttendance.deleteMany({ where: { ...key, companyId: user.company.id } });
+  } else if (agreementId != null) {
+    // Agreement-linked: the agreement must belong to this contractor on this
+    // project AND its scope must cover this labour type. Resolved server-side,
+    // never trusted from the client.
+    if (
+      !(await isAgreementAttributionEligible(
+        user.company.id,
+        projectId,
+        cid!,
+        agreementId,
+        subcategoryId,
+      ))
+    ) {
+      throw new Error("AGREEMENT_SCOPE_MISMATCH");
+    }
+    await writeAttendanceRow(user.company.id, key, date, quantity, notes);
   } else {
     // Eligibility (subcategory-exact): a contractor may only be attributed to a
     // project for a SUBCATEGORY THEY SUPPLY (a ProjectContractorLabourRate
@@ -625,9 +818,35 @@ export async function setQuantity(
     ) {
       throw new Error("CONTRACTOR_NOT_ASSIGNED");
     }
-    await writeAttendanceRow(user.company.id, projectId, key, cid, subcategoryId, quantity, notes);
+    await writeAttendanceRow(user.company.id, key, date, quantity, notes);
   }
   return buildSheet(user.company.id, projectId, date);
+}
+
+/**
+ * Refuse to move labour ONTO an agreement when the same contractor's labour for
+ * that date and type is already settled under a different agreement (or under
+ * none).
+ *
+ * Without this, "re-attribute" reads as a create: a new row appears under the
+ * new agreement while the settled one stays put, and the same day's work is
+ * counted twice. Re-attribution of settled labour is a governed operation, not
+ * an attendance edit.
+ */
+async function assertNotSettledElsewhere(companyId: string, key: AttendanceKey): Promise<void> {
+  const settled = await prisma.labourAttendance.findFirst({
+    where: {
+      companyId,
+      projectId: key.projectId,
+      date: key.date,
+      labourSubcategoryId: key.labourSubcategoryId,
+      contractorId: key.contractorId,
+      contractId: { not: key.contractId },
+      settlementId: { not: null },
+    },
+    select: { id: true },
+  });
+  if (settled) throw new Error("ATTENDANCE_SETTLED");
 }
 
 export async function copyPreviousDay(projectId: string, date: string): Promise<AttendanceSheet> {
@@ -646,16 +865,19 @@ export async function copyPreviousDay(projectId: string, date: string): Promise<
       where: { companyId: user.company.id, projectId, date: prev.date },
     });
     for (const rec of source) {
-      // Preserve the contractor attribution so each contractor's rows copy
-      // forward independently (Pappu-Centering and Saddam-Centering stay split).
-      await setQuantity(
+      // Preserve the FULL attribution so each contractor's — and each
+      // agreement's — rows copy forward independently (Pappu/Structure and
+      // Pappu/Compound Wall stay split, as do two contractors on one type).
+      // The copy is a NEW recording, so it re-resolves the rate as at `date`.
+      await setQuantity({
         projectId,
         date,
-        rec.labourSubcategoryId,
-        rec.quantityPresent,
-        rec.notes,
-        rec.contractorId,
-      );
+        subcategoryId: rec.labourSubcategoryId,
+        quantity: rec.quantityPresent,
+        notes: rec.notes,
+        contractorId: rec.contractorId,
+        contractId: rec.contractId,
+      });
     }
   }
   return buildSheet(user.company.id, projectId, date);
@@ -676,6 +898,7 @@ async function fetchItems(user: SessionUser, filters: AttendanceFilters): Promis
       subcategory: { include: { category: { select: { id: true, name: true, color: true } } } },
       project: { select: { name: true } },
       contractor: { select: { name: true } },
+      contract: { select: { title: true } },
     },
     orderBy: { date: "desc" },
   });
@@ -691,6 +914,8 @@ async function fetchItems(user: SessionUser, filters: AttendanceFilters): Promis
     subcategoryName: r.subcategory.name,
     contractorId: r.contractorId,
     contractorName: r.contractor?.name ?? null,
+    contractId: r.contractId,
+    agreementTitle: r.contract?.title ?? null,
     quantityPresent: r.quantityPresent,
     dailyRatePaiseSnapshot: r.dailyRatePaiseSnapshot,
     estimatedCostPaise: r.estimatedCostPaise,

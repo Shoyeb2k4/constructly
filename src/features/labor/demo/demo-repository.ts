@@ -14,6 +14,7 @@ import type {
   UpdateSubcategoryInput,
 } from "../types";
 import { rowTotals, sheetTotals, summarize } from "../calc";
+import { ensureAgreementStoresSeeded } from "@/features/contracts/demo/demo-repository";
 import {
   DEMO_CATEGORIES,
   DEMO_SUBCATEGORIES,
@@ -29,6 +30,11 @@ const K = {
   attendance: "constructly.demo.labourAttendance.v2",
   projects: "constructly.demo.projects.v1",
   contractors: "constructly.demo.contractors.v1",
+  // Owned by the contracts module; read-only here, for agreement-linked
+  // attendance (Project → Contractor → Agreement → Labour Type → Rate).
+  contracts: "constructly.demo.contractorContracts.v2",
+  scopeItems: "constructly.demo.contractScopeItems.v1",
+  scopeRates: "constructly.demo.contractScopeRates.v1",
   // Legacy flat-model stores (migrated on first load — ADR-0023).
   v1Categories: "constructly.demo.labourCategories.v1",
   v1Attendance: "constructly.demo.labourAttendance.v1",
@@ -99,6 +105,104 @@ function projectContractorRatePaise(
   const p = loadProjectsRaw().find((x) => x.id === projectId);
   const pc = p?.contractors?.find((c) => c.contractorId === contractorId);
   return pc?.labourRates.find((r) => r.labourSubcategoryId === subcategoryId)?.ratePaise;
+}
+
+/* ── Agreements (read-only mirror of the contracts demo store) ───────────── */
+
+interface DemoContractRec {
+  id: string;
+  contractorId: string;
+  projectId: string;
+  title: string;
+  reference: string | null;
+  status: string;
+  startDate: string | null;
+  createdAt: string;
+  deletedAt: string | null;
+}
+interface DemoScopeItemRec {
+  id: string;
+  contractId: string;
+  labourSubcategoryId: string;
+  subcategoryName: string;
+  categoryId: string;
+  categoryName: string;
+  deletedAt: string | null;
+}
+interface DemoScopeRateRec {
+  id: string;
+  scopeItemId: string;
+  ratePaise: number;
+  effectiveFrom: string;
+  createdAt: string;
+}
+
+/** Statuses that can still take attendance (parity with the server). */
+const OPEN_STATUSES = new Set(["NOT_STARTED", "IN_PROGRESS", "ON_HOLD", "COMPLETED"]);
+
+function loadContractsRaw(): DemoContractRec[] {
+  ensureAgreementStoresSeeded();
+  return readRaw<DemoContractRec>(K.contracts) ?? [];
+}
+function loadScopeItemsRaw(): DemoScopeItemRec[] {
+  ensureAgreementStoresSeeded();
+  return readRaw<DemoScopeItemRec>(K.scopeItems) ?? [];
+}
+function loadScopeRatesRaw(): DemoScopeRateRec[] {
+  ensureAgreementStoresSeeded();
+  return readRaw<DemoScopeRateRec>(K.scopeRates) ?? [];
+}
+
+/** The agreements a contractor can record against on a project, oldest first. */
+function eligibleAgreementsDemo(projectId: string, contractorId: string): DemoContractRec[] {
+  const scoped = new Set(loadScopeItemsRaw().filter((s) => !s.deletedAt).map((s) => s.contractId));
+  return loadContractsRaw()
+    .filter(
+      (c) =>
+        c.projectId === projectId &&
+        c.contractorId === contractorId &&
+        !c.deletedAt &&
+        OPEN_STATUSES.has(c.status) &&
+        scoped.has(c.id),
+    )
+    .sort((a, b) => (a.startDate ?? a.createdAt).localeCompare(b.startDate ?? b.createdAt));
+}
+
+/** Demo parity for isAgreementAttributionEligible. */
+function isAgreementEligibleDemo(
+  projectId: string,
+  contractorId: string,
+  contractId: string,
+  subcategoryId: string,
+): boolean {
+  if (!eligibleAgreementsDemo(projectId, contractorId).some((c) => c.id === contractId)) return false;
+  return loadScopeItemsRaw().some(
+    (s) => s.contractId === contractId && s.labourSubcategoryId === subcategoryId && !s.deletedAt,
+  );
+}
+
+/**
+ * The agreement rate in force on `date` — the attendance row's OWN date, never
+ * today's, so a later revision cannot retro-price earlier labour.
+ */
+function agreementRateOnDemo(
+  contractId: string,
+  subcategoryId: string,
+  date: string,
+): number | undefined {
+  const item = loadScopeItemsRaw().find(
+    (s) => s.contractId === contractId && s.labourSubcategoryId === subcategoryId && !s.deletedAt,
+  );
+  if (!item) return undefined;
+  const inForce = loadScopeRatesRaw()
+    .filter((r) => r.scopeItemId === item.id && r.effectiveFrom <= date)
+    .sort((a, b) =>
+      a.effectiveFrom === b.effectiveFrom
+        ? a.createdAt.localeCompare(b.createdAt)
+        : a.effectiveFrom.localeCompare(b.effectiveFrom),
+    )
+    .at(-1);
+  return inForce?.ratePaise;
 }
 
 /** Demo parity for the server's category-delete guard: does ANY project have a
@@ -180,13 +284,22 @@ function isAttributionEligibleDemo(
   return projectContractorRatePaise(projectId, contractorId, subcategoryId) !== undefined;
 }
 
-/** Resolve the effective rate to snapshot: project+contractor+subcategory rate,
- *  falling back to the subcategory's global default (parity with the server). */
+/**
+ * Resolve the effective rate to snapshot, in tier order (parity with the
+ * server): agreement scope rate as at the row's own date → project+contractor
+ * rate → the subcategory's global default → null.
+ */
 function resolveRateDemo(
   projectId: string,
   contractorId: string | null,
   subcategoryId: string,
+  contractId: string | null,
+  date?: string,
 ): number | null {
+  if (contractId != null && date) {
+    const agreed = agreementRateOnDemo(contractId, subcategoryId, date);
+    if (agreed !== undefined) return agreed;
+  }
   if (contractorId != null) {
     const r = projectContractorRatePaise(projectId, contractorId, subcategoryId);
     if (r !== undefined) return r;
@@ -272,43 +385,90 @@ function buildSheet(
   const subCat = new Map(subcategories.map((s) => [s.id, s.categoryId]));
   const catName = new Map(loadCategories().map((c) => [c.id, c.name]));
 
-  const attKey = (contractorId: string | null | undefined, subId: string) =>
-    `${contractorId ?? ""}|${subId}`;
-  const byKey = new Map(todays.map((a) => [attKey(a.contractorId ?? null, a.labourSubcategoryId), a]));
+  // Keyed on the FULL identity — contractor, labour type AND agreement — so one
+  // agreement's headcount never shows under another's row.
+  const attKey = (contractorId: string | null | undefined, subId: string, contractId: string | null | undefined) =>
+    `${contractorId ?? ""}|${subId}|${contractId ?? ""}`;
+  const byKey = new Map(
+    todays.map((a) => [attKey(a.contractorId ?? null, a.labourSubcategoryId, a.contractId ?? null), a]),
+  );
   const consumed = new Set<string>();
+  const scopeItems = loadScopeItemsRaw().filter((s) => !s.deletedAt);
 
   const groups: SheetGroup[] = [...config]
     .sort((a, b) => a.contractorName.localeCompare(b.contractorName))
     .map((pc) => {
-      const rows: SheetRow[] = pc.labourRates.map((lr) => {
-        const k = attKey(pc.contractorId, lr.labourSubcategoryId);
-        const rec = byKey.get(k);
-        if (rec) consumed.add(k);
-        return {
-          subcategoryId: lr.labourSubcategoryId,
-          name: lr.subcategoryName,
-          categoryId: lr.categoryId,
-          categoryName: lr.categoryName,
-          dailyRatePaise: rec ? rec.dailyRatePaiseSnapshot : lr.ratePaise,
-          quantity: rec?.quantityPresent ?? 0,
-          notes: rec?.notes ?? null,
-        };
-      });
+      const mine = eligibleAgreementsDemo(projectId, pc.contractorId);
+      const rows: SheetRow[] = [];
+
+      for (const ag of mine) {
+        for (const item of scopeItems.filter((s) => s.contractId === ag.id)) {
+          const k = attKey(pc.contractorId, item.labourSubcategoryId, ag.id);
+          const rec = byKey.get(k);
+          if (rec) consumed.add(k);
+          rows.push({
+            subcategoryId: item.labourSubcategoryId,
+            name: item.subcategoryName,
+            categoryId: item.categoryId,
+            categoryName: item.categoryName,
+            contractId: ag.id,
+            agreementTitle: ag.title,
+            // Recorded → its own snapshot (immutable). Not yet → the agreement
+            // rate in force on THIS date, never today's.
+            dailyRatePaise: rec
+              ? rec.dailyRatePaiseSnapshot
+              : (agreementRateOnDemo(ag.id, item.labourSubcategoryId, date) ?? null),
+            quantity: rec?.quantityPresent ?? 0,
+            notes: rec?.notes ?? null,
+          });
+        }
+      }
+
+      // Attendance-only rows are offered only when this contractor holds no
+      // agreements — otherwise that labour has a commercial home, and a parallel
+      // unattributed row would just be a way to record it twice.
+      if (mine.length === 0) {
+        for (const lr of pc.labourRates) {
+          const k = attKey(pc.contractorId, lr.labourSubcategoryId, null);
+          const rec = byKey.get(k);
+          if (rec) consumed.add(k);
+          rows.push({
+            subcategoryId: lr.labourSubcategoryId,
+            name: lr.subcategoryName,
+            categoryId: lr.categoryId,
+            categoryName: lr.categoryName,
+            contractId: null,
+            agreementTitle: null,
+            dailyRatePaise: rec ? rec.dailyRatePaiseSnapshot : lr.ratePaise,
+            quantity: rec?.quantityPresent ?? 0,
+            notes: rec?.notes ?? null,
+          });
+        }
+      }
+
       return {
         contractorId: pc.contractorId,
         contractorName: pc.contractorName,
         contractRatePaise: pc.contractRatePaise,
         contractRateUnit: pc.contractRateUnit,
         configured: true,
+        agreements: mine.map((a) => ({
+          contractId: a.id,
+          title: a.title,
+          reference: a.reference,
+          status: a.status,
+        })),
+        requiresAgreementChoice: mine.length > 1,
         rows,
         ...rowTotals(rows),
       };
     });
 
-  // Leftover recorded rows (de-configured contractor/type, or legacy null).
+  // Leftover recorded rows (de-configured contractor/type/agreement, or legacy null).
+  const titles = new Map(loadContractsRaw().map((c) => [c.id, c.title]));
   const orphans = new Map<string, { contractorId: string | null; name: string; rows: SheetRow[] }>();
   for (const a of todays) {
-    const k = attKey(a.contractorId ?? null, a.labourSubcategoryId);
+    const k = attKey(a.contractorId ?? null, a.labourSubcategoryId, a.contractId ?? null);
     if (consumed.has(k)) continue;
     const gk = a.contractorId ?? "";
     const cid = a.contractorId ?? null;
@@ -323,6 +483,8 @@ function buildSheet(
       name: subName.get(a.labourSubcategoryId) ?? "Unknown",
       categoryId: catId,
       categoryName: catName.get(catId) ?? "Unknown",
+      contractId: a.contractId ?? null,
+      agreementTitle: a.contractId ? (titles.get(a.contractId) ?? null) : null,
       dailyRatePaise: a.dailyRatePaiseSnapshot,
       quantity: a.quantityPresent,
       notes: a.notes,
@@ -336,6 +498,8 @@ function buildSheet(
       contractRatePaise: null,
       contractRateUnit: null,
       configured: false,
+      agreements: [],
+      requiresAgreementChoice: false,
       rows: g.rows,
       ...rowTotals(g.rows),
     });
@@ -348,6 +512,7 @@ function toItems(records: LabourAttendanceRecord[]): AttendanceRecordItem[] {
   const categories = loadCategories();
   const subcategories = loadSubcategories();
   const names = contractorNames();
+  const titles = new Map(loadContractsRaw().map((c) => [c.id, c.title]));
   return records.map((r) => {
     const sub = subcategories.find((s) => s.id === r.labourSubcategoryId);
     const cat = sub ? categories.find((c) => c.id === sub.categoryId) : undefined;
@@ -364,6 +529,8 @@ function toItems(records: LabourAttendanceRecord[]): AttendanceRecordItem[] {
       subcategoryName: sub?.name ?? "Unknown",
       contractorId: cid,
       contractorName: cid ? (names.get(cid) ?? null) : null,
+      contractId: r.contractId ?? null,
+      agreementTitle: r.contractId ? (titles.get(r.contractId) ?? null) : null,
       quantityPresent: r.quantityPresent,
       dailyRatePaiseSnapshot: r.dailyRatePaiseSnapshot,
       estimatedCostPaise: r.estimatedCostPaise,
@@ -547,24 +714,64 @@ export const demoLaborRepository: LaborRepository = {
     return buildSheet(projectId, date, loadSubcategories(), loadAttendance());
   },
 
-  async setQuantity(projectId, date, subcategoryId, quantity, notes, contractorId) {
+  async setQuantity({ projectId, date, subcategoryId, quantity, notes, contractorId, contractId }) {
     const subcategories = loadSubcategories();
     let attendance = loadAttendance();
-    // Eligibility parity with the server: a contractor may only be attributed to
-    // a subcategory THEY SUPPLY on this project; an ineligible id degrades to
-    // null (never rejects, matching the offline sync path). undefined = null.
+    // Eligibility parity with the server. The AGREEMENT is checked first, and
+    // when it holds it settles the contractor too: an agreement's scope is its
+    // own authority on which labour types the contractor supplies there, so
+    // demanding a project-contractor rate as well would silently drop the
+    // attribution for any type priced only by the agreement. Falling back, a
+    // contractor may only be attributed to a subcategory THEY SUPPLY on this
+    // project; an ineligible id degrades to null (never rejects, matching the
+    // offline sync path). undefined = null. Nothing is ever inferred.
     let effContractor = contractorId ?? null;
-    if (effContractor != null && !isAttributionEligibleDemo(projectId, subcategoryId, effContractor)) {
-      effContractor = null;
+    let effContract = effContractor != null ? (contractId ?? null) : null;
+    const agreementHolds =
+      effContractor != null &&
+      effContract != null &&
+      isAgreementEligibleDemo(projectId, effContractor, effContract, subcategoryId);
+    if (!agreementHolds) {
+      effContract = null;
+      if (
+        effContractor != null &&
+        !isAttributionEligibleDemo(projectId, subcategoryId, effContractor)
+      ) {
+        effContractor = null;
+      }
     }
-    // Identity now includes the contractor (Pappu-Centering ≠ Saddam-Centering).
+    // Identity is five fields: project, date, labour type, contractor AND
+    // agreement (Pappu/Structure ≠ Pappu/Compound Wall on the same day).
     const existing = attendance.find(
       (a) =>
         a.projectId === projectId &&
         a.date === date &&
         a.labourSubcategoryId === subcategoryId &&
-        (a.contractorId ?? null) === effContractor,
+        (a.contractorId ?? null) === effContractor &&
+        (a.contractId ?? null) === effContract,
     );
+    // Settled attendance is financially immutable (parity with the server's
+    // assertNotSettled). Clearing is guarded too — it's the sneakier path, since
+    // it would erase recognised value entirely. Only a governed settlement
+    // reversal frees the row.
+    if (existing?.settlementId) throw new Error("ATTENDANCE_SETTLED");
+    // Nor may settled labour be RE-ATTRIBUTED: writing the same day and labour
+    // type under a different agreement would leave the settled row in place and
+    // count the work twice.
+    if (
+      effContract != null &&
+      attendance.some(
+        (a) =>
+          a.projectId === projectId &&
+          a.date === date &&
+          a.labourSubcategoryId === subcategoryId &&
+          (a.contractorId ?? null) === effContractor &&
+          (a.contractId ?? null) !== effContract &&
+          a.settlementId,
+      )
+    ) {
+      throw new Error("ATTENDANCE_SETTLED");
+    }
     if (quantity <= 0) {
       attendance = attendance.filter((a) => a !== existing);
     } else if (existing) {
@@ -574,7 +781,7 @@ export const demoLaborRepository: LaborRepository = {
       if (notes !== undefined) existing.notes = notes;
       existing.updatedAt = new Date().toISOString();
     } else {
-      const rate = resolveRateDemo(projectId, effContractor, subcategoryId);
+      const rate = resolveRateDemo(projectId, effContractor, subcategoryId, effContract, date);
       attendance.push({
         id: uid(),
         projectId,
@@ -585,6 +792,8 @@ export const demoLaborRepository: LaborRepository = {
         estimatedCostPaise: Math.round((rate ?? 0) * quantity),
         notes: notes ?? null,
         contractorId: effContractor,
+        contractId: effContract,
+        settlementId: null,
         clientUuid: uid(),
         updatedAt: new Date().toISOString(),
       });
@@ -605,22 +814,30 @@ export const demoLaborRepository: LaborRepository = {
       const source = attendance.filter((a) => a.projectId === projectId && a.date === prev);
       for (const rec of source) {
         const cid = rec.contractorId ?? null;
-        // Replace the same (subcategory, contractor) slot on the target day.
+        const agreementId = rec.contractId ?? null;
+        // Replace the same (subcategory, contractor, AGREEMENT) slot on the
+        // target day — dropping the agreement here would let one agreement's
+        // copy wipe another's row for the same labour type.
         attendance = attendance.filter(
           (a) =>
             !(
               a.projectId === projectId &&
               a.date === date &&
               a.labourSubcategoryId === rec.labourSubcategoryId &&
-              (a.contractorId ?? null) === cid
+              (a.contractorId ?? null) === cid &&
+              (a.contractId ?? null) === agreementId
             ),
         );
-        // Copying into a new day is a NEW recording → snapshot today's rate.
-        const rate = resolveRateDemo(projectId, cid, rec.labourSubcategoryId);
+        // Copying into a new day is a NEW recording → snapshot the rate in force
+        // on the TARGET date, not the source day's.
+        const rate = resolveRateDemo(projectId, cid, rec.labourSubcategoryId, agreementId, date);
         attendance.push({
           ...rec,
           id: uid(),
           date,
+          // A copy is a NEW recording — it inherits nothing from the source
+          // row's settlement, which owns a different day.
+          settlementId: null,
           dailyRatePaiseSnapshot: rate,
           estimatedCostPaise: Math.round((rate ?? 0) * rec.quantityPresent),
           clientUuid: uid(),

@@ -50,6 +50,13 @@ export interface ContractorsRepository {
   listSettlements(filters?: SettlementFilters): Promise<ContractorSettlement[]>;
 
   // Reports
+  /**
+   * Reverse a settlement. Un-recognises the labour, restores each drawdown to
+   * the advance it came from, and turns the already-paid net cash into an
+   * unapplied advance — per composition bucket, so agreement attribution the
+   * settlement recorded is never collapsed into anonymous project money.
+   */
+  reverseSettlement(settlementId: string, reason: string): Promise<ContractorSettlement>;
   outstandingAdvances(): Promise<OutstandingAdvanceRow[]>;
   contractorCostSummary(): Promise<ContractorCostRow[]>;
 }

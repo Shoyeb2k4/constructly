@@ -18,6 +18,18 @@ export const isSupabaseConfigured = Boolean(supabaseUrl && supabasePublishableKe
  * Demo mode serves a seeded demo company without real auth. Active when
  * explicitly enabled OR when Supabase is not configured — so the UI always
  * previews and E2E tests can run without a backend.
+ *
+ * BOTH flags are read on purpose. `CONSTRUCTLY_DEMO` is server-only: Next never
+ * inlines an unprefixed variable into the client bundle, so with it alone the
+ * server renders as the demo company while the browser falls through to real
+ * server actions — a split-brain that looks like demo mode until the first
+ * mutation hits a real database. `NEXT_PUBLIC_CONSTRUCTLY_DEMO` is what makes
+ * the client agree.
+ *
+ * Set BOTH to preview demo mode with Supabase still configured. Neither belongs
+ * in a production environment.
  */
 export const isDemoMode =
-  process.env.CONSTRUCTLY_DEMO === "1" || !isSupabaseConfigured;
+  process.env.CONSTRUCTLY_DEMO === "1" ||
+  process.env.NEXT_PUBLIC_CONSTRUCTLY_DEMO === "1" ||
+  !isSupabaseConfigured;

@@ -68,6 +68,19 @@ export const SYSTEM_ROLES: SystemRoleDef[] = [
       "attendance.view",
       "attendance.mark",
       "attendance.export",
+      // Contractors: a PM sees the commercial position of contractors on their
+      // OWN projects (contractors.view is project-scoped). No advance, no
+      // settlement, no view_all.
+      "contractors.view",
+      // Agreements: PMs run their assigned projects' contractor work packages —
+      // scope, rates, milestones — and record payments. Deliberately NOT
+      // amend_approve (a PM proposes a value change, an Owner/Admin authorises
+      // it), NOT cancel, and NOT delete/reverse.
+      "contracts.view",
+      "contracts.create",
+      "contracts.edit",
+      "contracts.complete",
+      "contracts.pay",
       "vendors.view",
       // Legacy PROJECT_MANAGER could raise + edit draft POs on assigned projects
       // (no approve/delete, no broad scope).
@@ -109,7 +122,13 @@ export const SYSTEM_ROLES: SystemRoleDef[] = [
     key: "site_engineer",
     name: "Site Engineer",
     description: "Site operations: progress updates and attendance.",
-    permissions: ["projects.view", "projects.edit", "attendance.view", "attendance.mark"],
+    permissions: [
+      "projects.view",
+      "projects.edit",
+      "attendance.view",
+      "attendance.mark",
+      "contracts.view",
+    ],
   },
   {
     key: "accountant",
@@ -119,6 +138,17 @@ export const SYSTEM_ROLES: SystemRoleDef[] = [
       "payments.view",
       "payments.create",
       "payments.edit",
+      // Contractors: the Accountant owns cash movement — advances and weekly
+      // settlements, across every project. Reversal is deliberately excluded:
+      // un-recognising settled labour is an Owner/Admin authority.
+      "contractors.view",
+      "contractors.view_all",
+      "contractors.advance",
+      "contractors.settle",
+      // Agreement finance: view, record and reverse agreement payments.
+      "contracts.view",
+      "contracts.pay",
+      "contracts.pay_delete",
       "purchase_orders.view",
       "vendors.view",
       "reports.view",
@@ -130,7 +160,7 @@ export const SYSTEM_ROLES: SystemRoleDef[] = [
     key: "supervisor",
     name: "Supervisor",
     description: "Oversees site labour: view projects and mark attendance.",
-    permissions: ["projects.view", "attendance.view", "attendance.mark"],
+    permissions: ["projects.view", "attendance.view", "attendance.mark", "contracts.view"],
   },
 ];
 

@@ -165,35 +165,106 @@ async function validateProjectContractors(
   return deduped;
 }
 
-/** Persist a normalized contractor-config set (project_contractors + nested
- *  labour rates) inside a transaction. Caller has already deleted the old set. */
-async function writeProjectContractors(
+/**
+ * Reconcile a project's contractor config to a normalized target set, IN PLACE.
+ *
+ * This is a diff, never a delete-and-recreate. Attendance rows carry a
+ * `projectContractorLabourRateId` provenance FK with `ON DELETE SET NULL`, so
+ * recreating rate rows on every save silently nulled the provenance of all
+ * historical attendance — the money snapshot survived, the audit trail did not.
+ * Unchanged mappings therefore MUST keep their row ids.
+ *
+ * A contractor dropped from the config is removed only when it has no attendance
+ * on this project; otherwise those rows would lose the assignment that explains
+ * their attribution. Individual labour-type mappings may still be removed — the
+ * attendance sheet already surfaces de-configured pairs as read-only orphan rows.
+ */
+async function syncProjectContractors(
   tx: Prisma.TransactionClient,
   companyId: string,
   projectId: string,
   rows: ProjectContractorInput[],
 ): Promise<void> {
-  for (const r of rows) {
-    const pc = await tx.projectContractor.create({
-      data: {
-        companyId,
-        projectId,
-        contractorId: r.contractorId,
-        contractRatePaise: r.contractRatePaise ?? null,
-        contractRateUnit: r.contractRateUnit ?? null,
+  const existing = await tx.projectContractor.findMany({
+    where: { companyId, projectId },
+    select: {
+      id: true,
+      contractorId: true,
+      contractRatePaise: true,
+      contractRateUnit: true,
+      labourRates: {
+        select: { id: true, labourSubcategoryId: true, ratePaise: true, rateUnit: true },
       },
+    },
+  });
+  const previous = new Map(existing.map((pc) => [pc.contractorId, pc]));
+  const desired = new Set(rows.map((r) => r.contractorId));
+
+  const dropped = existing.filter((pc) => !desired.has(pc.contractorId));
+  if (dropped.length > 0) {
+    const attributed = await tx.labourAttendance.findFirst({
+      where: { companyId, projectId, contractorId: { in: dropped.map((pc) => pc.contractorId) } },
       select: { id: true },
     });
-    if (r.labourRates.length > 0) {
-      await tx.projectContractorLabourRate.createMany({
-        data: r.labourRates.map((lr) => ({
+    if (attributed) throw new Error("CONTRACTOR_HAS_ATTENDANCE");
+    await tx.projectContractor.deleteMany({ where: { id: { in: dropped.map((pc) => pc.id) } } });
+  }
+
+  for (const r of rows) {
+    const prev = previous.get(r.contractorId);
+    const contractRatePaise = r.contractRatePaise ?? null;
+    const contractRateUnit = r.contractRateUnit ?? null;
+
+    let projectContractorId: string;
+    if (prev) {
+      projectContractorId = prev.id;
+      if (prev.contractRatePaise !== contractRatePaise || prev.contractRateUnit !== contractRateUnit) {
+        await tx.projectContractor.update({
+          where: { id: prev.id },
+          data: { contractRatePaise, contractRateUnit },
+        });
+      }
+    } else {
+      const created = await tx.projectContractor.create({
+        data: { companyId, projectId, contractorId: r.contractorId, contractRatePaise, contractRateUnit },
+        select: { id: true },
+      });
+      projectContractorId = created.id;
+    }
+
+    const prevRates = new Map((prev?.labourRates ?? []).map((lr) => [lr.labourSubcategoryId, lr]));
+    const desiredSubs = new Set(r.labourRates.map((lr) => lr.labourSubcategoryId));
+
+    const staleIds = [...prevRates.values()]
+      .filter((lr) => !desiredSubs.has(lr.labourSubcategoryId))
+      .map((lr) => lr.id);
+    if (staleIds.length > 0) {
+      await tx.projectContractorLabourRate.deleteMany({ where: { id: { in: staleIds } } });
+    }
+
+    const added: Prisma.ProjectContractorLabourRateCreateManyInput[] = [];
+    for (const lr of r.labourRates) {
+      const rateUnit = lr.rateUnit ?? "day";
+      const prevRate = prevRates.get(lr.labourSubcategoryId);
+      if (!prevRate) {
+        added.push({
           companyId,
-          projectContractorId: pc.id,
+          projectContractorId,
           labourSubcategoryId: lr.labourSubcategoryId,
           ratePaise: lr.ratePaise,
-          rateUnit: lr.rateUnit ?? "day",
-        })),
-      });
+          rateUnit,
+        });
+      } else if (prevRate.ratePaise !== lr.ratePaise || prevRate.rateUnit !== rateUnit) {
+        // Rate revised in place — the row id (and every attendance FK pointing
+        // at it) survives.
+        await tx.projectContractorLabourRate.update({
+          where: { id: prevRate.id },
+          data: { ratePaise: lr.ratePaise, rateUnit },
+        });
+      }
+    }
+    if (added.length > 0) {
+      await tx.projectContractorLabourRate.createMany({ data: added });
     }
   }
 }
@@ -545,7 +616,7 @@ async function insertProjectWithCode(
           },
           select: { id: true },
         });
-        await writeProjectContractors(tx, user.company.id, project.id, contractors);
+        await syncProjectContractors(tx, user.company.id, project.id, contractors);
         return project;
       });
     } catch (e) {
@@ -689,7 +760,7 @@ export async function duplicateProject(id: string): Promise<ProjectDetail> {
           },
           select: { id: true },
         });
-        await writeProjectContractors(tx, user.company.id, project.id, contractors);
+        await syncProjectContractors(tx, user.company.id, project.id, contractors);
         return project;
       });
       await logActivity(user, created.id, "project.duplicated", `duplicated from ${src.code}`);
@@ -952,12 +1023,13 @@ export async function listProjectContractors(
 }
 
 /**
- * Replace a project's contractor config (transactional). Gated by projects.edit
- * + ownership scope (same as any project edit). Validates company ownership of
- * every contractor + labour subcategory and dedupes before writing. Deleting the
- * old project_contractors cascade-removes their labour rates; historical
- * attendance keeps its rate snapshot + contractorId (the rate-provenance FK is
- * SetNull), so financial history is never disturbed.
+ * Reconcile a project's contractor config to `rows` (transactional). Gated by
+ * projects.edit + ownership scope (same as any project edit). Validates company
+ * ownership of every contractor + labour subcategory and dedupes before writing.
+ *
+ * Reconciled as a DIFF, not a replace: unchanged mappings keep their row ids so
+ * historical attendance keeps its rate-provenance FK. Dropping a contractor that
+ * already has attendance on this project throws CONTRACTOR_HAS_ATTENDANCE.
  */
 export async function setProjectContractors(
   projectId: string,
@@ -969,8 +1041,7 @@ export async function setProjectContractors(
     projectContractorsSchema.parse(rows),
   );
   await prisma.$transaction(async (tx) => {
-    await tx.projectContractor.deleteMany({ where: { companyId: user.company.id, projectId } });
-    await writeProjectContractors(tx, user.company.id, projectId, contractors);
+    await syncProjectContractors(tx, user.company.id, projectId, contractors);
   });
   const labourTypeCount = contractors.reduce((s, c) => s + c.labourRates.length, 0);
   await logActivity(

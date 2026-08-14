@@ -113,10 +113,16 @@ function mutate<T>(id: string, fn: (p: ProjectDetail, rows: ProjectDetail[]) => 
  * contractor + labour-subcategory stores. Dedupes contractors + labour types and
  * drops any whose contractor/subcategory no longer exists (parity with the
  * server's company-ownership validation).
+ *
+ * `previous` carries the project's current items so an unchanged mapping KEEPS
+ * its id, mirroring the server's in-place diff — attendance provenance must not
+ * churn on every save.
  */
 async function resolveContractors(
   rows: ProjectContractorInput[],
+  previous: ProjectContractorItem[] = [],
 ): Promise<ProjectContractorItem[]> {
+  const prevByContractor = new Map(previous.map((pc) => [pc.contractorId, pc]));
   const [contractors, categories] = await Promise.all([
     demoContractorsRepository.listContractors({}),
     demoLaborRepository.listCategories(),
@@ -136,6 +142,8 @@ async function resolveContractors(
     const contractor = cById.get(r.contractorId);
     if (!contractor || seenContractor.has(r.contractorId)) continue;
     seenContractor.add(r.contractorId);
+    const prev = prevByContractor.get(r.contractorId);
+    const prevRates = new Map((prev?.labourRates ?? []).map((lr) => [lr.labourSubcategoryId, lr]));
     const seenSub = new Set<string>();
     const labourRates = [];
     for (const lr of r.labourRates) {
@@ -143,7 +151,7 @@ async function resolveContractors(
       if (!info || seenSub.has(lr.labourSubcategoryId)) continue;
       seenSub.add(lr.labourSubcategoryId);
       labourRates.push({
-        id: uid(),
+        id: prevRates.get(lr.labourSubcategoryId)?.id ?? uid(),
         labourSubcategoryId: lr.labourSubcategoryId,
         subcategoryName: info.name,
         categoryId: info.categoryId,
@@ -153,7 +161,7 @@ async function resolveContractors(
       });
     }
     items.push({
-      id: uid(),
+      id: prev?.id ?? uid(),
       contractorId: contractor.id,
       contractorName: contractor.name,
       contractRatePaise: r.contractRatePaise ?? null,
@@ -457,7 +465,19 @@ export const demoRepository: ProjectsRepository = {
   },
 
   async setProjectContractors(projectId, rows) {
-    const resolved = await resolveContractors(rows);
+    const current = load().find((x) => x.id === projectId)?.contractors ?? [];
+    // Parity with the server diff: a contractor with attendance on this project
+    // can't be dropped, and surviving mappings keep their ids.
+    const desired = new Set(rows.map((r) => r.contractorId));
+    const dropped = current.filter((pc) => !desired.has(pc.contractorId));
+    if (dropped.length > 0) {
+      const attendance = await demoLaborRepository.listAttendance({ projectId });
+      const droppedIds = new Set(dropped.map((pc) => pc.contractorId));
+      if (attendance.some((a) => a.contractorId != null && droppedIds.has(a.contractorId))) {
+        throw new Error("CONTRACTOR_HAS_ATTENDANCE");
+      }
+    }
+    const resolved = await resolveContractors(rows, current);
     return mutate(projectId, (p) => {
       p.contractors = resolved;
       const labourTypeCount = resolved.reduce((s, c) => s + c.labourRates.length, 0);

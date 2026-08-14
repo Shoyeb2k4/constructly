@@ -68,18 +68,38 @@ export interface ForceDeleteImpact {
 
 /* ── Attendance sheet (contractor-first) ─────────────────────────────── */
 
-/** One labour-type (subcategory) row under a contractor. quantity 0 = not
- *  recorded. dailyRatePaise is the EFFECTIVE rate: the record's snapshot when
- *  recorded, else the project+contractor configured rate. */
+/**
+ * One labour-type (subcategory) row under a contractor, for ONE agreement.
+ *
+ * `contractId` is part of the row's IDENTITY, not decoration: a contractor
+ * holding two agreements on a project can record the same labour type on the
+ * same date under each, and the two rows must never overwrite or clear one
+ * another. Every write path carries it.
+ *
+ * quantity 0 = not recorded. dailyRatePaise is the EFFECTIVE rate: the record's
+ * snapshot when already recorded, else the rate resolved for THIS date.
+ */
 export interface SheetRow {
   subcategoryId: string;
   name: string;
   /** Owning trade category — retained for reports/exports, not for grouping. */
   categoryId: string;
   categoryName: string;
+  /** The agreement this row belongs to. null = attendance-only (legacy path). */
+  contractId: string | null;
+  /** Denormalised agreement name, for display and exports. */
+  agreementTitle: string | null;
   dailyRatePaise: number | null;
   quantity: number;
   notes: string | null;
+}
+
+/** A commercial agreement a contractor can record labour against on this project. */
+export interface SheetAgreement {
+  contractId: string;
+  title: string;
+  reference: string | null;
+  status: string;
 }
 
 /** A contractor group: the contractor and the labour types they supply on this
@@ -93,6 +113,17 @@ export interface SheetGroup {
   contractRatePaise: number | null;
   contractRateUnit: string | null;
   configured: boolean;
+  /**
+   * Agreements eligible to take attendance today. Empty = the attendance-only
+   * contractor, whose flow is unchanged.
+   */
+  agreements: SheetAgreement[];
+  /**
+   * True when two or more agreements are eligible. The UI must make the user
+   * pick one before agreement-linked entry — the system never guesses which
+   * agreement a day's labour belongs to.
+   */
+  requiresAgreementChoice: boolean;
   rows: SheetRow[];
   totalPresent: number;
   estimatedCostPaise: number;
@@ -123,10 +154,32 @@ export interface AttendanceRecordItem {
   /** Contractor the labour was attributed to (null = legacy/unattributed). */
   contractorId: string | null;
   contractorName: string | null;
+  /** Agreement the labour was attributed to (null = attendance-only). */
+  contractId: string | null;
+  agreementTitle: string | null;
   quantityPresent: number;
   dailyRatePaiseSnapshot: number | null;
   estimatedCostPaise: number;
   notes: string | null;
+}
+
+/**
+ * One attendance write. Passed as an object rather than positionally because
+ * the row IDENTITY is five fields — project, date, labour type, contractor and
+ * AGREEMENT — and a positional call that quietly omits the last one would write
+ * to, or clear, another agreement's row.
+ */
+export interface SetQuantityInput {
+  projectId: string;
+  /** YYYY-MM-DD. Also the date the rate is resolved as at. */
+  date: string;
+  subcategoryId: string;
+  /** 0 clears the row. Half-days allowed in 0.5 steps. */
+  quantity: number;
+  notes?: string | null;
+  contractorId?: string | null;
+  /** The agreement this row belongs to. null = attendance-only (legacy path). */
+  contractId?: string | null;
 }
 
 export interface AttendanceFilters {

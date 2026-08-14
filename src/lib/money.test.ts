@@ -6,6 +6,8 @@ import {
   formatPaiseCompact,
   formatPaiseSmart,
   sumPaise,
+  paiseFromBigInt,
+  paiseFromNullableBigInt,
 } from "./money";
 
 describe("money", () => {
@@ -43,5 +45,36 @@ describe("money", () => {
 
   it("sums paise integer-safely", () => {
     expect(sumPaise([10, 20, 30])).toBe(60);
+  });
+});
+
+describe("paiseFromBigInt", () => {
+  it("converts values JavaScript can represent exactly", () => {
+    expect(paiseFromBigInt(BigInt(0), "x")).toBe(0);
+    expect(paiseFromBigInt(BigInt(600_000_000), "x")).toBe(600_000_000); // Rs 60,00,000
+    expect(paiseFromBigInt(BigInt(-42), "x")).toBe(-42);
+  });
+
+  it("accepts the safe-integer boundary itself", () => {
+    const max = BigInt(Number.MAX_SAFE_INTEGER);
+    expect(paiseFromBigInt(max, "x")).toBe(Number.MAX_SAFE_INTEGER);
+    expect(paiseFromBigInt(BigInt(Number.MIN_SAFE_INTEGER), "x")).toBe(Number.MIN_SAFE_INTEGER);
+  });
+
+  it("throws one past the boundary rather than silently rounding", () => {
+    // Number(9007199254740993n) quietly returns 9007199254740992 — a wrong
+    // financial figure with no error. This is exactly what must not happen.
+    const past = BigInt(Number.MAX_SAFE_INTEGER) + BigInt(1);
+    expect(() => paiseFromBigInt(past, "settlement.labourBillPaise")).toThrow("MONEY_OUT_OF_RANGE");
+    expect(() => paiseFromBigInt(past, "settlement.labourBillPaise")).toThrow(
+      "settlement.labourBillPaise",
+    );
+    expect(() => paiseFromBigInt(-past, "x")).toThrow("MONEY_OUT_OF_RANGE");
+  });
+
+  it("treats a null aggregate as zero", () => {
+    expect(paiseFromNullableBigInt(null, "x")).toBe(0);
+    expect(paiseFromNullableBigInt(undefined, "x")).toBe(0);
+    expect(paiseFromNullableBigInt(BigInt(500), "x")).toBe(500);
   });
 });

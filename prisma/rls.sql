@@ -127,16 +127,42 @@ create policy contractors_tenant on public.contractors
   for all using (company_id = public.current_company_id())
   with check (company_id = public.current_company_id());
 
--- Contractor ledger + settlements (immutable financial records, tenant-scoped).
+-- Contractor financial history is PROJECT-scoped, not merely tenant-scoped.
+--
+-- The app reads these only through server actions on Prisma/DIRECT_URL, which
+-- bypasses RLS, so these policies change nothing for the application. They close
+-- the direct-access path: the publishable key ships to the browser, so a
+-- signed-in project-scoped user could otherwise hand-craft a Supabase call and
+-- read every contractor ledger entry and settlement in the company.
+--
+-- RLS cannot see the `contractors.view_all` application permission, so it
+-- approximates with is_owner() and is deliberately stricter than the app for a
+-- non-Owner Admin — harmless, since no client code reads these tables.
 alter table public.contractor_ledger_entries enable row level security;
+drop policy if exists contractor_ledger_entries_tenant on public.contractor_ledger_entries;
 create policy contractor_ledger_entries_tenant on public.contractor_ledger_entries
-  for all using (company_id = public.current_company_id())
-  with check (company_id = public.current_company_id());
+  for all using (
+    company_id = public.current_company_id()
+    and (public.can_access_project(project_id) or (project_id is null and public.is_owner()))
+  )
+  with check (
+    company_id = public.current_company_id()
+    and (public.can_access_project(project_id) or (project_id is null and public.is_owner()))
+  );
 
 alter table public.contractor_settlements enable row level security;
+drop policy if exists contractor_settlements_tenant on public.contractor_settlements;
 create policy contractor_settlements_tenant on public.contractor_settlements
-  for all using (company_id = public.current_company_id())
-  with check (company_id = public.current_company_id());
+  for all using (company_id = public.current_company_id() and public.can_access_project(project_id))
+  with check (company_id = public.current_company_id() and public.can_access_project(project_id));
+
+-- What a settlement knew about its composition when it ran. Project-scoped from
+-- the start via a denormalized project_id.
+alter table public.contractor_settlement_breakdowns enable row level security;
+drop policy if exists contractor_settlement_breakdowns_all on public.contractor_settlement_breakdowns;
+create policy contractor_settlement_breakdowns_all on public.contractor_settlement_breakdowns
+  for all using (company_id = public.current_company_id() and public.can_access_project(project_id))
+  with check (company_id = public.current_company_id() and public.can_access_project(project_id));
 
 alter table public.labour_categories enable row level security;
 create policy labour_categories_tenant on public.labour_categories
@@ -176,6 +202,69 @@ create policy project_contractor_labour_rates_all on public.project_contractor_l
         and public.can_access_project(pc.project_id)
     )
   );
+
+-- ── Contractor commercial agreements ───────────────────────────────────
+-- Every one of these tables carries a DENORMALIZED project_id (from the parent
+-- agreement), so they all take the same flat project-scoped policy as
+-- project_contractors — no EXISTS subqueries, and a WITH CHECK on every one.
+--
+-- These definitions are duplicated in prisma/migration-contractor-contracts.sql
+-- so a single-file deploy is self-sufficient. THIS FILE IS CANONICAL — keep the
+-- two textually identical.
+--
+-- Postgres has no CREATE POLICY IF NOT EXISTS, so each is drop-then-create:
+-- that makes this file re-runnable to convergence whether or not the migration
+-- already created the policy. (The migration uses the pg_policies-guarded form
+-- instead, so it is a no-op if this file ran first.)
+alter table public.contractor_contracts enable row level security;
+drop policy if exists contractor_contracts_all on public.contractor_contracts;
+create policy contractor_contracts_all on public.contractor_contracts
+  for all using (company_id = public.current_company_id() and public.can_access_project(project_id))
+  with check (company_id = public.current_company_id() and public.can_access_project(project_id));
+
+-- Labour types in an agreement's commercial scope (tier-1 rate carrier).
+alter table public.contract_scope_items enable row level security;
+drop policy if exists contract_scope_items_all on public.contract_scope_items;
+create policy contract_scope_items_all on public.contract_scope_items
+  for all using (company_id = public.current_company_id() and public.can_access_project(project_id))
+  with check (company_id = public.current_company_id() and public.can_access_project(project_id));
+
+-- Append-only effective-dated rate history.
+alter table public.contract_scope_rate_revisions enable row level security;
+drop policy if exists contract_scope_rate_revisions_all on public.contract_scope_rate_revisions;
+create policy contract_scope_rate_revisions_all on public.contract_scope_rate_revisions
+  for all using (company_id = public.current_company_id() and public.can_access_project(project_id))
+  with check (company_id = public.current_company_id() and public.can_access_project(project_id));
+
+-- Earned-value checkpoints.
+alter table public.contract_milestones enable row level security;
+drop policy if exists contract_milestones_all on public.contract_milestones;
+create policy contract_milestones_all on public.contract_milestones
+  for all using (company_id = public.current_company_id() and public.can_access_project(project_id))
+  with check (company_id = public.current_company_id() and public.can_access_project(project_id));
+
+-- Contract value variations / amendments.
+alter table public.contract_amendments enable row level security;
+drop policy if exists contract_amendments_all on public.contract_amendments;
+create policy contract_amendments_all on public.contract_amendments
+  for all using (company_id = public.current_company_id() and public.can_access_project(project_id))
+  with check (company_id = public.current_company_id() and public.can_access_project(project_id));
+
+-- Payments against an agreement (mirrors vendor_payments).
+alter table public.contractor_contract_payments enable row level security;
+drop policy if exists contractor_contract_payments_all on public.contractor_contract_payments;
+create policy contractor_contract_payments_all on public.contractor_contract_payments
+  for all using (company_id = public.current_company_id() and public.can_access_project(project_id))
+  with check (company_id = public.current_company_id() and public.can_access_project(project_id));
+
+-- Tier-2 (attendance-only) rate-change audit trail.
+alter table public.project_contractor_labour_rate_revisions enable row level security;
+drop policy if exists project_contractor_labour_rate_revisions_all
+  on public.project_contractor_labour_rate_revisions;
+create policy project_contractor_labour_rate_revisions_all
+  on public.project_contractor_labour_rate_revisions
+  for all using (company_id = public.current_company_id() and public.can_access_project(project_id))
+  with check (company_id = public.current_company_id() and public.can_access_project(project_id));
 
 -- ── labour_attendance (tenant + PM-scoped via project access) ──────────
 alter table public.labour_attendance enable row level security;

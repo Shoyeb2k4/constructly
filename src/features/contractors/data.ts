@@ -14,6 +14,7 @@ const serverRepository: ContractorsRepository = {
   getLedger: server.getLedger,
   previewSettlement: server.previewSettlement,
   createSettlement: server.createSettlement,
+  reverseSettlement: server.reverseSettlement,
   listSettlements: server.listSettlements,
   outstandingAdvances: server.outstandingAdvances,
   contractorCostSummary: server.contractorCostSummary,

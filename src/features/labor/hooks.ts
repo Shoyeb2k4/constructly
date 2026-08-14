@@ -10,6 +10,7 @@ import type {
   CreateCategoryInput,
   CreateSubcategoryInput,
   ForceDeleteKind,
+  SetQuantityInput,
   UpdateCategoryInput,
   UpdateSubcategoryInput,
 } from "./types";
@@ -57,23 +58,24 @@ export function useSetQuantity(projectId: string, date: string) {
   const qc = useQueryClient();
   const key = laborKeys.sheet(projectId, date);
   return useMutation({
-    mutationFn: (v: {
-      subcategoryId: string;
-      quantity: number;
-      notes?: string | null;
-      contractorId?: string | null;
-    }) => laborApi.setQuantity(projectId, date, v.subcategoryId, v.quantity, v.notes, v.contractorId),
+    mutationFn: (v: Omit<SetQuantityInput, "projectId" | "date">) =>
+      laborApi.setQuantity({ ...v, projectId, date }),
     onMutate: async (v) => {
       await qc.cancelQueries({ queryKey: key });
       const prev = qc.getQueryData<AttendanceSheet>(key);
       if (prev) {
         const cid = v.contractorId ?? null;
-        // Match the ROW under the target CONTRACTOR group — the same subcategory
-        // can appear under multiple contractors (Pappu-Centering, Saddam-Centering).
+        const agreementId = v.contractId ?? null;
+        // Match the ROW on its FULL identity — the same labour type can appear
+        // under several contractors, and under several agreements for one
+        // contractor. Matching on the subcategory alone would move the wrong
+        // number in front of the user.
+        const matches = (r: { subcategoryId: string; contractId: string | null }) =>
+          r.subcategoryId === v.subcategoryId && r.contractId === agreementId;
         const groups = prev.groups.map((g) => {
-          if (g.contractorId !== cid || !g.rows.some((r) => r.subcategoryId === v.subcategoryId)) return g;
+          if (g.contractorId !== cid || !g.rows.some(matches)) return g;
           const rows = g.rows.map((r) =>
-            r.subcategoryId === v.subcategoryId
+            matches(r)
               ? { ...r, quantity: v.quantity, notes: v.notes !== undefined ? (v.notes ?? null) : r.notes }
               : r,
           );
@@ -83,8 +85,14 @@ export function useSetQuantity(projectId: string, date: string) {
       }
       return { prev };
     },
-    onError: (_e, _v, ctx) => {
+    onError: (e: unknown, _v, ctx) => {
       if (ctx?.prev) qc.setQueryData(key, ctx.prev);
+      // A settled row is refused permanently, not transiently — telling the user
+      // it "will retry" would promise a save that can never happen.
+      if (e instanceof Error && e.message.includes("ATTENDANCE_SETTLED")) {
+        toast.error("This day has been settled — reverse the settlement to correct it");
+        return;
+      }
       toast.error("Couldn't save — will retry");
     },
     onSuccess: (sheet) => qc.setQueryData(key, sheet),
