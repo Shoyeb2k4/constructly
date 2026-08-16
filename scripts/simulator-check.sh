@@ -50,23 +50,49 @@ CONSOLE_PID=$!
 # Make sure the pipe is torn down however this script exits.
 trap 'kill "$CONSOLE_PID" 2>/dev/null || true' EXIT
 
-# Give simctl a moment to print the "<bundle-id>: <pid>" header line.
-sleep 5
-PID="$(grep -m1 -oE "${BUNDLE_ID}: *[0-9]+" "$STDOUT_LOG" | grep -oE '[0-9]+$' || true)"
+# `--console-pipe` streams output but, unlike a plain `simctl launch`, prints no
+# "<bundle-id>: <pid>" header. Ask the simulator's own launchctl instead — which
+# is also the more correct liveness source, since it reports the app's state
+# inside the simulator rather than relying on host PID namespacing.
+# Two independent sources, so a quirk in either one cannot make a healthy app
+# look dead: the simulator's launchctl, then the host process table (simulator
+# apps are ordinary host processes, launched from the built .app).
+app_pid() {
+  local pid
+  pid="$(xcrun simctl spawn "$UDID" launchctl list 2>/dev/null \
+    | awk -v id="UIKitApplication:${BUNDLE_ID}" '$3 ~ id && $1 ~ /^[0-9]+$/ {print $1; exit}')"
+  if [ -z "$pid" ]; then
+    pid="$(pgrep -f "Debug-iphonesimulator/App.app/App" 2>/dev/null | head -1 || true)"
+  fi
+  printf '%s' "$pid"
+}
+
+PID=""
+for _ in $(seq 1 20); do
+  PID="$(app_pid)"
+  [ -n "$PID" ] && break
+  sleep 1
+done
 
 if [ -z "$PID" ]; then
-  echo "x ${LABEL}: launch did not report a PID"
-  head -30 "$STDOUT_LOG" || true
+  echo "x ${LABEL}: app never appeared as a running process"
+  echo "── launchctl ──"
+  xcrun simctl spawn "$UDID" launchctl list 2>/dev/null | grep -i constructly || echo "(no entry)"
+  echo "── app stdout (tail) ──"
+  tail -40 "$STDOUT_LOG" || true
   exit 1
 fi
 echo "pid: $PID"
+# Early stdout is the fastest signal for the next debugging round if anything
+# downstream fails.
+echo "── ${LABEL}: first app stdout lines ──"
+head -15 "$STDOUT_LOG" 2>/dev/null || echo "(nothing on stdout yet)"
 
 echo "── ${LABEL}: observing for ${SETTLE}s ──"
 sleep "$SETTLE"
 
-# Simulator apps are ordinary host processes, so the runner's own `ps` is the
-# most direct liveness check available. A crash-on-launch shows up here.
-if ! ps -p "$PID" >/dev/null 2>&1; then
+# A crash-on-launch would drop the entry (or blank its PID) here.
+if [ -z "$(app_pid)" ]; then
   echo "x ${LABEL}: process $PID is gone — the app crashed or exited after launch."
   echo "── app stdout (tail) ──"
   tail -60 "$STDOUT_LOG" || true
