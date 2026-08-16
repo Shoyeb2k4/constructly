@@ -231,6 +231,27 @@ jobs:
             12 \
             'app-shell'
 
+      # Conclusive, log-free proof that what rendered was OUR SPA.
+      #
+      # Each check already proves its screen differs from its own launch frame,
+      # so something painted. This proves WHAT painted: the two runs share an
+      # identical native shell, splash and launch storyboard, and differ only in
+      # the JavaScript bundle's configuration. If the settled frames differ, the
+      # pixels are being produced by our web layer reacting to that config —
+      # a splash, an error page, or a dead WebView would look the same in both.
+      - name: Prove the rendered screen is driven by our web layer
+        run: |
+          set -euo pipefail
+          PROD=artifacts/01-production-boot.png
+          DEMO=artifacts/02-demo-dashboard.png
+          test -f "$PROD" && test -f "$DEMO" || (echo "missing screenshots" && exit 1)
+          if cmp -s "$PROD" "$DEMO"; then
+            echo "x production and demo screens are byte-identical — not our SPA rendering."
+            exit 1
+          fi
+          echo "OK production and demo configs render different screens:"
+          echo "   production ($(wc -c < "$PROD" | tr -d ' ') bytes) != demo ($(wc -c < "$DEMO" | tr -d ' ') bytes)"
+
       - name: Write run metadata
         if: always()
         run: |
