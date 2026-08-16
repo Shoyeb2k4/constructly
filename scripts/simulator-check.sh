@@ -37,13 +37,26 @@ xcrun simctl install "$UDID" "$APP_PATH"
 echo "installed: $APP_PATH"
 
 echo "── ${LABEL}: launch ──"
-# `simctl launch` prints "<bundle-id>: <pid>".
-LAUNCH_OUTPUT="$(xcrun simctl launch "$UDID" "$BUNDLE_ID")"
-echo "$LAUNCH_OUTPUT"
-PID="$(echo "$LAUNCH_OUTPUT" | awk -F': *' '{print $2}' | tr -d '[:space:]')"
+# --console-pipe streams the app's stdout/stderr to us. That is load-bearing:
+# Capacitor forwards the WebView's console output to the native side via
+# Swift `print()`, which goes to stdout and NEVER reaches os_log — so
+# `log show` cannot see our boot markers no matter what predicate it uses.
+# The pipe runs in the background because it streams until the app exits.
+STDOUT_LOG="${OUT_DIR}/${LABEL}.stdout.log"
+: > "$STDOUT_LOG"
+xcrun simctl launch --console-pipe --terminate-running-process "$UDID" "$BUNDLE_ID" \
+  > "$STDOUT_LOG" 2>&1 &
+CONSOLE_PID=$!
+# Make sure the pipe is torn down however this script exits.
+trap 'kill "$CONSOLE_PID" 2>/dev/null || true' EXIT
+
+# Give simctl a moment to print the "<bundle-id>: <pid>" header line.
+sleep 5
+PID="$(grep -m1 -oE "${BUNDLE_ID}: *[0-9]+" "$STDOUT_LOG" | grep -oE '[0-9]+$' || true)"
 
 if [ -z "$PID" ]; then
   echo "x ${LABEL}: launch did not report a PID"
+  head -30 "$STDOUT_LOG" || true
   exit 1
 fi
 echo "pid: $PID"
@@ -55,9 +68,11 @@ sleep "$SETTLE"
 # most direct liveness check available. A crash-on-launch shows up here.
 if ! ps -p "$PID" >/dev/null 2>&1; then
   echo "x ${LABEL}: process $PID is gone — the app crashed or exited after launch."
-  echo "── crash-relevant log ──"
+  echo "── app stdout (tail) ──"
+  tail -60 "$STDOUT_LOG" || true
+  echo "── os_log (tail) ──"
   xcrun simctl spawn "$UDID" log show --predicate 'process == "App"' \
-    --style compact --last 3m 2>/dev/null | tail -80 || true
+    --style compact --last 3m 2>/dev/null | tail -60 || true
   exit 1
 fi
 echo "OK process $PID still alive after ${SETTLE}s"
@@ -86,26 +101,31 @@ grep -iE "Loading app at|WebView loaded" "$LOG_FILE" | head -5 || \
 # alive and something painted" into "our SPA ran, at the right origin, and
 # settled on the right screen".
 echo "── ${LABEL}: SPA boot markers ──"
-if ! grep -F "[constructly-boot] react-mounted" "$LOG_FILE" >/dev/null; then
+# Markers may surface on stdout (the normal path) or, if Capacitor's logging
+# behaviour changes, in os_log — accept either rather than depending on one.
+MARKER_SOURCES="$STDOUT_LOG $LOG_FILE"
+
+if ! grep -hF "[constructly-boot] react-mounted" $MARKER_SOURCES >/dev/null 2>&1; then
   echo "x ${LABEL}: the SPA never mounted — WebView did not execute the bundle."
-  tail -60 "$LOG_FILE"
+  echo "── app stdout (tail) ──"; tail -40 "$STDOUT_LOG" || true
+  echo "── os_log (tail) ──";     tail -40 "$LOG_FILE" || true
   exit 1
 fi
-grep -F "[constructly-boot]" "$LOG_FILE" | sed 's/^/  /' | head -10
+grep -hF "[constructly-boot]" $MARKER_SOURCES | sed 's/^/  /' | head -10
 
 # The bundle must be served by Capacitor's scheme handler. A file:// or http://
 # origin would mean the app is not running the way it will on a device.
-if ! grep -F "origin=capacitor://localhost" "$LOG_FILE" >/dev/null; then
+if ! grep -hF "origin=capacitor://localhost" $MARKER_SOURCES >/dev/null 2>&1; then
   echo "x ${LABEL}: unexpected runtime origin — expected capacitor://localhost"
-  grep -F "react-mounted" "$LOG_FILE" | head -3
+  grep -hF "react-mounted" $MARKER_SOURCES | head -3
   exit 1
 fi
 echo "OK runtime origin is capacitor://localhost"
 
 if [ -n "$EXPECTED_SCREEN" ]; then
-  if ! grep -F "[constructly-boot] screen=${EXPECTED_SCREEN}" "$LOG_FILE" >/dev/null; then
+  if ! grep -hF "[constructly-boot] screen=${EXPECTED_SCREEN}" $MARKER_SOURCES >/dev/null 2>&1; then
     echo "x ${LABEL}: expected screen '${EXPECTED_SCREEN}' was not reached."
-    grep -F "screen=" "$LOG_FILE" | head -5 || echo "  (no screen marker at all)"
+    grep -hF "screen=" $MARKER_SOURCES | head -5 || echo "  (no screen marker at all)"
     exit 1
   fi
   echo "OK settled on expected screen: ${EXPECTED_SCREEN}"
