@@ -31,6 +31,10 @@ jobs:
 
     env:
       NEXT_TELEMETRY_DISABLED: "1"
+      # Stated independently of capacitor.config.ts on purpose: the build step
+      # ASSERTS the compiled Info.plist matches this, so an accidental identity
+      # change fails CI instead of shipping quietly.
+      BUNDLE_ID: in.co.constructly.app
       # Client-safe values ONLY. Every one of these is inlined into the mobile
       # JS bundle and is therefore public by definition — the Supabase
       # publishable key is designed to be shipped to clients. They are
@@ -126,15 +130,135 @@ jobs:
       - name: Confirm app bundle was produced
         run: |
           set -euo pipefail
+          # Located by searching the controlled DerivedData output rather than
+          # assuming a path, so a future Xcode layout change fails loudly.
           APP=$(find build/DerivedData/Build/Products -maxdepth 2 -name '*.app' -print -quit)
           if [ -z "$APP" ]; then
             echo "No .app produced — failing."
             exit 1
           fi
           echo "Built: $APP"
-          ls -la "$APP"
-          echo "── Info.plist identity ──"
-          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist"
-          /usr/libexec/PlistBuddy -c 'Print :CFBundleName' "$APP/Info.plist"
-          echo "── bundled web assets present? ──"
-          test -f "$APP/public/index.html" && echo "public/index.html OK" || (echo "MISSING web assets" && exit 1)
+
+          ACTUAL_ID=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist")
+          EXECUTABLE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")
+          echo "bundle id: $ACTUAL_ID"
+          echo "executable: $EXECUTABLE"
+
+          test "$ACTUAL_ID" = "${{ env.BUNDLE_ID }}" \
+            || (echo "Bundle id mismatch — expected ${{ env.BUNDLE_ID }}" && exit 1)
+          test -x "$APP/$EXECUTABLE" \
+            || (echo "Executable missing or not executable" && exit 1)
+          test -f "$APP/public/index.html" \
+            || (echo "MISSING bundled web assets" && exit 1)
+          echo "OK bundle id, executable and bundled web assets all present"
+
+          echo "APP_PATH=$APP" >> "$GITHUB_ENV"
+
+      # ── Runtime validation ─────────────────────────────────────────────
+      # Compiling proves the native shell builds. It does NOT prove the app runs:
+      # a Capacitor app can launch perfectly and render a white rectangle if the
+      # WebView never loads. Everything below exists to close that gap.
+
+      - name: Select an iOS Simulator
+        id: sim
+        run: |
+          set -euo pipefail
+          echo "── installed runtimes ──"
+          xcrun simctl list runtimes
+          echo "── choosing a device ──"
+          node scripts/select-simulator.mjs
+
+      - name: Boot simulator
+        run: |
+          set -euo pipefail
+          xcrun simctl boot '${{ steps.sim.outputs.udid }}' || true
+          xcrun simctl bootstatus '${{ steps.sim.outputs.udid }}' -b
+          echo "Booted ${{ steps.sim.outputs.name }} (${{ steps.sim.outputs.runtime }})"
+
+      # Check 1 — the PRODUCTION-configured bundle (real transport, placeholder
+      # backend host). It cannot reach a backend from CI, so the expected screen
+      # is the app's own "couldn't reach Constructly" boot state. That still
+      # proves React mounted, Capacitor started, the SPA executed, and the RPC
+      # base URL was absolute rather than resolved against capacitor://localhost.
+      - name: Runtime check — production config
+        run: |
+          bash scripts/simulator-check.sh \
+            '${{ steps.sim.outputs.udid }}' \
+            "$APP_PATH" \
+            '${{ env.BUNDLE_ID }}' \
+            '01-production-boot' \
+            artifacts \
+            15
+
+      # Check 2 — the same native shell with a DEMO-configured web layer, which
+      # renders real Constructly screens from seeded fixtures with no network.
+      # This is runtime/UI evidence only; it is NOT a re-test of authenticated
+      # production RPC, which was proven separately against the real backend.
+      - name: Rebuild web layer in demo mode
+        env:
+          NEXT_PUBLIC_CONSTRUCTLY_DEMO: "1"
+        run: |
+          set -euo pipefail
+          npm run mobile:build
+          npm run mobile:verify
+          npx cap sync ios
+
+      - name: Recompile with demo web layer
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project ios/App/App.xcodeproj \
+            -scheme App \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build/DerivedData \
+            -clonedSourcePackagesDirPath .spm-cache \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" \
+            build
+
+      - name: Runtime check — demo config
+        run: |
+          bash scripts/simulator-check.sh \
+            '${{ steps.sim.outputs.udid }}' \
+            "$APP_PATH" \
+            '${{ env.BUNDLE_ID }}' \
+            '02-demo-dashboard' \
+            artifacts \
+            12
+
+      - name: Write run metadata
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          cat > artifacts/metadata.json <<JSON
+          {
+            "simulatorName": "${{ steps.sim.outputs.name }}",
+            "simulatorUdid": "${{ steps.sim.outputs.udid }}",
+            "iosRuntime": "${{ steps.sim.outputs.runtime }}",
+            "bundleId": "${{ env.BUNDLE_ID }}",
+            "appPath": "${APP_PATH:-unknown}",
+            "deploymentTarget": "15.0",
+            "xcode": "$(xcodebuild -version | head -1)",
+            "simulatorSdk": "$(xcrun --sdk iphonesimulator --show-sdk-version)",
+            "signing": "none (CODE_SIGNING_ALLOWED=NO)"
+          }
+          JSON
+          cat artifacts/metadata.json
+
+      # Uploaded even on failure — a blank screenshot is exactly the evidence
+      # needed to diagnose one.
+      - name: Upload runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-simulator-evidence
+          path: artifacts/
+          retention-days: 7
+
+      - name: Shut down simulator
+        if: always()
+        run: xcrun simctl shutdown '${{ steps.sim.outputs.udid }}' || true
