@@ -83,10 +83,13 @@ if [ -z "$PID" ]; then
   exit 1
 fi
 echo "pid: $PID"
-# Early stdout is the fastest signal for the next debugging round if anything
-# downstream fails.
-echo "── ${LABEL}: first app stdout lines ──"
-head -15 "$STDOUT_LOG" 2>/dev/null || echo "(nothing on stdout yet)"
+
+# Baseline frame, captured before the WebView has had time to paint. Comparing
+# it with the settled frame is a log-independent way to tell "the SPA rendered"
+# from "we are still looking at the launch splash" — a distinction that colour
+# analysis alone cannot make, because a splash screen is not blank either.
+LAUNCH_SHOT="${OUT_DIR}/${LABEL}.launch.png"
+xcrun simctl io "$UDID" screenshot "$LAUNCH_SHOT" >/dev/null 2>&1 || true
 
 echo "── ${LABEL}: observing for ${SETTLE}s ──"
 sleep "$SETTLE"
@@ -107,6 +110,14 @@ echo "── ${LABEL}: screenshot ──"
 SHOT="${OUT_DIR}/${LABEL}.png"
 xcrun simctl io "$UDID" screenshot "$SHOT"
 node "${REPO_ROOT}/scripts/analyze-screenshot.mjs" "$SHOT" "$LABEL"
+
+# If the frame never changed after launch, the WebView painted nothing new and
+# we are still staring at the splash — the app "ran" but the SPA did not render.
+if [ -f "$LAUNCH_SHOT" ] && cmp -s "$LAUNCH_SHOT" "$SHOT"; then
+  echo "x ${LABEL}: the screen is byte-identical to the launch frame — nothing rendered."
+  exit 1
+fi
+echo "OK screen changed after launch (SPA painted over the splash)"
 
 echo "── ${LABEL}: application log ──"
 LOG_FILE="${OUT_DIR}/${LABEL}.log"
@@ -132,9 +143,16 @@ echo "── ${LABEL}: SPA boot markers ──"
 MARKER_SOURCES="$STDOUT_LOG $LOG_FILE"
 
 if ! grep -hF "[constructly-boot] react-mounted" $MARKER_SOURCES >/dev/null 2>&1; then
-  echo "x ${LABEL}: the SPA never mounted — WebView did not execute the bundle."
-  echo "── app stdout (tail) ──"; tail -40 "$STDOUT_LOG" || true
-  echo "── os_log (tail) ──";     tail -40 "$LOG_FILE" || true
+  echo "x ${LABEL}: no boot marker found."
+  # Deliberately short and stdout-only. The os_log capture runs to tens of
+  # thousands of WebKit lines, and GitHub virtualises long step logs, so dumping
+  # it here pushes the only useful evidence out of reach. It is still uploaded
+  # as an artifact.
+  echo "── app stdout: $(wc -l < "$STDOUT_LOG" | tr -d ' ') lines ──"
+  tail -30 "$STDOUT_LOG" || true
+  echo "── console/Capacitor lines seen in os_log ──"
+  grep -aiE "constructly-boot|⚡️|\[log\]|JavaScript|SyntaxError|Refused to|Content Security" "$LOG_FILE" \
+    | tail -15 || echo "(none)"
   exit 1
 fi
 grep -hF "[constructly-boot]" $MARKER_SOURCES | sed 's/^/  /' | head -10
