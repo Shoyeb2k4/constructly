@@ -14,7 +14,8 @@
 #   4. a screenshot contains actual rendered content, not a blank screen
 #
 # Usage:
-#   simulator-check.sh <udid> <app-path> <bundle-id> <label> <artifact-dir> [settle-seconds]
+#   simulator-check.sh <udid> <app-path> <bundle-id> <label> <artifact-dir> \
+#                      [settle-seconds] [expected-screen]
 set -euo pipefail
 
 UDID="$1"
@@ -23,6 +24,7 @@ BUNDLE_ID="$3"
 LABEL="$4"
 OUT_DIR="$5"
 SETTLE="${6:-12}"
+EXPECTED_SCREEN="${7:-}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 mkdir -p "$OUT_DIR"
@@ -73,11 +75,41 @@ xcrun simctl spawn "$UDID" log show --predicate 'process == "App"' \
   --style compact --last 3m > "$LOG_FILE" 2>/dev/null || true
 echo "log lines: $(wc -l < "$LOG_FILE" | tr -d ' ')"
 
-# Evidence that Capacitor booted the WebView at the expected origin. Reported,
-# not required: Capacitor's log wording is not a stable contract.
-echo "── ${LABEL}: WebView origin evidence ──"
-grep -iE "capacitor://localhost|Loading app at|WebView loaded" "$LOG_FILE" | head -5 || \
-  echo "(no explicit Capacitor origin line found in log)"
+# Capacitor's own log wording is not a stable contract, so it is reported but
+# not required.
+echo "── ${LABEL}: Capacitor log lines ──"
+grep -iE "Loading app at|WebView loaded" "$LOG_FILE" | head -5 || \
+  echo "(no Capacitor banner line found — not fatal)"
+
+# OUR markers, however, are a contract we control (mobile/src/boot-marker.ts),
+# forwarded from the WebView's console into os_log. These turn "a process is
+# alive and something painted" into "our SPA ran, at the right origin, and
+# settled on the right screen".
+echo "── ${LABEL}: SPA boot markers ──"
+if ! grep -F "[constructly-boot] react-mounted" "$LOG_FILE" >/dev/null; then
+  echo "x ${LABEL}: the SPA never mounted — WebView did not execute the bundle."
+  tail -60 "$LOG_FILE"
+  exit 1
+fi
+grep -F "[constructly-boot]" "$LOG_FILE" | sed 's/^/  /' | head -10
+
+# The bundle must be served by Capacitor's scheme handler. A file:// or http://
+# origin would mean the app is not running the way it will on a device.
+if ! grep -F "origin=capacitor://localhost" "$LOG_FILE" >/dev/null; then
+  echo "x ${LABEL}: unexpected runtime origin — expected capacitor://localhost"
+  grep -F "react-mounted" "$LOG_FILE" | head -3
+  exit 1
+fi
+echo "OK runtime origin is capacitor://localhost"
+
+if [ -n "$EXPECTED_SCREEN" ]; then
+  if ! grep -F "[constructly-boot] screen=${EXPECTED_SCREEN}" "$LOG_FILE" >/dev/null; then
+    echo "x ${LABEL}: expected screen '${EXPECTED_SCREEN}' was not reached."
+    grep -F "screen=" "$LOG_FILE" | head -5 || echo "  (no screen marker at all)"
+    exit 1
+  fi
+  echo "OK settled on expected screen: ${EXPECTED_SCREEN}"
+fi
 
 # Fatal patterns only. Apple/WebKit system chatter is expected and must not fail
 # the build; these are unambiguous failures.

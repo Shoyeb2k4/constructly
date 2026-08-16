@@ -188,7 +188,8 @@ jobs:
             '${{ env.BUNDLE_ID }}' \
             '01-production-boot' \
             artifacts \
-            15
+            15 \
+            'boot-error'
 
       # Check 2 — the same native shell with a DEMO-configured web layer, which
       # renders real Constructly screens from seeded fixtures with no network.
@@ -227,7 +228,8 @@ jobs:
             '${{ env.BUNDLE_ID }}' \
             '02-demo-dashboard' \
             artifacts \
-            12
+            12 \
+            'app-shell'
 
       - name: Write run metadata
         if: always()
@@ -253,7 +255,7 @@ jobs:
       # needed to diagnose one.
       - name: Upload runtime evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: ios-simulator-evidence
           path: artifacts/

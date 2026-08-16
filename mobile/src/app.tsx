@@ -3,9 +3,11 @@ import { HashRouter } from "react-router";
 import { Providers } from "@/app/providers";
 import { AppShell } from "@/components/shell/app-shell";
 import { PermissionProvider } from "@/features/rbac/permission-context";
+import { isDemoMode } from "@/lib/env";
 import { BootScreen, BootError, useSession } from "./session-gate";
 import { MobileRoutes } from "./router";
 import { SignInScreen } from "./screens/sign-in";
+import { markScreen } from "./boot-marker";
 
 /**
  * Native app root.
@@ -33,6 +35,13 @@ export function MobileApp() {
 
 function SessionBoundary() {
   const { data: user, isPending, error, refetch } = useSession();
+
+  // Announce the settled screen once, for CI runtime verification. Skipped
+  // while pending so the marker always names a real destination.
+  const settled = isPending ? null : error ? "boot-error" : user ? "app-shell" : "sign-in";
+  React.useEffect(() => {
+    if (settled) markScreen(settled, { demo: isDemoMode });
+  }, [settled]);
 
   if (isPending) return <BootScreen label="Starting Constructly…" />;
   if (error) return <BootError error={error} onRetry={() => void refetch()} />;
