@@ -1,6 +1,8 @@
 import { isDemoMode } from "@/lib/env";
+import { isNativeClient } from "@/lib/mobile/platform";
 import type { ProjectsRepository } from "./repository";
 import { demoRepository } from "./demo/demo-repository";
+import { httpProjectsRepository } from "./http-repository";
 import * as server from "./server/actions";
 import type { ProjectFilters } from "./types";
 
@@ -34,9 +36,21 @@ const serverRepository: ProjectsRepository = {
   setProjectContractors: server.setProjectContractors,
 };
 
+/**
+ * Transport selection, in priority order:
+ *   demo mode  → in-browser fixtures (unchanged)
+ *   native app → HTTP RPC to the deployed Next backend (Capacitor; no Server
+ *                Actions, because the bundle has no same-origin Next server)
+ *   web        → Server Actions (unchanged — this is the production path)
+ *
+ * `isNativeClient` is a build-time constant, so each bundle keeps exactly one
+ * of these branches and tree-shakes the rest.
+ */
 export const projectsApi: ProjectsRepository = isDemoMode
   ? demoRepository
-  : serverRepository;
+  : isNativeClient
+    ? httpProjectsRepository
+    : serverRepository;
 
 export const projectKeys = {
   all: ["projects"] as const,

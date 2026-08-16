@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en" class="dark:bg-[#0b0c0f]">
+  <head>
+    <meta charset="UTF-8" />
+    <!--
+      viewport-fit=cover is what lets the app paint under the notch / Dynamic
+      Island and the home indicator; the shell then reclaims the space with
+      env(safe-area-inset-*). user-scalable=no stops the double-tap zoom that
+      makes a native app feel like a web page.
+    -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no"
+    />
+    <meta name="color-scheme" content="light dark" />
+    <!--
+      The bundle is served from capacitor://localhost, so 'self' covers only the
+      app's own assets. Network access is limited to the Constructly backend and
+      Supabase; connect-src is widened at build time only for the hosts the app
+      genuinely needs. No remote script origin is permitted.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self' capacitor: ; script-src 'self' capacitor: ; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https: wss://*.supabase.co; object-src 'none'; base-uri 'self'"
+    />
+    <title>Constructly</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

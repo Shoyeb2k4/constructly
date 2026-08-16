@@ -50,5 +50,16 @@ next-env.d.ts
 /test-results
 /playwright-report
 
+# ── Mobile / Capacitor ────────────────────────────────────────────────
+# Vite output for the native app. This is Capacitor's webDir; CI rebuilds it
+# before `cap sync`, so it must never be committed.
+/mobile/dist/
+
+# The native iOS project IS tracked — do NOT ignore /ios. Its generated and
+# machine-local artifacts (build output, synced web assets, DerivedData, the
+# generated capacitor.config.json) are excluded by `ios/.gitignore`, which
+# Capacitor owns and regenerates. Keep that as the single source of truth.
+*.xcuserstate
+
 .vercel
 .env*

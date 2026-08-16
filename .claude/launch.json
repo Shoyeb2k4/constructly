@@ -28,6 +28,12 @@
       "runtimeArgs": ["run", "start:demo"],
       "port": 3000,
       "autoPort": true
+    },
+    {
+      "name": "mobile-demo",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "mobile:dev:demo"],
+      "port": 5300
     }
   ]
 }
