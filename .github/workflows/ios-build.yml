@@ -1,0 +1,140 @@
+name: iOS build
+
+# Phase 2: prove that Apple's real toolchain can compile the Capacitor-generated
+# Constructly iOS project on a GitHub-hosted macOS runner.
+#
+# UNSIGNED, SIMULATOR-ONLY, BUILD-ONLY. No certificates, no provisioning
+# profiles, no Team ID, no archive, no IPA, no App Store Connect. Adding any of
+# those is a later phase and a deliberate decision, not a side effect of this
+# workflow.
+#
+# This workflow never writes to the repository.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ios-app]
+
+# Never run from main.
+concurrency:
+  group: ios-build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Unsigned Xcode compile
+    runs-on: macos-15
+    timeout-minutes: 45
+
+    env:
+      NEXT_TELEMETRY_DISABLED: "1"
+      # Client-safe values ONLY. Every one of these is inlined into the mobile
+      # JS bundle and is therefore public by definition — the Supabase
+      # publishable key is designed to be shipped to clients. They are
+      # repository VARIABLES, not secrets, precisely so that nothing here
+      # implies confidentiality.
+      #
+      # No server-only value (SUPABASE_SERVICE_ROLE_KEY, DATABASE_URL,
+      # DIRECT_URL, SUPABASE_DB_PASSWORD, AUTH_AUTOCONFIRM) is referenced
+      # anywhere in this file. scripts/verify-mobile-bundle.mjs independently
+      # fails the build if any of them reach the bundle.
+      #
+      # Fallbacks keep the compile proof runnable with zero configuration: the
+      # native build does not care what these strings are, they are only inlined
+      # into JavaScript.
+      NEXT_PUBLIC_SUPABASE_URL: ${{ vars.NEXT_PUBLIC_SUPABASE_URL || 'https://ci-placeholder.supabase.co' }}
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${{ vars.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || 'sb_publishable_ci_placeholder' }}
+      NEXT_PUBLIC_MOBILE_API_BASE: ${{ vars.NEXT_PUBLIC_MOBILE_API_BASE || 'https://ci-placeholder.invalid' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # ── Diagnostics ────────────────────────────────────────────────────
+      # Captured before anything can fail, so a broken run still tells us which
+      # toolchain produced it. Nothing sensitive is printed.
+      - name: Inspect toolchain
+        run: |
+          set -euo pipefail
+          echo "── macOS ──";            sw_vers
+          echo "── Xcode ──";            xcodebuild -version
+          echo "── Xcode path ──";       xcode-select -p
+          echo "── iOS Simulator SDK ──"; xcrun --sdk iphonesimulator --show-sdk-version
+          echo "── Swift ──";            swift --version
+          echo "── Node ──";             node --version
+          echo "── npm ──";              npm --version
+
+      - name: Install dependencies
+        run: npm ci
+
+      # ── Web layer ──────────────────────────────────────────────────────
+      # Uses the repository's own scripts rather than re-implementing them in
+      # YAML, so CI and local builds cannot drift apart.
+      - name: Build mobile SPA
+        run: npm run mobile:build
+
+      - name: Verify no server secrets in the bundle
+        run: npm run mobile:verify
+
+      - name: Capacitor sync (iOS)
+        run: npx cap sync ios
+
+      # ── Native layer ───────────────────────────────────────────────────
+      - name: List Xcode schemes
+        run: |
+          set -euo pipefail
+          xcodebuild -list -project ios/App/App.xcodeproj
+
+      # Capacitor 8 uses Swift Package Manager, NOT CocoaPods — there is no
+      # Podfile and no `pod install`. The local CapApp-SPM package depends on
+      # ionic-team/capacitor-swift-pm pinned to an exact version, so resolution
+      # is deterministic. Done as its own step so a network/resolution failure
+      # is never mistaken for a compile failure.
+      - name: Resolve Swift packages
+        run: |
+          set -euo pipefail
+          xcodebuild -resolvePackageDependencies \
+            -project ios/App/App.xcodeproj \
+            -scheme App \
+            -clonedSourcePackagesDirPath .spm-cache
+
+      - name: Compile (unsigned, iOS Simulator)
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project ios/App/App.xcodeproj \
+            -scheme App \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build/DerivedData \
+            -clonedSourcePackagesDirPath .spm-cache \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" \
+            build
+
+      - name: Confirm app bundle was produced
+        run: |
+          set -euo pipefail
+          APP=$(find build/DerivedData/Build/Products -maxdepth 2 -name '*.app' -print -quit)
+          if [ -z "$APP" ]; then
+            echo "No .app produced — failing."
+            exit 1
+          fi
+          echo "Built: $APP"
+          ls -la "$APP"
+          echo "── Info.plist identity ──"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleName' "$APP/Info.plist"
+          echo "── bundled web assets present? ──"
+          test -f "$APP/public/index.html" && echo "public/index.html OK" || (echo "MISSING web assets" && exit 1)
