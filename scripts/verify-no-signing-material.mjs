@@ -46,10 +46,22 @@ const FORBIDDEN_ASSIGNMENTS = [
   /KEYCHAIN_PASSWORD\s*[=:]\s*["'][^"']{3,}/,
 ];
 
-/** Files that legitimately mention these names (workflow, docs, this scanner). */
-function isPolicyFile(file) {
+/**
+ * This scanner necessarily contains every pattern it searches for, so it would
+ * otherwise flag itself. Exempted from CONTENT checks only, and named
+ * explicitly so no other file can become self-exempting.
+ */
+const SELF = "scripts/verify-no-signing-material.mjs";
+
+/**
+ * Files that legitimately mention secret NAMES: the workflow wires them up, docs
+ * describe them, .gitignore excludes their file types. They are still checked
+ * for actual key/certificate CONTENT — a real key pasted into a workflow is
+ * exactly as dangerous as one pasted anywhere else.
+ */
+function mayReferenceSecretNames(file) {
   return (
-    file === "scripts/verify-no-signing-material.mjs" ||
+    file === SELF ||
     file.startsWith(".github/workflows/") ||
     file.endsWith(".md") ||
     file === ".gitignore"
@@ -89,11 +101,13 @@ for (const file of tracked) {
     continue;
   }
 
-  for (const { pattern, what } of FORBIDDEN_CONTENT) {
-    if (pattern.test(contents)) findings.push(`${file}: contains ${what}`);
+  if (file !== SELF) {
+    for (const { pattern, what } of FORBIDDEN_CONTENT) {
+      if (pattern.test(contents)) findings.push(`${file}: contains ${what}`);
+    }
   }
 
-  if (!isPolicyFile(file)) {
+  if (!mayReferenceSecretNames(file)) {
     for (const pattern of FORBIDDEN_ASSIGNMENTS) {
       if (pattern.test(contents)) {
         findings.push(`${file}: a signing secret appears to be assigned inline`);
