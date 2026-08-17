@@ -4,6 +4,7 @@ import type { jsPDF } from "jspdf";
 import { getPdfBrandingData } from "./server/actions";
 import { CONSTRUCTLY_NAME } from "./constants";
 import type { PdfCompany } from "./types";
+import { saveGeneratedFile } from "@/lib/mobile/save-file";
 
 interface PdfImage {
   dataUrl: string;
@@ -226,8 +227,9 @@ export interface BrandedDoc {
   doc: jsPDF;
   /** Y coordinate to begin body content below the header. */
   startY: number;
-  /** Draw signature/stamp + footers on all pages, then save. */
-  finalize: (filename: string) => void;
+  /** Draw signature/stamp + footers on all pages, then save. Async because the
+   *  native path writes the file and opens a share sheet. */
+  finalize: (filename: string) => Promise<void>;
 }
 
 /**
@@ -244,10 +246,14 @@ export async function createBrandedPdf(opts: BrandedPdfOptions): Promise<Branded
   return {
     doc,
     startY,
-    finalize: (filename: string) => {
+    // `doc.save()` clicks a hidden `<a download>`, which WKWebView ignores —
+    // every PDF export would silently produce nothing on iOS. Emitting the blob
+    // and routing it through the shared saver keeps the browser behaviour and
+    // gives the native app a share sheet.
+    finalize: async (filename: string) => {
       drawSignatureAndStamp(doc, branding);
       drawFooters(doc, branding);
-      doc.save(filename);
+      await saveGeneratedFile(doc.output("blob"), filename);
     },
   };
 }

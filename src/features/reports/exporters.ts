@@ -5,6 +5,7 @@ import autoTable, { type RowInput, type CellDef } from "jspdf-autotable";
 import { toRupees } from "@/lib/money";
 import { createBrandedPdf } from "@/features/branding/pdf";
 import type { ReportColumn, ReportResult, ReportRow } from "./types";
+import { saveWorkbook } from "@/lib/exports";
 
 // jsPDF's built-in fonts lack the ₹ glyph — use "Rs." in exports.
 const rs = (paise: number) => `Rs. ${toRupees(paise).toLocaleString("en-IN")}`;
@@ -87,7 +88,7 @@ function rowToPdf(row: ReportRow, columns: ReportColumn[]): RowInput {
 
 /* ── Excel ───────────────────────────────────────────────────────────── */
 
-export function reportToExcel(result: ReportResult): void {
+export async function reportToExcel(result: ReportResult): Promise<void> {
   const aoa: (string | number)[][] = [];
   aoa.push([result.title]);
   aoa.push([result.subtitle]);
@@ -109,5 +110,5 @@ export function reportToExcel(result: ReportResult): void {
   ws["!cols"] = result.columns.map((c) => ({ wch: c.kind === "money" ? 16 : Math.max(12, c.label.length + 2) }));
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Report");
-  XLSX.writeFile(wb, `${safeName(result.title)}.xlsx`);
+  await saveWorkbook(wb, `${safeName(result.title)}.xlsx`);
 }

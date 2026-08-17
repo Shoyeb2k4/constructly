@@ -4,6 +4,7 @@ import * as XLSX from "xlsx";
 import autoTable, { type RowInput } from "jspdf-autotable";
 import { toRupees } from "@/lib/money";
 import { createBrandedPdf } from "@/features/branding/pdf";
+import { saveWorkbook } from "@/lib/exports";
 import type {
   ContractorCostRow,
   ContractorLedger,
@@ -25,10 +26,10 @@ const TYPE_LABEL: Record<ContractorLedgerType, string> = {
   SETTLEMENT_REVERSAL: "Settlement reversed",
 };
 
-function excel(aoa: (string | number)[][], sheetName: string, filename: string) {
+async function excel(aoa: (string | number)[][], sheetName: string, filename: string) {
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), sheetName.slice(0, 31));
-  XLSX.writeFile(wb, filename);
+  await saveWorkbook(wb, filename);
 }
 
 async function pdf(
@@ -48,7 +49,7 @@ async function pdf(
     styles: { fontSize: 8 },
     headStyles: { fillColor: [46, 91, 255] },
   });
-  finalize(filename ?? `${title.toLowerCase().replace(/\s+/g, "-")}-${stamp()}.pdf`);
+  await finalize(filename ?? `${title.toLowerCase().replace(/\s+/g, "-")}-${stamp()}.pdf`);
 }
 
 // ── 1. Contractor ledger ──────────────────────────────────────────────
@@ -65,8 +66,8 @@ function ledgerAoa(l: ContractorLedger): (string | number)[][] {
     ]),
   ];
 }
-export function exportLedgerExcel(l: ContractorLedger) {
-  excel(ledgerAoa(l), "Ledger", `ledger-${l.contractor.name}-${stamp()}.xlsx`);
+export async function exportLedgerExcel(l: ContractorLedger) {
+  await excel(ledgerAoa(l), "Ledger", `ledger-${l.contractor.name}-${stamp()}.xlsx`);
 }
 export async function exportLedgerPdf(l: ContractorLedger) {
   await pdf(
@@ -87,8 +88,8 @@ export async function exportLedgerPdf(l: ContractorLedger) {
 
 // ── 2. Weekly settlement report ───────────────────────────────────────
 const SETTLE_HEAD = ["Contractor", "Project", "Period", "Labour bill", "Adjustment", "Net paid"];
-export function exportSettlementsExcel(rows: ContractorSettlement[]) {
-  excel(
+export async function exportSettlementsExcel(rows: ContractorSettlement[]) {
+  await excel(
     [
       SETTLE_HEAD,
       ...rows.map((s) => [
@@ -124,8 +125,8 @@ export async function exportSettlementsPdf(rows: ContractorSettlement[]) {
 
 // ── 3. Outstanding advances ───────────────────────────────────────────
 const OUT_HEAD = ["Contractor", "Mobile", "Outstanding advance"];
-export function exportOutstandingExcel(rows: OutstandingAdvanceRow[]) {
-  excel(
+export async function exportOutstandingExcel(rows: OutstandingAdvanceRow[]) {
+  await excel(
     [OUT_HEAD, ...rows.map((r) => [r.name, r.phone ?? "", toRupees(r.advanceBalancePaise)])],
     "Outstanding",
     `outstanding-advances-${stamp()}.xlsx`,
@@ -144,8 +145,8 @@ export async function exportOutstandingPdf(rows: OutstandingAdvanceRow[]) {
 
 // ── 4. Contractor cost summary ────────────────────────────────────────
 const COST_HEAD = ["Contractor", "Settlements", "Labour billed", "Adjusted", "Net paid", "Advance bal."];
-export function exportCostSummaryExcel(rows: ContractorCostRow[]) {
-  excel(
+export async function exportCostSummaryExcel(rows: ContractorCostRow[]) {
+  await excel(
     [
       COST_HEAD,
       ...rows.map((r) => [

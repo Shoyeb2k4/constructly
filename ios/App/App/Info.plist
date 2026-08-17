@@ -39,6 +39,21 @@
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<!--
+		Purpose strings for the file/photo attachment flow.
+
+		iOS TERMINATES an app that touches the camera or photo library without a
+		declared purpose string — it is a hard crash, not a denied permission.
+		These are required before the document/photo upload paths can be used on
+		a device, and the wording is what the user actually sees in the prompt,
+		so it names the real reason rather than a generic one.
+	-->
+	<key>NSCameraUsageDescription</key>
+	<string>Take photos of site progress, drawings and documents to attach to a project.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Attach existing site photos and documents to a project.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Save exported reports and site photos to your photo library.</string>
+	<!--
 		Custom URL scheme for the OAuth return leg only.
 
 		Google rejects `capacitor://localhost` as a redirect URI, so native

@@ -18,7 +18,18 @@ export function Topbar({
   onMenu: () => void;
 }) {
   return (
-    <header className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b border-border bg-background/80 px-4 backdrop-blur-md sm:px-6">
+    // The status bar, notch and Dynamic Island sit above this header on a
+    // device. Padding the top by the safe-area inset moves the controls below
+    // them; it resolves to 0 in a browser, so the web header is unchanged.
+    <header
+      className="sticky top-0 z-30 flex items-center gap-3 border-b border-border bg-background/80 px-4 backdrop-blur-md sm:px-6"
+      style={{
+        paddingTop: "env(safe-area-inset-top)",
+        height: "calc(3.5rem + env(safe-area-inset-top))",
+        paddingLeft: "max(1rem, env(safe-area-inset-left))",
+        paddingRight: "max(1rem, env(safe-area-inset-right))",
+      }}
+    >
       <Button
         variant="ghost"
         size="icon"
