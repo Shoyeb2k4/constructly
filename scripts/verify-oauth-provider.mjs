@@ -151,7 +151,7 @@ async function main() {
     console.log("\nC. Provider redirect architecture");
     const location = authorizeRes.headers.get("location") ?? "";
     const { describeProviderRedirect } = await import(
-      pathToFileURL(path.join(ROOT, "src/lib/mobile/oauth-request.ts")).href
+      pathToFileURL(path.join(ROOT, "src/lib/mobile/provider-redirect.ts")).href
     );
     const facts = describeProviderRedirect(location, SUPABASE_URL);
     console.log(`  provider host: ${facts.host || "(none)"}`);

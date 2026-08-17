@@ -108,35 +108,6 @@ export function describeAuthorizationUrl(rawUrl: string): AuthorizationUrlFacts 
   };
 }
 
-/**
- * Check the URL Supabase hands to Google. Here the redirect target must be
- * SUPABASE's callback, not ours — if our custom scheme ever appeared in
- * Google's `redirect_uri`, the provider was misconfigured as a native client.
- */
-export function describeProviderRedirect(
-  locationHeader: string,
-  supabaseUrl: string,
-): { valid: boolean; problems: string[]; host: string } {
-  const problems: string[] = [];
-  let url: URL;
-  try {
-    url = new URL(locationHeader);
-  } catch {
-    return { valid: false, problems: ["provider redirect is not a valid URL"], host: "" };
-  }
-
-  if (!/(^|\.)google\.com$/.test(url.host)) {
-    problems.push(`provider host is ${url.host}, expected accounts.google.com`);
-  }
-
-  const redirectUri = url.searchParams.get("redirect_uri");
-  const expected = `${supabaseUrl.replace(/\/$/, "")}/auth/v1/callback`;
-  if (redirectUri !== expected) {
-    problems.push(`Google redirect_uri is "${redirectUri}", expected the Supabase callback`);
-  }
-  if (!url.searchParams.get("client_id")) {
-    problems.push("no client_id — Google provider is not configured");
-  }
-
-  return { valid: problems.length === 0, problems, host: url.host };
-}
+// Provider-side redirect validation lives in its own module so the CI script
+// can load it under Node without a bundler. Re-exported for callers/tests.
+export { describeProviderRedirect, type ProviderRedirectFacts } from "./provider-redirect";
