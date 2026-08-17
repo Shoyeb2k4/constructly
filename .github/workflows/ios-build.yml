@@ -248,9 +248,22 @@ jobs:
           UDID='${{ steps.sim.outputs.udid }}'
           SCHEME='${{ env.BUNDLE_ID }}'
 
-          before="$(xcrun simctl spawn "$UDID" launchctl list 2>/dev/null \
-            | awk -v id="UIKitApplication:${SCHEME}" '$3 ~ id {print $1; exit}')"
-          echo "app pid before: ${before:-none}"
+          # The previous runtime check tore down its console pipe on exit, so the
+          # app is not running here. Launch it explicitly and wait until it is
+          # actually up — otherwise this step would test nothing.
+          xcrun simctl launch "$UDID" "$SCHEME" >/dev/null 2>&1 || true
+          before=""
+          for _ in $(seq 1 20); do
+            before="$(xcrun simctl spawn "$UDID" launchctl list 2>/dev/null \
+              | awk -v id="UIKitApplication:${SCHEME}" '$3 ~ id && $1 ~ /^[0-9]+$/ {print $1; exit}')"
+            [ -n "$before" ] && break
+            sleep 1
+          done
+          if [ -z "$before" ]; then
+            echo "x could not start the app to test deep links"
+            exit 1
+          fi
+          echo "app pid before: $before"
 
           # A callback carrying an error, and one missing its code: both must be
           # handled as failures inside the app, never as a crash.
@@ -263,7 +276,7 @@ jobs:
           sleep 3
 
           after="$(xcrun simctl spawn "$UDID" launchctl list 2>/dev/null \
-            | awk -v id="UIKitApplication:${SCHEME}" '$3 ~ id {print $1; exit}')"
+            | awk -v id="UIKitApplication:${SCHEME}" '$3 ~ id && $1 ~ /^[0-9]+$/ {print $1; exit}')"
           echo "app pid after:  ${after:-none}"
 
           if [ -z "$after" ]; then
