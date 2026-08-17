@@ -210,7 +210,11 @@ if [ -n "$EXPECT_BRIDGE" ]; then
     exit 1
   fi
 
-  BRIDGE_JSON="$(/usr/libexec/PlistBuddy -c 'Print :constructly.bridge' "$PLIST" 2>/dev/null || true)"
+  # @capacitor/preferences namespaces every key as "CapacitorStorage.<key>" in
+  # NSUserDefaults. Read the dump and strip escaping rather than addressing the
+  # key by path: PlistBuddy's ':' path syntax and dotted key names combine
+  # badly, and the value is JSON stored as an escaped string.
+  BRIDGE_JSON="$(plutil -p "$PLIST" 2>/dev/null | tr -d '\\' | grep -F 'constructly.bridge' || true)"
   if [ -z "$BRIDGE_JSON" ]; then
     echo "x ${LABEL}: bridge diagnostics missing from the plist."
     plutil -p "$PLIST" | head -20
