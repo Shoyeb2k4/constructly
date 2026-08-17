@@ -24,6 +24,33 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<!--
+		Custom URL scheme for the OAuth return leg only.
+
+		Google rejects `capacitor://localhost` as a redirect URI, so native
+		Google sign-in redirects to `in.co.constructly.app://auth/callback`,
+		which iOS routes back to this app. Must stay in sync with
+		MOBILE_URL_SCHEME in src/lib/mobile/auth-callback.ts and with the
+		redirect allow-list in Supabase Auth.
+
+		Password-reset emails deliberately do NOT use this scheme: mail clients
+		strip custom schemes, and those links must also work on another device.
+		They stay https and require Universal Links (Associated Domains + an
+		AASA file on the domain) — external configuration, not yet in place.
+	-->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>in.co.constructly.app.oauth</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>in.co.constructly.app</string>
+			</array>
+		</dict>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

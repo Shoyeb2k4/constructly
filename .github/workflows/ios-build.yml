@@ -189,7 +189,8 @@ jobs:
             '01-production-boot' \
             artifacts \
             15 \
-            'boot-error'
+            'boot-error' \
+            'require-bridge'
 
       # Check 2 — the same native shell with a DEMO-configured web layer, which
       # renders real Constructly screens from seeded fixtures with no network.
@@ -229,7 +230,52 @@ jobs:
             '02-demo-dashboard' \
             artifacts \
             12 \
-            'app-shell'
+            'app-shell' \
+            'require-bridge'
+
+      # Deep-link plumbing, exercised end to end without a human Google login.
+      #
+      # `simctl openurl` makes iOS route a URL to the app exactly as it would
+      # after a real OAuth return, which proves the registered CFBundleURLTypes
+      # scheme resolves to this bundle and that the app survives handling it.
+      # It cannot prove a real Google authorization — that needs interactive
+      # credentials on a signed build — but it does prove the transport that
+      # Google's response would arrive on, and that a malformed callback is
+      # handled rather than crashing the app.
+      - name: Deep-link handling (synthetic OAuth callback)
+        run: |
+          set -euo pipefail
+          UDID='${{ steps.sim.outputs.udid }}'
+          SCHEME='${{ env.BUNDLE_ID }}'
+
+          before="$(xcrun simctl spawn "$UDID" launchctl list 2>/dev/null \
+            | awk -v id="UIKitApplication:${SCHEME}" '$3 ~ id {print $1; exit}')"
+          echo "app pid before: ${before:-none}"
+
+          # A callback carrying an error, and one missing its code: both must be
+          # handled as failures inside the app, never as a crash.
+          xcrun simctl openurl "$UDID" "${SCHEME}://auth/callback?error=access_denied&error_description=synthetic"
+          sleep 3
+          xcrun simctl openurl "$UDID" "${SCHEME}://auth/callback"
+          sleep 3
+          # An unrelated deep link must be ignored outright.
+          xcrun simctl openurl "$UDID" "${SCHEME}://projects/123"
+          sleep 3
+
+          after="$(xcrun simctl spawn "$UDID" launchctl list 2>/dev/null \
+            | awk -v id="UIKitApplication:${SCHEME}" '$3 ~ id {print $1; exit}')"
+          echo "app pid after:  ${after:-none}"
+
+          if [ -z "$after" ]; then
+            echo "x app died while handling deep links"
+            exit 1
+          fi
+          if [ -n "$before" ] && [ "$before" != "$after" ]; then
+            echo "x app was relaunched — it crashed handling a deep link"
+            exit 1
+          fi
+          echo "OK custom scheme resolves to this bundle; malformed callbacks handled without crashing"
+          xcrun simctl io "$UDID" screenshot artifacts/03-after-deeplinks.png
 
       # Conclusive, log-free proof that what rendered was OUR SPA.
       #

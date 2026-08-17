@@ -32,6 +32,26 @@ const FORBIDDEN = [
   "@prisma/client",
   // Next.js server-action runtime.
   "next/dist/server",
+  // ── Mobile auth (Phase 4) ────────────────────────────────────────────
+  // A Google OAuth *client secret* must never exist in a public client: the
+  // native flow is PKCE precisely so that no secret is needed on-device.
+  "GOOGLE_CLIENT_SECRET",
+  "client_secret",
+  // Apple signing material has no business in a web bundle either.
+  "BEGIN PRIVATE KEY",
+  "BEGIN RSA PRIVATE KEY",
+];
+
+/**
+ * Auth material that must never be *baked in* at build time. These are
+ * runtime-only values living in the Keychain; finding one in the bundle means
+ * a token was hardcoded or a fixture leaked.
+ */
+const FORBIDDEN_AUTH_PATTERNS = [
+  // A Supabase refresh/access token literal (three base64url segments).
+  /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/,
+  // A persisted session blob accidentally shipped as a fixture.
+  /"refresh_token"\s*:\s*"[A-Za-z0-9_-]{8,}"/,
 ];
 
 /**
@@ -72,6 +92,9 @@ for (const file of files) {
   }
   for (const pattern of FORBIDDEN_PATTERNS) {
     if (pattern.test(contents)) findings.push(`${rel}: matches ${pattern}`);
+  }
+  for (const pattern of FORBIDDEN_AUTH_PATTERNS) {
+    if (pattern.test(contents)) findings.push(`${rel}: embedded auth material matches ${pattern}`);
   }
 }
 

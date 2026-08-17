@@ -25,6 +25,8 @@ LABEL="$4"
 OUT_DIR="$5"
 SETTLE="${6:-12}"
 EXPECTED_SCREEN="${7:-}"
+# Set to require the Capacitor bridge to be provably reachable from the SPA.
+EXPECT_BRIDGE="${8:-}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 mkdir -p "$OUT_DIR"
@@ -187,5 +189,47 @@ if grep -nEi "$FATAL_PATTERN" "$LOG_FILE" >/dev/null 2>&1; then
   exit 1
 fi
 echo "OK no fatal native/WebView errors"
+
+# ── Capacitor bridge ──────────────────────────────────────────────────────
+# The SPA writes its bridge status through @capacitor/preferences, which lands
+# in NSUserDefaults — a plist inside the app's data container. Reading it back
+# here proves the bridge end to end WITHOUT depending on logs (Phase 3
+# established that a simulator carries neither WebView console output nor
+# Capacitor's own native print() to CI).
+#
+# The write can only succeed by crossing into native code, so its presence is
+# the proof; its absence means the bridge is not there.
+if [ -n "$EXPECT_BRIDGE" ]; then
+  echo "── ${LABEL}: Capacitor bridge ──"
+  DATA_DIR="$(xcrun simctl get_app_container "$UDID" "$BUNDLE_ID" data 2>/dev/null || true)"
+  PLIST="${DATA_DIR}/Library/Preferences/${BUNDLE_ID}.plist"
+
+  if [ ! -f "$PLIST" ]; then
+    echo "x ${LABEL}: no Preferences plist — the app never reached native code."
+    echo "   looked in: ${DATA_DIR:-<no container>}"
+    exit 1
+  fi
+
+  BRIDGE_JSON="$(/usr/libexec/PlistBuddy -c 'Print :constructly.bridge' "$PLIST" 2>/dev/null || true)"
+  if [ -z "$BRIDGE_JSON" ]; then
+    echo "x ${LABEL}: bridge diagnostics missing from the plist."
+    plutil -p "$PLIST" | head -20
+    exit 1
+  fi
+  cp "$PLIST" "${OUT_DIR}/${LABEL}.preferences.plist" 2>/dev/null || true
+  echo "  $BRIDGE_JSON"
+
+  echo "$BRIDGE_JSON" | grep -q '"platform":"ios"' \
+    || { echo "x ${LABEL}: platform is not ios"; exit 1; }
+  echo "$BRIDGE_JSON" | grep -q '"isNative":true' \
+    || { echo "x ${LABEL}: isNativePlatform() is not true"; exit 1; }
+  echo "$BRIDGE_JSON" | grep -q '"available":true' \
+    || { echo "x ${LABEL}: Capacitor runtime not available"; exit 1; }
+  for plugin in Preferences Browser App SecureStorage; do
+    echo "$BRIDGE_JSON" | grep -q "\"${plugin}\":true" \
+      || { echo "x ${LABEL}: plugin ${plugin} is not registered on the bridge"; exit 1; }
+  done
+  echo "OK bridge available, platform=ios, native=true, all plugins registered"
+fi
 
 echo "OK ${LABEL}: install + launch + alive + rendered"
