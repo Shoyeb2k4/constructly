@@ -25,6 +25,20 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<!--
+		Export compliance, declared up front.
+
+		Constructly uses only HTTPS/TLS and the iOS Keychain — encryption
+		provided by the operating system, which is exempt. Declaring it here
+		means TestFlight stops asking the compliance question on every single
+		upload and holding the build until it is answered by hand.
+
+		If the app ever ships its OWN cryptography (custom ciphers, bundled
+		crypto libraries, encrypted local storage we implement ourselves), this
+		must be revisited — the exemption would no longer apply.
+	-->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<!--
 		Custom URL scheme for the OAuth return leg only.
 
 		Google rejects `capacitor://localhost` as a redirect URI, so native
