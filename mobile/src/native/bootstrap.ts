@@ -1,6 +1,7 @@
 import { configureMobileAuth } from "@/lib/mobile/session";
 import { configureFileSaver } from "@/lib/mobile/save-file";
 import { Keyboard, KeyboardResize } from "@capacitor/keyboard";
+import { StatusBar, Style } from "@capacitor/status-bar";
 import { Capacitor } from "@capacitor/core";
 import { nativeAuthStorage, describeStorage } from "./secure-storage";
 import { nativeFileSaver, nativeFileSaverAvailable } from "./file-saver";
@@ -42,6 +43,19 @@ export async function bootstrapNative(
   if (Capacitor.isNativePlatform() && Capacitor.isPluginAvailable("Keyboard")) {
     await Keyboard.setResizeMode({ mode: KeyboardResize.Native }).catch(() => {});
     await Keyboard.setAccessoryBarVisible({ isVisible: false }).catch(() => {});
+  }
+
+  // The status bar sits directly above our topbar, so its text has to contrast
+  // with the app's background rather than the system default. Dark theme needs
+  // light glyphs and vice versa — without this the clock and battery are
+  // invisible in one of the two themes. Follows the OS setting live, because
+  // next-themes defaults to "system".
+  if (Capacitor.isNativePlatform() && Capacitor.isPluginAvailable("StatusBar")) {
+    const dark = window.matchMedia("(prefers-color-scheme: dark)");
+    const applyStatusBar = (isDark: boolean) =>
+      StatusBar.setStyle({ style: isDark ? Style.Dark : Style.Light }).catch(() => {});
+    await applyStatusBar(dark.matches);
+    dark.addEventListener("change", (e) => void applyStatusBar(e.matches));
   }
 
   // Registered before render so a cold start *caused by* a deep link is not

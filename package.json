@@ -26,7 +26,8 @@
     "mobile:sync": "npm run mobile:build && npm run mobile:verify && cap sync ios",
     "mobile:sync:demo": "node scripts/mobile-sync-demo.mjs",
     "verify:oauth": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/verify-oauth-provider.mjs",
-    "verify:signing": "node scripts/verify-no-signing-material.mjs"
+    "verify:signing": "node scripts/verify-no-signing-material.mjs",
+    "assets:generate": "node scripts/generate-app-assets.mjs"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

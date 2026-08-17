@@ -13,9 +13,29 @@ async function freshModule() {
   return import("./save-file");
 }
 
+/**
+ * Capture the anchor the web path creates, per test.
+ *
+ * Spying on `HTMLAnchorElement.prototype.click` looked simpler but is shared
+ * mutable state across the whole suite, and produced a test that passed alone
+ * and intermittently failed in a full run. Intercepting `createElement`
+ * captures the specific element this call made, so the assertions cannot be
+ * influenced by anything else.
+ */
+function captureAnchor() {
+  const clicks: HTMLAnchorElement[] = [];
+  const original = document.createElement.bind(document);
+  vi.spyOn(document, "createElement").mockImplementation((tag: string) => {
+    const el = original(tag) as HTMLElement;
+    if (tag === "a") {
+      (el as HTMLAnchorElement).click = () => void clicks.push(el as HTMLAnchorElement);
+    }
+    return el;
+  });
+  return clicks;
+}
+
 beforeEach(() => {
-  // Spies here are installed on HTMLAnchorElement.prototype, which is shared —
-  // without this, click counts leak between tests.
   vi.restoreAllMocks();
   document.body.innerHTML = "";
   // jsdom has no object-URL implementation.
@@ -26,24 +46,21 @@ beforeEach(() => {
 describe("web", () => {
   it("saves through an anchor download and says so", async () => {
     const mod = await freshModule();
-    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    const clicks = captureAnchor();
 
     const how = await mod.saveGeneratedFile(new Blob(["a,b"]), "report.csv");
 
     expect(how).toBe("downloaded");
-    expect(click).toHaveBeenCalledOnce();
+    expect(clicks).toHaveLength(1);
   });
 
   it("names the file and releases the object URL", async () => {
     const mod = await freshModule();
-    let downloadName = "";
-    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
-      downloadName = this.download;
-    });
+    const clicks = captureAnchor();
 
     await mod.saveGeneratedFile(new Blob(["x"]), "purchase-orders.xlsx");
 
-    expect(downloadName).toBe("purchase-orders.xlsx");
+    expect(clicks[0].download).toBe("purchase-orders.xlsx");
     // Leaking object URLs in a long-lived SPA is a slow memory leak.
     expect(globalThis.URL.revokeObjectURL).toHaveBeenCalledWith("blob:mock");
   });
@@ -57,8 +74,13 @@ describe("web", () => {
 describe("native", () => {
   it("uses the installed saver instead of an anchor, and says it was shared", async () => {
     const mod = await freshModule();
-    const save = vi.fn(async () => {});
-    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    // Parameters are named (not underscored) and recorded, so the filename
+    // assertion below stays type-checked without tripping unused-var lint.
+    const seen: string[] = [];
+    const save = vi.fn(async (blob: Blob, filename: string) => {
+      seen.push(`${filename}:${blob.size}`);
+    });
+    const clicks = captureAnchor();
     mod.configureFileSaver({ save });
 
     const how = await mod.saveGeneratedFile(new Blob(["x"]), "ledger.pdf");
@@ -66,8 +88,8 @@ describe("native", () => {
     // "Downloaded" would be a lie on iOS — the file went to a share sheet.
     expect(how).toBe("shared");
     expect(save).toHaveBeenCalledOnce();
-    expect(save.mock.calls[0][1]).toBe("ledger.pdf");
-    expect(click).not.toHaveBeenCalled();
+    expect(seen[0]).toMatch(/^ledger\.pdf:/);
+    expect(clicks).toHaveLength(0);
   });
 
   it("propagates a native failure rather than pretending it saved", async () => {
