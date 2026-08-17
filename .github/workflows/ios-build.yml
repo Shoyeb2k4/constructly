@@ -92,6 +92,23 @@ jobs:
       - name: Capacitor sync (iOS)
         run: npx cap sync ios
 
+      # Read-only check of the REAL production OAuth provider configuration,
+      # using only the public project URL and publishable key. It signs nobody
+      # in, mutates nothing, and needs no Google account.
+      #
+      # Reports-and-passes while the Google provider is still disabled, so this
+      # can ship before the dashboard work is done. Set the repository variable
+      # EXPECT_GOOGLE_OAUTH=true once Google is enabled and it becomes
+      # enforcing — a disabled provider or a rejected redirect then fails CI.
+      - name: Verify OAuth provider configuration
+        run: |
+          set -euo pipefail
+          if [ "${{ vars.EXPECT_GOOGLE_OAUTH }}" = "true" ]; then
+            npm run verify:oauth -- --require-provider
+          else
+            npm run verify:oauth
+          fi
+
       # ── Native layer ───────────────────────────────────────────────────
       - name: List Xcode schemes
         run: |

@@ -2,11 +2,8 @@ import { Capacitor } from "@capacitor/core";
 import { App } from "@capacitor/app";
 import { Browser } from "@capacitor/browser";
 import { getMobileSupabase, signOutMobile } from "@/lib/mobile/session";
-import {
-  OAUTH_CALLBACK_URL,
-  parseAuthCallback,
-  type AuthCallback,
-} from "@/lib/mobile/auth-callback";
+import { parseAuthCallback, type AuthCallback } from "@/lib/mobile/auth-callback";
+import { googleOAuthRequest } from "@/lib/mobile/oauth-request";
 
 /**
  * Native authentication glue.
@@ -38,13 +35,10 @@ export type OAuthOutcome =
  * through `appUrlOpen`.
  */
 export async function startGoogleSignIn(): Promise<OAuthOutcome> {
-  const { data, error } = await getMobileSupabase().auth.signInWithOAuth({
-    provider: "google",
-    options: {
-      redirectTo: OAUTH_CALLBACK_URL,
-      skipBrowserRedirect: true,
-    },
-  });
+  // Request shape lives in a pure module so it can be unit-tested and reused by
+  // the provider-verification script — and so the redirect target cannot be
+  // influenced by anything at runtime.
+  const { data, error } = await getMobileSupabase().auth.signInWithOAuth(googleOAuthRequest());
 
   if (error) return { ok: false, reason: error.message };
   if (!data?.url) return { ok: false, reason: "Supabase did not return an authorization URL" };
