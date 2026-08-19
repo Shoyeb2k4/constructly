@@ -19,8 +19,16 @@ import { prisma } from "@/lib/db/prisma";
 import { requirePermission } from "@/lib/auth/permissions";
 import { proposeAmendmentSchema, rejectAmendmentSchema } from "../schema";
 import type { Amendment, ProposeAmendmentInput } from "../types";
-import { loadAgreement, logContract, projectScope, toAmendments, toSnapshot } from "./internal";
+import {
+  agreementInclude,
+  loadAgreement,
+  logContract,
+  projectScope,
+  toAmendments,
+  toSnapshot,
+} from "./internal";
 import { reconcileAgreement } from "../reconcile";
+import { validateRevisedValue } from "../amendments";
 import { formatPaiseSmart } from "@/lib/money";
 
 export async function listAmendments(contractId: string): Promise<Amendment[]> {
@@ -44,18 +52,11 @@ export async function proposeAmendment(input: ProposeAmendmentInput): Promise<Am
 
   const recon = reconcileAgreement(toSnapshot(contract));
 
-  if (data.revisedAmountPaise < recon.totalCreditedPaise) {
-    throw new Error(
-      `REVISION_BELOW_CREDITED: The revised value can't be below the ` +
-        `${formatPaiseSmart(recon.totalCreditedPaise)} already credited against this agreement.`,
-    );
-  }
-  if (data.revisedAmountPaise < recon.earnedValuePaise) {
-    throw new Error(
-      `REVISION_BELOW_EARNED: The revised value can't be below the ` +
-        `${formatPaiseSmart(recon.earnedValuePaise)} of work already recognised as earned.`,
-    );
-  }
+  const floor = validateRevisedValue({
+    revisedAmountPaise: data.revisedAmountPaise,
+    reconciliation: recon,
+  });
+  if (floor) throw new Error(floor);
 
   const previous = Number(contract.currentAmountPaise);
   if (data.revisedAmountPaise === previous) throw new Error("NO_VALUE_CHANGE");
@@ -125,15 +126,46 @@ export async function approveAmendment(id: string): Promise<Amendment[]> {
   if (!existing) throw new Error("NOT_FOUND");
   if (existing.status !== "PROPOSED") throw new Error("AMENDMENT_NOT_PROPOSED");
   const contract = await loadAgreement(user, existing.contractId);
+  // A cancelled agreement is void, and a settled one was closed out only while
+  // earned === credited === authorised — moving the authorised value underneath
+  // either would leave a state nobody signed off on. Proposing already refuses a
+  // cancelled agreement; approval must refuse both, or a proposal raised before
+  // the close-out could still land after it.
+  if (contract.status === "CANCELLED") throw new Error("AGREEMENT_CANCELLED");
+  if (contract.status === "SETTLED") throw new Error("AGREEMENT_SETTLED");
 
   await prisma.$transaction(async (tx) => {
+    // Lock the agreement first. AMENDMENT_STALE alone cannot stop two concurrent
+    // approvals: under READ COMMITTED both read the same currentAmountPaise,
+    // both pass the staleness check, and the second write silently overwrites
+    // the first — one approved delta vanishes. Same pattern as milestone
+    // completion.
+    await tx.$queryRaw`
+      SELECT id FROM contractor_contracts
+      WHERE id = ${existing.contractId}::uuid
+        AND company_id = ${user.company.id}::uuid
+      FOR UPDATE`;
+
     const fresh = await tx.contractorContract.findFirstOrThrow({
       where: { id: existing.contractId, companyId: user.company.id },
-      select: { currentAmountPaise: true, title: true },
+      include: agreementInclude,
     });
     if (Number(fresh.currentAmountPaise) !== Number(existing.previousAmountPaise)) {
       throw new Error("AMENDMENT_STALE");
     }
+
+    // RE-CHECK THE FLOOR against committed state, not against the position at
+    // proposal time. The propose-time guards are necessary but not sufficient:
+    // a reduction proposed while ₹40,00,000 was earned is legitimate, and stays
+    // PROPOSED while milestones carry earned value to ₹60,00,000. Nothing about
+    // that makes the amendment stale — `currentAmountPaise` never moved — so
+    // without this the reduction would land and leave authorised value BELOW
+    // recognised earned value: an agreement that owes more than it authorises.
+    const blocked = validateRevisedValue({
+      revisedAmountPaise: Number(existing.revisedAmountPaise),
+      reconciliation: reconcileAgreement(toSnapshot(fresh)),
+    });
+    if (blocked) throw new Error(blocked);
 
     await tx.contractAmendment.update({
       where: { id },

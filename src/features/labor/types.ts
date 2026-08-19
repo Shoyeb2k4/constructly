@@ -114,6 +114,12 @@ export interface SheetGroup {
   contractRateUnit: string | null;
   configured: boolean;
   /**
+   * True when the contractor is archived. Their already-recorded rows still
+   * show (and stay correctable); no blank rows are offered, because the server
+   * refuses new attendance for them.
+   */
+  archived: boolean;
+  /**
    * Agreements eligible to take attendance today. Empty = the attendance-only
    * contractor, whose flow is unchanged.
    */

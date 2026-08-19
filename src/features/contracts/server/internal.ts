@@ -16,6 +16,7 @@
 import { prisma } from "@/lib/db/prisma";
 import { Prisma } from "@/generated/prisma";
 import { hasPermission } from "@/lib/auth/permissions";
+import { newBusinessBlockedReason } from "@/features/contractors/lifecycle";
 import type { SessionUser } from "@/lib/auth/types";
 import { reconcileAgreement } from "../reconcile";
 import {
@@ -58,6 +59,21 @@ export async function assertContractorAccess(user: SessionUser, contractorId: st
     select: { id: true },
   });
   if (!c) throw new Error("FORBIDDEN");
+}
+
+/**
+ * Tenant guard PLUS lifecycle: an ARCHIVED contractor takes on no new work, and a
+ * new agreement is the definition of new work. Historical corrections on their
+ * existing agreements — amend, cancel, reverse a payment — stay open.
+ */
+export async function assertContractorAcceptsNewWork(user: SessionUser, contractorId: string) {
+  const c = await prisma.contractor.findFirst({
+    where: { id: contractorId, companyId: user.company.id },
+    select: { id: true, name: true, status: true },
+  });
+  if (!c) throw new Error("FORBIDDEN");
+  const blocked = newBusinessBlockedReason(c.status, "CREATE_AGREEMENT", c.name);
+  if (blocked) throw new Error(`CONTRACTOR_ARCHIVED: ${blocked}`);
 }
 
 /**

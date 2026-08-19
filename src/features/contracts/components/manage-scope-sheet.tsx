@@ -34,7 +34,8 @@ import { toPaise, toRupees } from "@/lib/money";
 import { cn } from "@/lib/utils";
 import { useCategories } from "@/features/labor/hooks";
 import { useCan } from "@/features/rbac/permission-context";
-import { useAddScopeItem, useRemoveScopeItem, useScopeItems, useSetScopeRate } from "../hooks";
+import { useAddScopeItem, useRemoveScopeItem, useScopeItems } from "../hooks";
+import { ReviseRateSheet } from "./revise-rate-sheet";
 import type { Contract, ScopeItem } from "../types";
 import { NewLabourTypeForm } from "./new-labour-type-form";
 
@@ -59,7 +60,6 @@ export function ManageScopeSheet({
   const { data: scopeItems = [], isLoading: loadingScope } = useScopeItems(contract.id);
   const addItem = useAddScopeItem();
   const removeItem = useRemoveScopeItem();
-  const setRate = useSetScopeRate();
 
   // OVERRIDES only. Deriving each row from saved scope + this map (rather than
   // seeding a full snapshot) means a labour type created while the sheet is open
@@ -75,6 +75,8 @@ export function ManageScopeSheet({
 
   // Fresh sheet, fresh overrides.
   const [wasOpen, setWasOpen] = React.useState(false);
+  /** The scope item whose rate is being revised, via the one shared sheet. */
+  const [revising, setRevising] = React.useState<ScopeItem | null>(null);
   if (wasOpen !== open) {
     setWasOpen(open);
     if (open) {
@@ -105,10 +107,19 @@ export function ManageScopeSheet({
   // effect from the agreement's own start date when it has one.
   const effectiveFrom = contract.startDate ?? todayISO();
 
+  // NOTE what is absent: repricing. This sheet used to detect a changed rate on
+  // an item already in scope and quietly call setScopeRate with
+  // `effectiveFrom: today` and the canned reason "Rate updated from scope".
+  // That was a second, hidden way to change a commercial term — undated,
+  // unexplained, and impossible to distinguish in the audit trail from the
+  // opening rate. Repricing now lives in ONE place, the Revise Rate sheet on the
+  // Rates tab, which is reachable from here via the row's own link.
+  //
+  // Scope & Labour answers "which labour types does this contractor supply?".
+  // Rates answers "what are they paid for them?".
   const changes = React.useMemo(() => {
     const toAdd: { subId: string; ratePaise: number }[] = [];
     const toRemove: ScopeItem[] = [];
-    const toReprice: { item: ScopeItem; ratePaise: number }[] = [];
     for (const cat of categories) {
       for (const sub of cat.subcategories) {
         const override = drafts[sub.id];
@@ -117,22 +128,13 @@ export function ManageScopeSheet({
         const ratePaise = override.rate.trim() ? toPaise(Number(override.rate) || 0) : 0;
         if (override.selected && !existing) toAdd.push({ subId: sub.id, ratePaise });
         else if (!override.selected && existing) toRemove.push(existing);
-        else if (
-          override.selected &&
-          existing &&
-          ratePaise > 0 &&
-          ratePaise !== existing.currentRatePaise
-        ) {
-          toReprice.push({ item: existing, ratePaise });
-        }
       }
     }
-    return { toAdd, toRemove, toReprice };
+    return { toAdd, toRemove };
   }, [categories, drafts, inScope]);
 
   const missingRate = changes.toAdd.some((a) => a.ratePaise <= 0);
-  const dirty =
-    changes.toAdd.length > 0 || changes.toRemove.length > 0 || changes.toReprice.length > 0;
+  const dirty = changes.toAdd.length > 0 || changes.toRemove.length > 0;
   const canSave = dirty && !missingRate && !saving;
 
   async function submit() {
@@ -148,14 +150,6 @@ export function ManageScopeSheet({
           labourSubcategoryId: a.subId,
           ratePaise: a.ratePaise,
           effectiveFrom,
-        });
-      }
-      for (const r of changes.toReprice) {
-        await setRate.mutateAsync({
-          scopeItemId: r.item.id,
-          ratePaise: r.ratePaise,
-          effectiveFrom: todayISO(),
-          reason: "Rate updated from scope",
         });
       }
       for (const r of changes.toRemove) {
@@ -223,23 +217,40 @@ export function ManageScopeSheet({
                             </span>
                           )}
                         </Label>
-                        <div className="flex shrink-0 items-center gap-1">
-                          <span className="text-xs text-foreground-subtle">₹</span>
-                          <Input
-                            type="number"
-                            min={0}
-                            value={d.rate}
-                            onChange={(e) => setDraft(sub.id, { selected: true, rate: e.target.value }, d)}
-                            placeholder="rate"
-                            aria-label={`${sub.name} agreement rate per day`}
-                            className="h-8 w-24 text-sm"
-                          />
-                          <span className="text-xs text-foreground-subtle">/day</span>
-                        </div>
-                        {existing && (
-                          <span className="shrink-0 text-[10px] uppercase tracking-wide text-foreground-subtle">
-                            In scope
-                          </span>
+                        {existing ? (
+                          // Already priced: the rate is history, not a form field.
+                          // Changing it is a dated, reasoned revision — one door.
+                          <div className="flex shrink-0 items-center gap-2">
+                            <span className="font-mono text-sm text-foreground-muted">
+                              <MoneyText paise={existing.currentRatePaise} whole />
+                              <span className="ml-0.5 text-xs text-foreground-subtle">
+                                /{existing.rateUnit}
+                              </span>
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setRevising(existing)}
+                              className="text-xs text-primary transition-colors hover:underline"
+                            >
+                              Revise
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="flex shrink-0 items-center gap-1">
+                            <span className="text-xs text-foreground-subtle">₹</span>
+                            <Input
+                              type="number"
+                              min={0}
+                              value={d.rate}
+                              onChange={(e) =>
+                                setDraft(sub.id, { selected: true, rate: e.target.value }, d)
+                              }
+                              placeholder="rate"
+                              aria-label={`${sub.name} agreement rate per day`}
+                              className="h-8 w-24 text-sm"
+                            />
+                            <span className="text-xs text-foreground-subtle">/day</span>
+                          </div>
                         )}
                       </div>
                     );
@@ -318,6 +329,17 @@ export function ManageScopeSheet({
           </Button>
         </SheetFooter>
       </SheetContent>
+
+      {/* The SAME sheet the Rates tab opens — dated, reasoned, append-only.
+          There is no second way to change a rate. */}
+      {revising && (
+        <ReviseRateSheet
+          item={revising}
+          contract={contract}
+          open
+          onOpenChange={(o) => !o && setRevising(null)}
+        />
+      )}
     </Sheet>
   );
 }

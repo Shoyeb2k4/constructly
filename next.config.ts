@@ -35,6 +35,10 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   poweredByHeader: false,
+  // Next keys its "one dev server per project" lock on the build directory, so a
+  // demo preview can only run alongside an ordinary `npm run dev` if it gets its
+  // own. Unset in every normal invocation — this changes nothing by default.
+  distDir: process.env.NEXT_DIST_DIR || ".next",
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];
   },

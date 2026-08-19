@@ -12,8 +12,11 @@ export const createContractorSchema = z.object({
 export const updateContractorSchema = z.object({
   name: z.string().trim().min(1).max(120).optional(),
   phone: z.string().trim().max(20).optional().nullable(),
-  status: z.enum(["ACTIVE", "INACTIVE"]).optional(),
 });
+
+/* Status is DELIBERATELY absent above: archiving and restoring are separate
+   actions with their own permissions and audit events, so a lifecycle change can
+   never ride along inside an ordinary detail edit. */
 
 /**
  * A LABOUR ADVANCE: cash handed over to pre-pay future labour, netted off a

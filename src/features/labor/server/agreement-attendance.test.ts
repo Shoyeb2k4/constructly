@@ -39,6 +39,8 @@ const h = vi.hoisted(() => ({
     contractScopeRateRevision: { findMany: vi.fn() },
     labourSubcategory: { findFirst: vi.fn() },
     project: { findFirst: vi.fn() },
+    // The archived-contractor attendance guard reads the contractor's status.
+    contractor: { findFirst: vi.fn() },
   },
 }));
 vi.mock("@/lib/auth/current-user", () => ({
@@ -64,6 +66,8 @@ beforeEach(() => {
     Object.values(m).forEach((f) => (f as ReturnType<typeof vi.fn>).mockReset()),
   );
   h.prisma.project.findFirst.mockResolvedValue({ id: PROJECT });
+  // Active by default; the archived rules have their own suite.
+  h.prisma.contractor.findFirst.mockResolvedValue({ name: "Pappu Contractor", status: "ACTIVE" });
   h.prisma.labourAttendance.findMany.mockResolvedValue([]);
   h.prisma.projectContractor.findMany.mockResolvedValue([]);
   h.prisma.contractorContract.findMany.mockResolvedValue([]);
@@ -207,10 +211,13 @@ describe("rate resolution uses the row's own date", () => {
   });
 
   it("keeps the original snapshot when editing an existing row", async () => {
-    // The settled guards return null; the row lookup returns an existing row.
+    // Four lookups, in order: the two settled guards (null), the archived-
+    // contractor guard (finds the row, so it is a correction and returns early),
+    // then writeAttendanceRow's own read.
     h.prisma.labourAttendance.findFirst
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: "att1" })
       .mockResolvedValueOnce({
         id: "att1",
         dailyRatePaiseSnapshot: 85_000,

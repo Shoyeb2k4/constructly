@@ -28,13 +28,23 @@ async function mkProject(
   return res;
 }
 
+/** Create + narrow away the duplicate-warning result these fixtures never hit,
+ *  mirroring `mkProject` above. */
+async function mkContractor(
+  input: Parameters<typeof contractors.createContractor>[0],
+) {
+  const res = await contractors.createContractor(input);
+  if ("duplicates" in res) throw new Error("unexpected duplicate warning in test");
+  return res;
+}
+
 async function setup() {
   const cats = await labor.listCategories();
   const [catA, catB] = cats;
   const existing = await contractors.listContractors({});
   const PAPPU = existing[0];
   const SADDAM = existing[1];
-  const OTHER = await contractors.createContractor({ name: "Arif Plumbing", openingAdvancePaise: 0 });
+  const OTHER = await mkContractor({ name: "Arif Plumbing", openingAdvancePaise: 0 });
   return {
     catA,
     catB,

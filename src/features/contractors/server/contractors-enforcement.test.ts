@@ -33,7 +33,9 @@ const h = vi.hoisted(() => ({
     contractor: { findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn(), update: vi.fn() },
     project: { findFirst: vi.fn() },
     contractorContract: { findFirst: vi.fn() },
-    contractorLedgerEntry: { findMany: vi.fn(), create: vi.fn() },
+    // getLedger now also COUNTS the whole ledger, to report how many entries a
+    // scoped caller cannot see (see server/ledger-scope.test.ts).
+    contractorLedgerEntry: { findMany: vi.fn(), count: vi.fn(), create: vi.fn() },
     contractorSettlement: { findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn(), update: vi.fn(), groupBy: vi.fn() },
     contractorSettlementBreakdown: { findMany: vi.fn(), create: vi.fn() },
     labourAttendance: { aggregate: vi.fn(), findMany: vi.fn(), groupBy: vi.fn(), updateMany: vi.fn() },
@@ -90,6 +92,7 @@ beforeEach(() => {
   });
   h.prisma.$transaction.mockReset();
   h.prisma.$queryRaw.mockReset().mockResolvedValue([]);
+  h.prisma.contractorLedgerEntry.count.mockResolvedValue(0);
   h.prisma.contractor.findFirst.mockResolvedValue({
     id: CONTRACTOR,
     name: "Pappu",

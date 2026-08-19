@@ -259,6 +259,7 @@ export function OverviewTab({
           />
           <ContractorsEditSheet
             projectId={project.id}
+            projectName={project.name}
             initial={project.contractors}
             open={editing === "contractors"}
             onOpenChange={toggle("contractors")}

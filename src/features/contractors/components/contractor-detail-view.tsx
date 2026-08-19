@@ -3,7 +3,10 @@
 import * as React from "react";
 import Link from "next/link";
 import {
+  Archive,
+  ArchiveRestore,
   ArrowLeft,
+  Info,
   Plus,
   Pencil,
   Wallet,
@@ -42,19 +45,28 @@ import {
   ReconciliationTab,
 } from "@/features/contracts/components/command-centre";
 import {
+  AmendmentsTab,
   HistoryTab,
   MilestonesTab,
   RatesTab,
   ScopeTab,
 } from "@/features/contracts/components/command-centre-tabs";
-import { useContractorLedger, useReverseSettlement, useSettlements } from "../hooks";
-import { advanceDeltaPaise } from "../calc";
+import {
+  useArchiveContractor,
+  useContractorLedger,
+  useRestoreContractor,
+  useReverseSettlement,
+  useSettlements,
+} from "../hooks";
 import type {
   ContractorLedger as ContractorLedgerDto,
   ContractorLedgerType,
   ContractorSettlement,
 } from "../types";
 import { ContractFormSheet } from "@/features/contracts/components/contract-form-sheet";
+import { AgreementActionsMenu } from "@/features/contracts/components/agreement-actions-menu";
+import { ReverseContractPaymentDialog } from "@/features/contracts/components/payment-actions";
+import type { ContractPaymentHistoryRow } from "@/features/contracts/types";
 import { AddContractorSheet } from "./add-contractor-sheet";
 import { RecordAdvanceSheet } from "./record-advance-sheet";
 import { SettlementSheet } from "./settlement-sheet";
@@ -84,19 +96,14 @@ const TYPE_TONE: Record<ContractorLedgerType, string> = {
   SETTLEMENT_REVERSAL: "text-warning-foreground",
 };
 
-export function ContractorDetailView({
-  contractorId,
-  isOwner,
-}: {
-  contractorId: string;
-  isOwner: boolean;
-}) {
+export function ContractorDetailView({ contractorId }: { contractorId: string }) {
   const can = useCan();
   const { data, isLoading } = useContractorLedger(contractorId);
   const [editOpen, setEditOpen] = React.useState(false);
   const [advanceOpen, setAdvanceOpen] = React.useState(false);
   const [settleOpen, setSettleOpen] = React.useState(false);
   const [agreementOpen, setAgreementOpen] = React.useState(false);
+  const [archiveOpen, setArchiveOpen] = React.useState(false);
   // Bumped when an agreement is created, so the command centre can jump to it.
   const [createdAt, setCreatedAt] = React.useState(0);
 
@@ -118,7 +125,19 @@ export function ContractorDetailView({
   }
 
   const { contractor } = data;
+  // Affordances follow the SAME permission each server action demands — the
+  // module used to gate these on `role === "OWNER"`, which meant an Accountant
+  // holding contractors.advance / contractors.settle (the role that exists
+  // precisely to move contractor cash) could see no button at all.
   const canCreateAgreement = can("contracts.create");
+  const canAdvance = can("contractors.advance");
+  const canSettle = can("contractors.settle");
+  const canEdit = can("contractors.edit");
+  const archived = contractor.status === "INACTIVE";
+  const canArchive = can("contractors.archive") && !archived;
+  const canRestore = can("contractors.restore") && archived;
+  const hasActions =
+    canCreateAgreement || canAdvance || canSettle || canEdit || canArchive || canRestore;
 
   return (
     <div className="space-y-5">
@@ -129,13 +148,17 @@ export function ContractorDetailView({
           <div className="flex items-center gap-2">
             <h1 className="truncate text-xl font-semibold">{contractor.name}</h1>
             {contractor.status === "INACTIVE" && (
-              <span className="rounded-full bg-surface-muted px-2 py-0.5 text-xs text-foreground-subtle">Inactive</span>
+              <span className="rounded-full bg-surface-muted px-2 py-0.5 text-xs text-foreground-subtle">Archived</span>
             )}
           </div>
           <p className="text-sm text-foreground-muted">{contractor.phone || "No mobile"}</p>
         </div>
         <div className="text-right">
-          <p className="text-xs text-foreground-subtle">Advance balance</p>
+          {/* NEVER "Advance balance" for a project-scoped fold: that figure is a
+              real number about a subset, not this contractor's position. */}
+          <p className="text-xs text-foreground-subtle">
+            {data.scope === "COMPANY" ? "Advance balance" : "Visible project advance balance"}
+          </p>
           <p
             className={cn(
               "font-mono text-2xl font-semibold",
@@ -144,6 +167,12 @@ export function ContractorDetailView({
           >
             <MoneyText paise={contractor.advanceBalancePaise} />
           </p>
+          {data.scope === "PROJECT" && (
+            <p className="mt-0.5 max-w-[16rem] text-[11px] text-foreground-subtle">
+              Across your projects only. This contractor&rsquo;s company-wide position needs the
+              view-all-projects permission.
+            </p>
+          )}
         </div>
       </div>
 
@@ -152,52 +181,92 @@ export function ContractorDetailView({
           agreement is the commercial arrangement itself. Labelling them as one
           undifferentiated row of buttons is how the same money gets recorded
           twice — so each says what it does. */}
-      {(isOwner || canCreateAgreement) && (
+      {hasActions && (
         <div className="space-y-2">
           <div className="flex flex-wrap gap-2">
-            {canCreateAgreement && (
+            {canCreateAgreement && !archived && (
               <Button variant="primary" onClick={() => setAgreementOpen(true)}>
                 <FileSignature />
                 Create agreement
               </Button>
             )}
-            {isOwner && (
-              <>
-                <Button variant="secondary" onClick={() => setAdvanceOpen(true)}>
-                  <Wallet />
-                  Record labour advance
-                </Button>
-                <Button variant="secondary" onClick={() => setSettleOpen(true)}>
-                  <Receipt />
-                  New settlement
-                </Button>
-                <Button variant="ghost" onClick={() => setEditOpen(true)}>
-                  <Pencil />
-                  Edit
-                </Button>
-              </>
+            {canAdvance && !archived && (
+              <Button variant="secondary" onClick={() => setAdvanceOpen(true)}>
+                <Wallet />
+                Record labour advance
+              </Button>
+            )}
+            {/* Offered even while ARCHIVED. A settlement recognises attendance
+                already recorded, so withholding it here would strand a real
+                liability — the crew that worked before they were archived could
+                never be paid. The server agrees; see contractors/lifecycle.ts. */}
+            {canSettle && (
+              <Button variant="secondary" onClick={() => setSettleOpen(true)}>
+                <Receipt />
+                New settlement
+              </Button>
+            )}
+            {canEdit && (
+              <Button variant="ghost" onClick={() => setEditOpen(true)}>
+                <Pencil />
+                Edit
+              </Button>
+            )}
+            {canArchive && (
+              <Button variant="ghost" onClick={() => setArchiveOpen(true)}>
+                <Archive />
+                Archive
+              </Button>
+            )}
+            {canRestore && (
+              <Button variant="secondary" onClick={() => setArchiveOpen(true)}>
+                <ArchiveRestore />
+                Restore
+              </Button>
             )}
           </div>
-          <p className="text-xs text-foreground-subtle">
-            <strong className="font-medium text-foreground-muted">Create agreement</strong> sets up
-            the commercial arrangement on a project (value, scope, rates, milestones) —{" "}
-            <strong className="font-medium text-foreground-muted">Record labour advance</strong> is
-            cash pre-paying future attendance —{" "}
-            <strong className="font-medium text-foreground-muted">New settlement</strong> recognises
-            attendance already worked. An agreement is optional: attendance-only contractors need
-            only the last two.
-          </p>
+          {archived ? (
+            <p className="text-xs text-foreground-subtle">
+              This contractor is <strong className="font-medium text-foreground-muted">archived</strong>.
+              Everything already recorded stays exactly as it is and remains fully readable —
+              they simply can&rsquo;t take on new agreements, advances, attendance or projects
+              until restored. Closing out what they already did stays available: work recorded
+              before archiving can still be settled, and settlements, payments and agreements
+              can still be reversed, amended or corrected.
+            </p>
+          ) : (
+            <p className="text-xs text-foreground-subtle">
+              <strong className="font-medium text-foreground-muted">Create agreement</strong> sets up
+              the commercial arrangement on a project (value, scope, rates, milestones) —{" "}
+              <strong className="font-medium text-foreground-muted">Record labour advance</strong> is
+              cash pre-paying future attendance —{" "}
+              <strong className="font-medium text-foreground-muted">New settlement</strong> recognises
+              attendance already worked. An agreement is optional: attendance-only contractors need
+              only the last two.
+            </p>
+          )}
         </div>
       )}
 
       <CommandCentre
         contractorId={contractor.id}
         ledger={data}
-        onCreateAgreement={canCreateAgreement ? () => setAgreementOpen(true) : undefined}
+        // Withheld while archived: the server refuses a new agreement for an
+        // archived contractor, so the tabs offer nothing that would 403.
+        onCreateAgreement={
+          canCreateAgreement && !archived ? () => setAgreementOpen(true) : undefined
+        }
         agreementCreatedAt={createdAt}
       />
 
       <AddContractorSheet open={editOpen} onOpenChange={setEditOpen} contractor={contractor} />
+      {archiveOpen && (
+        <ArchiveContractorDialog
+          contractor={contractor}
+          balancePaise={data.scope === "COMPANY" ? contractor.advanceBalancePaise : null}
+          onOpenChange={(o) => !o && setArchiveOpen(false)}
+        />
+      )}
       <RecordAdvanceSheet
         open={advanceOpen}
         onOpenChange={setAdvanceOpen}
@@ -256,15 +325,25 @@ function CommandCentre({
   }
   const { data: settlements = [] } = useSettlements({ contractorId });
   const [reversing, setReversing] = React.useState<ContractorSettlement | null>(null);
+  const [reversingPayment, setReversingPayment] =
+    React.useState<ContractPaymentHistoryRow | null>(null);
 
   const canSeeAgreements = can("contracts.view");
   const contracts = profile?.projects.flatMap((g) => g.contracts) ?? [];
 
-  // Outstanding labour advances, from the ledger fold — never a stored snapshot.
-  const labourAdvanceOutstandingPaise = ledger.entries.reduce(
-    (acc, e) => acc + advanceDeltaPaise(e.type, e.amountPaise),
-    0,
-  );
+  // Affordance gates only — every server action re-checks the same permission.
+  const canActOnAgreements =
+    can("contracts.edit") ||
+    can("contracts.complete") ||
+    can("contracts.cancel") ||
+    can("contracts.delete") ||
+    can("contracts.pay");
+
+  // The AUTHORITATIVE outstanding advance — the server's unscoped fold, the same
+  // figure the settlement allocator draws against. Folding `ledger.entries` here
+  // would silently reproduce the partial-balance bug for any viewer who cannot
+  // see every entry.
+  const labourAdvanceOutstandingPaise = ledger.contractor.advanceBalancePaise;
   const settledAttendancePaise = contracts.reduce(
     (acc, c) => acc + c.reconciliation.attendanceCreditPaise,
     0,
@@ -281,6 +360,7 @@ function CommandCentre({
               <TabsTrigger value="scope">Scope &amp; Labour</TabsTrigger>
               <TabsTrigger value="rates">Rates</TabsTrigger>
               <TabsTrigger value="milestones">Milestones</TabsTrigger>
+              <TabsTrigger value="amendments">Amendments</TabsTrigger>
               <TabsTrigger value="payments">Payments</TabsTrigger>
               <TabsTrigger value="reconciliation">Reconciliation</TabsTrigger>
               <TabsTrigger value="history">History</TabsTrigger>
@@ -299,6 +379,11 @@ function CommandCentre({
                 profile={profile}
                 unattributedPaise={0}
                 onCreateAgreement={onCreateAgreement}
+                renderActions={
+                  canActOnAgreements
+                    ? (contract) => <AgreementActionsMenu contract={contract} />
+                    : undefined
+                }
               />
             </TabsContent>
             <TabsContent value="scope" className="pt-4">
@@ -314,6 +399,9 @@ function CommandCentre({
             <TabsContent value="milestones" className="pt-4">
               <MilestonesTab contracts={contracts} onCreateAgreement={onCreateAgreement} />
             </TabsContent>
+            <TabsContent value="amendments" className="pt-4">
+              <AmendmentsTab contracts={contracts} onCreateAgreement={onCreateAgreement} />
+            </TabsContent>
             <TabsContent value="payments" className="pt-4">
               <PaymentsTab
                 payments={profile.payments}
@@ -324,6 +412,10 @@ function CommandCentre({
                   can("contractors.settle_reverse")
                     ? (s) => setReversing(s as ContractorSettlement)
                     : undefined
+                }
+                payableContracts={can("contracts.pay") ? contracts : undefined}
+                onReversePayment={
+                  can("contracts.pay_delete") ? (p) => setReversingPayment(p) : undefined
                 }
               />
             </TabsContent>
@@ -348,6 +440,12 @@ function CommandCentre({
       <ReverseSettlementDialog
         settlement={reversing}
         onOpenChange={(o) => !o && setReversing(null)}
+      />
+      {/* An agreement payment and a settlement are different instruments, so the
+          two reversals are different flows — neither is an undo of the other. */}
+      <ReverseContractPaymentDialog
+        payment={reversingPayment}
+        onOpenChange={(o) => !o && setReversingPayment(null)}
       />
     </>
   );
@@ -450,15 +548,19 @@ function AdvanceLedgerTab({ ledger }: { ledger: ContractorLedgerDto }) {
   const { entries } = ledger;
   if (entries.length === 0) {
     return (
-      <EmptyState
-        icon={Plus}
-        title="No ledger entries"
-        description="Record a labour advance or a weekly settlement to start the ledger."
-      />
+      <div className="space-y-3">
+        <PartialLedgerNote ledger={ledger} />
+        <EmptyState
+          icon={Plus}
+          title={ledger.isPartial ? "No ledger entries on your projects" : "No ledger entries"}
+          description="Record a labour advance or a weekly settlement to start the ledger."
+        />
+      </div>
     );
   }
   return (
     <div className="space-y-2">
+      <PartialLedgerNote ledger={ledger} />
       <div className="flex items-center justify-between">
         <p className="text-xs text-foreground-subtle">
           A labour advance pre-pays future labour and nets off a settlement. It is not agreement
@@ -524,6 +626,124 @@ function AdvanceLedgerTab({ ledger }: { ledger: ContractorLedgerDto }) {
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * Says why the rows below may not add up to the headline balance.
+ *
+ * A caller without `contractors.view_all` / `projects.view_all` sees only ledger
+ * entries on projects they can access; company-wide advances carry no project and
+ * are not theirs to inspect. The balance above is still the real one, so the
+ * arithmetic must be explained rather than left to look broken.
+ *
+ * Deliberately discloses only a COUNT — no amount, project, agreement, actor,
+ * date or reason from a hidden entry reaches this component.
+ */
+function PartialLedgerNote({ ledger }: { ledger: ContractorLedgerDto }) {
+  if (!ledger.isPartial) return null;
+  return (
+    <div className="flex gap-2.5 rounded-lg border border-border bg-surface-muted/50 px-3 py-2.5 text-xs text-foreground-muted">
+      <Info className="mt-0.5 size-4 shrink-0 text-foreground-subtle" />
+      <p>
+        You are seeing ledger entries for your projects only.{" "}
+        <strong className="font-medium text-foreground">
+          {ledger.hiddenEntryCount} further {ledger.hiddenEntryCount === 1 ? "entry" : "entries"}
+        </strong>{" "}
+        on other projects or held company-wide are included in the advance balance above but are
+        not listed here, so these rows will not add up to it.
+      </p>
+    </div>
+  );
+}
+
+/**
+ * Archive / restore.
+ *
+ * Archiving is deliberately NOT a delete and the copy says so plainly: every
+ * agreement, settlement, payment and attendance row stays, and closing it out —
+ * settling attendance already recorded, reversing, amending, correcting — stays
+ * available. What stops is new work, attendance included. An outstanding advance
+ * is surfaced rather than used to block — money the contractor is holding is a
+ * reason to think, not a reason the system should refuse, and archiving is
+ * reversible in one click.
+ *
+ * The copy must not promise more than the server enforces, so it is written from
+ * the same list the server checks (contractors/lifecycle.ts).
+ */
+function ArchiveContractorDialog({
+  contractor,
+  balancePaise,
+  onOpenChange,
+}: {
+  contractor: ContractorLedgerDto["contractor"];
+  /** Null when the viewer only sees a project-scoped figure. */
+  balancePaise: number | null;
+  onOpenChange: (o: boolean) => void;
+}) {
+  const archive = useArchiveContractor();
+  const restore = useRestoreContractor();
+  const archived = contractor.status === "INACTIVE";
+  const pending = archive.isPending || restore.isPending;
+
+  return (
+    <Dialog open onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>
+            {archived ? "Restore this contractor?" : "Archive this contractor?"}
+          </DialogTitle>
+          <DialogDescription>{contractor.name}</DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-3 text-sm text-foreground-muted">
+          {archived ? (
+            <p>
+              They can take on new work again — agreements, advances, attendance and project
+              assignments. Nothing about their history changes.
+            </p>
+          ) : (
+            <>
+              <p>
+                They stay in every historical agreement, settlement, payment, attendance record
+                and report, and remain fully readable. What stops is new work: no new
+                agreements, no new advances, no new attendance, and no new project assignments
+                until they are restored.
+              </p>
+              <p className="text-xs">
+                Closing out and correcting what they already did stays available — attendance
+                already recorded can still be settled, a settlement or payment can still be
+                reversed, an unsettled attendance row can still be corrected, and an agreement
+                can still be amended or cancelled.
+              </p>
+              {balancePaise != null && balancePaise > 0 && (
+                <div className="rounded-lg border border-warning/40 bg-warning-subtle/50 px-3 py-2 text-xs text-warning-foreground">
+                  They are still holding <MoneyText paise={balancePaise} /> of outstanding
+                  advance. Archiving does not settle or write that off — it stays on the ledger.
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button
+            variant={archived ? "primary" : "danger"}
+            disabled={pending}
+            onClick={() =>
+              (archived ? restore : archive).mutate(contractor.id, {
+                onSuccess: () => onOpenChange(false),
+              })
+            }
+          >
+            {pending ? "Saving…" : archived ? "Restore contractor" : "Archive contractor"}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 

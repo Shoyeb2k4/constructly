@@ -7,6 +7,7 @@ import { verifyPassword } from "@/lib/auth/verify-password";
 import type { SessionUser } from "@/lib/auth/types";
 import { STAGE_LABEL } from "../constants";
 import { deadlineBounds, todayISO } from "../deadline";
+import { hasBlockers, type ContractorRemovalBlocker } from "../contractor-removal";
 import type {
   ProjectContractorInput,
   CreateProjectInput,
@@ -166,6 +167,79 @@ async function validateProjectContractors(
 }
 
 /**
+ * Thrown when a contractor cannot be detached from a project. Carries the
+ * blockers so `setProjectContractors` can return them as a typed result.
+ */
+class ContractorRemovalBlocked extends Error {
+  constructor(readonly blockers: ContractorRemovalBlocker[]) {
+    super("CONTRACTOR_REMOVAL_BLOCKED");
+    this.name = "ContractorRemovalBlocked";
+  }
+}
+
+/**
+ * What stands in the way of detaching these contractors from this project.
+ *
+ * Three dependencies block, and the reasoning for each is in
+ * ../contractor-removal.ts. Everything is scoped by `companyId` AND `projectId`,
+ * so an agreement on another project — or in another company — can never block a
+ * removal here.
+ */
+async function removalBlockers(
+  tx: Prisma.TransactionClient,
+  companyId: string,
+  projectId: string,
+  contractorIds: string[],
+): Promise<ContractorRemovalBlocker[]> {
+  if (contractorIds.length === 0) return [];
+
+  const [contractors, agreements, attendance, settlements] = await Promise.all([
+    tx.contractor.findMany({
+      where: { companyId, id: { in: contractorIds } },
+      select: { id: true, name: true },
+    }),
+    tx.contractorContract.findMany({
+      where: {
+        companyId,
+        projectId,
+        contractorId: { in: contractorIds },
+        deletedAt: null,
+        // Everything except CANCELLED still needs the relationship.
+        status: { not: "CANCELLED" },
+      },
+      select: { id: true, contractorId: true, title: true, status: true },
+      orderBy: { createdAt: "asc" },
+    }),
+    tx.labourAttendance.groupBy({
+      by: ["contractorId"],
+      where: { companyId, projectId, contractorId: { in: contractorIds } },
+      _count: { _all: true },
+    }),
+    tx.contractorSettlement.groupBy({
+      by: ["contractorId"],
+      where: { companyId, projectId, contractorId: { in: contractorIds } },
+      _count: { _all: true },
+    }),
+  ]);
+
+  const nameOf = new Map(contractors.map((c) => [c.id, c.name]));
+  const attendanceOf = new Map(attendance.map((a) => [a.contractorId, a._count._all]));
+  const settlementOf = new Map(settlements.map((s) => [s.contractorId, s._count._all]));
+
+  return contractorIds
+    .map((contractorId) => ({
+      contractorId,
+      contractorName: nameOf.get(contractorId) ?? "This contractor",
+      agreements: agreements
+        .filter((a) => a.contractorId === contractorId)
+        .map((a) => ({ id: a.id, title: a.title, status: a.status })),
+      attendanceCount: attendanceOf.get(contractorId) ?? 0,
+      settlementCount: settlementOf.get(contractorId) ?? 0,
+    }))
+    .filter(hasBlockers);
+}
+
+/**
  * Reconcile a project's contractor config to a normalized target set, IN PLACE.
  *
  * This is a diff, never a delete-and-recreate. Attendance rows carry a
@@ -202,12 +276,38 @@ async function syncProjectContractors(
 
   const dropped = existing.filter((pc) => !desired.has(pc.contractorId));
   if (dropped.length > 0) {
-    const attributed = await tx.labourAttendance.findFirst({
-      where: { companyId, projectId, contractorId: { in: dropped.map((pc) => pc.contractorId) } },
-      select: { id: true },
-    });
-    if (attributed) throw new Error("CONTRACTOR_HAS_ATTENDANCE");
+    const blockers = await removalBlockers(
+      tx,
+      companyId,
+      projectId,
+      dropped.map((pc) => pc.contractorId),
+    );
+    // Carried on the error so the caller can turn it into a real sentence —
+    // Next masks Server Action messages in production, so the CODE alone would
+    // reach the browser as an unusable generic failure.
+    if (blockers.length > 0) throw new ContractorRemovalBlocked(blockers);
     await tx.projectContractor.deleteMany({ where: { id: { in: dropped.map((pc) => pc.id) } } });
+  }
+
+  // An ARCHIVED contractor may not be NEWLY assigned — that is new work. One
+  // already on the project stays, so an unrelated edit (another contractor's
+  // rate, say) still saves and history keeps working.
+  const added = rows.filter((r) => !previous.has(r.contractorId)).map((r) => r.contractorId);
+  if (added.length > 0) {
+    const rows = await tx.contractor.findMany({
+      where: { companyId, id: { in: added } },
+      select: { id: true, name: true, status: true },
+    });
+    // Filtered here rather than in the WHERE so the query reads the same shape
+    // the blocker lookup uses — one contractor read, one meaning.
+    const archived = rows.filter((c) => c.status === "INACTIVE");
+    if (archived.length > 0) {
+      throw new Error(
+        `CONTRACTOR_ARCHIVED: ${archived.map((c) => c.name).join(", ")} ` +
+          `${archived.length === 1 ? "is" : "are"} archived and can't be assigned to a project. ` +
+          `Restore ${archived.length === 1 ? "them" : "those contractors"} first.`,
+      );
+    }
   }
 
   for (const r of rows) {
@@ -1034,15 +1134,24 @@ export async function listProjectContractors(
 export async function setProjectContractors(
   projectId: string,
   rows: ProjectContractorInput[],
-): Promise<ProjectContractorItem[]> {
+): Promise<ProjectContractorItem[] | { blockedRemovals: ContractorRemovalBlocker[] }> {
   const user = await requireProjectWrite("projects.edit", projectId);
   const contractors = await validateProjectContractors(
     user.company.id,
     projectContractorsSchema.parse(rows),
   );
-  await prisma.$transaction(async (tx) => {
-    await syncProjectContractors(tx, user.company.id, projectId, contractors);
-  });
+  try {
+    await prisma.$transaction(async (tx) => {
+      await syncProjectContractors(tx, user.company.id, projectId, contractors);
+    });
+  } catch (err) {
+    // A typed RESULT, not a throw: Next masks Server Action error messages in
+    // production, so a thrown code reaches the browser as an unusable generic
+    // failure (the same lesson as the duplicate project code fix). The client
+    // re-throws this browser-side so the sheet can name what is in the way.
+    if (err instanceof ContractorRemovalBlocked) return { blockedRemovals: err.blockers };
+    throw err;
+  }
   const labourTypeCount = contractors.reduce((s, c) => s + c.labourRates.length, 0);
   await logActivity(
     user,

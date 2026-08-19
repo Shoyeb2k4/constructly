@@ -13,7 +13,10 @@
 
 import { prisma } from "@/lib/db/prisma";
 import { requirePermission } from "@/lib/auth/permissions";
-import { effectiveRateOn, validateRateRevision } from "../rates";
+import type { SessionUser } from "@/lib/auth/types";
+import { effectiveRateOn, rateRevisionBlockedReason, validateRateRevision } from "../rates";
+import { newBusinessBlockedReason } from "@/features/contractors/lifecycle";
+import type { ContractorStatus } from "@/features/contractors/types";
 import { addScopeItemSchema, setScopeRateSchema, updateScopeItemSchema } from "../schema";
 import type { AddScopeItemInput, RateRevision, ScopeItem, SetScopeRateInput } from "../types";
 import {
@@ -28,6 +31,39 @@ import {
 
 /** Today in the server's timezone, as YYYY-MM-DD. */
 const todayISO = () => iso(new Date());
+
+/**
+ * Everything that must hold before an agreed rate may be written.
+ *
+ * Two axes, both already established elsewhere:
+ *
+ *   • The AGREEMENT's status — see `rateRevisionBlockedReason`. A cancelled or
+ *     settled agreement can take no attendance, so a rate on it prices nothing.
+ *   • The CONTRACTOR's lifecycle — an archived contractor takes on no new work,
+ *     and a rate is a forward-looking commercial term. Nothing legitimate is
+ *     lost by refusing: existing attendance carries its own snapshot, and no new
+ *     attendance can be recorded while archived, so a revision here could not
+ *     change a single figure. Restoring them is the way to renegotiate.
+ */
+async function assertRateWriteAllowed(
+  user: SessionUser,
+  contract: { status: string; contractorId: string },
+): Promise<void> {
+  const blocked = rateRevisionBlockedReason(contract.status);
+  if (blocked) throw new Error(blocked);
+
+  const contractor = await prisma.contractor.findFirst({
+    where: { id: contract.contractorId, companyId: user.company.id },
+    select: { name: true, status: true },
+  });
+  if (!contractor) throw new Error("NOT_FOUND");
+  const archived = newBusinessBlockedReason(
+    contractor.status as ContractorStatus,
+    "REVISE_RATE",
+    contractor.name,
+  );
+  if (archived) throw new Error(`CONTRACTOR_ARCHIVED: ${archived}`);
+}
 
 export async function listScopeItems(contractId: string): Promise<ScopeItem[]> {
   const user = await requirePermission("contracts.view");
@@ -49,6 +85,9 @@ export async function addScopeItem(input: AddScopeItemInput): Promise<ScopeItem>
   const user = await requirePermission("contracts.edit");
   const data = addScopeItemSchema.parse(input);
   const contract = await loadAgreement(user, data.contractId);
+  // Adding a scope item writes its OPENING rate revision, so it is a rate write
+  // and answers to the same two guards.
+  await assertRateWriteAllowed(user, contract);
 
   const invalid = validateRateRevision({
     ratePaise: data.ratePaise,
@@ -210,9 +249,13 @@ export async function setScopeRate(input: SetScopeRateInput): Promise<ScopeItem>
 
   const item = await prisma.contractScopeItem.findFirst({
     where: { id: data.scopeItemId, companyId: user.company.id, deletedAt: null, ...projectScope(user) },
-    include: { ...scopeItemInclude, contract: { select: { title: true, startDate: true } } },
+    include: {
+      ...scopeItemInclude,
+      contract: { select: { title: true, startDate: true, status: true, contractorId: true } },
+    },
   });
   if (!item) throw new Error("NOT_FOUND");
+  await assertRateWriteAllowed(user, item.contract);
 
   const invalid = validateRateRevision({
     ratePaise: data.ratePaise,

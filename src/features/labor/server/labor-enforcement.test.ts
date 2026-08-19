@@ -17,6 +17,8 @@ const h = vi.hoisted(() => ({
     projectContractorLabourRate: { findFirst: vi.fn() },
     contractorContract: { findMany: vi.fn() },
     project: { findFirst: vi.fn() },
+    // The archived-contractor attendance guard reads the contractor's status.
+    contractor: { findFirst: vi.fn() },
   },
 }));
 vi.mock("@/lib/auth/current-user", () => ({
@@ -44,6 +46,7 @@ beforeEach(() => {
   h.prisma.projectContractor.findMany.mockResolvedValue([]);
   h.prisma.contractorContract.findMany.mockResolvedValue([]);
   h.prisma.project.findFirst.mockResolvedValue({ id: "p1" });
+  h.prisma.contractor.findFirst.mockResolvedValue({ name: "Pappu Contractor", status: "ACTIVE" });
 });
 
 describe("labour master-data permissions", () => {
@@ -96,6 +99,7 @@ describe("attendance ownership + view scope", () => {
   it("marking on an assigned project proceeds (quantity 0 clears the record)", async () => {
     h.user = u(["attendance.view", "attendance.mark"]);
     h.prisma.project.findFirst.mockResolvedValue({ id: "p1" });
+  h.prisma.contractor.findFirst.mockResolvedValue({ name: "Pappu Contractor", status: "ACTIVE" });
     await setQuantity({ projectId: "p1", date: "2026-07-20", subcategoryId: "sub1", quantity: 0 });
     expect(h.prisma.labourAttendance.deleteMany).toHaveBeenCalled();
   });

@@ -1,6 +1,14 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
+/* Never scan build output for class names. Compiled chunks contain byte
+   sequences that Tailwind's source detector reads as arbitrary variants, and it
+   then emits selectors PostCSS cannot parse — which fails the whole stylesheet.
+   `.next` is already excluded by .gitignore; this also covers an alternate build
+   directory set through NEXT_DIST_DIR. */
+@source not "../../.next";
+@source not "../../.next-demo";
+
 @custom-variant dark (&:is(.dark *));
 
 /* ─────────────────────────────────────────────────────────────

@@ -105,6 +105,46 @@ export function isValidISODate(value: string): boolean {
  * later) but never before the agreement itself started — a rate that applied
  * before there was an agreement to apply it to is a data-entry error.
  */
+/**
+ * LIFECYCLE GUARD — an agreement's rate may only be revised while attendance can
+ * still resolve against it.
+ *
+ * A rate exists to price labour. CANCELLED and SETTLED agreements are exactly
+ * the two statuses that `eligibleAgreements` (labor/server/assignment-eligibility)
+ * refuses to take attendance for, so a revision on one could never price
+ * anything: it cannot reach existing rows (they carry their own snapshot) and
+ * there will be no new rows. It would be a commercial term agreed against a
+ * closed book.
+ *
+ * NOT_STARTED, IN_PROGRESS, ON_HOLD and COMPLETED all stay open — a rate agreed
+ * late, or corrected after the work finished but before close-out, is ordinary.
+ * ON_HOLD especially: a hold is usually WHY the rate is being renegotiated.
+ *
+ * Mirrors `assertMilestoneChangeAllowed`, which draws the same line for the same
+ * reason.
+ */
+export function rateRevisionBlockedReason(agreementStatus: string): string | null {
+  if (agreementStatus === "CANCELLED") return "AGREEMENT_CANCELLED";
+  if (agreementStatus === "SETTLED") return "AGREEMENT_SETTLED";
+  return null;
+}
+
+/**
+ * Whether another revision already begins on this date.
+ *
+ * Not an error — a same-day correction is legitimate and the engine resolves it
+ * by `createdAt`, newest wins. The UI uses this to say so out loud rather than
+ * let the user discover it afterwards.
+ */
+export function supersedesOn<T extends RateRevisionEntry>(
+  revisions: T[],
+  effectiveFrom: ISODate,
+): T | null {
+  const sameDay = revisions.filter((r) => r.effectiveFrom === effectiveFrom);
+  if (sameDay.length === 0) return null;
+  return sameDay.reduce((a, b) => (b.createdAt > a.createdAt ? b : a));
+}
+
 export function validateRateRevision(args: {
   ratePaise: Paise;
   effectiveFrom: ISODate;

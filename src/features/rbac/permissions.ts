@@ -129,6 +129,15 @@ export const PERMISSION_CATALOG = [
       // Assigns already-settled attendance to an agreement without touching any
       // monetary value. Owner/Admin only.
       { key: "contractors.attribute_history", label: "Attribute settled history", danger: true },
+      // Lifecycle, mirroring vendors: a contractor is long-lived master data, so
+      // the end state is ARCHIVE (deactivate), never delete. An archived
+      // contractor keeps every agreement, settlement, payment and attendance row
+      // and stays fully readable; it simply cannot be taken on for new work.
+      // Given its own permission for the same reason vendors.archive is: taking
+      // a party out of circulation is a different decision from editing a phone
+      // number, and restoring is a lower-risk act than archiving.
+      { key: "contractors.archive", label: "Archive (deactivate)", danger: true },
+      { key: "contractors.restore", label: "Restore (reactivate)" },
     ],
   },
   {

@@ -190,8 +190,10 @@ export function ContractFormSheet({
             />
             {isEdit && (
               <p className="text-xs text-foreground-subtle">
-                Raise an amendment to change the agreement value — it needs a reason, an
-                effective date and an approver.
+                Agreement value changes are made through <strong className="font-medium">Amendments</strong>,
+                so the originally signed figure is preserved. Use{" "}
+                <strong className="font-medium">Propose amendment</strong> in the agreement&rsquo;s
+                action menu — it needs a reason, an effective date and an approver.
               </p>
             )}
           </div>

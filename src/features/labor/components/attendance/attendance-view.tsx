@@ -36,6 +36,8 @@ import { useProjects } from "@/features/projects/hooks";
 import { useAttendanceSheet, useSetQuantity, useCopyPreviousDay } from "../../hooks";
 import { useCan } from "@/features/rbac/permission-context";
 import { getLastProject, setLastProject, todayISO } from "../../last-project";
+// The React key AND the collapse key. Shared so the two can never drift apart.
+import { groupKey } from "../../calc";
 // exports.ts (jsPDF + SheetJS) is lazy-loaded on click to keep it out of the
 // route bundle — see the export handlers below.
 import type { SheetGroup, SheetRow } from "../../types";
@@ -271,6 +273,11 @@ function ContractorGroup({
             Not configured
           </span>
         )}
+        {group.archived && (
+          <span className="rounded-full bg-surface-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-foreground-subtle">
+            Archived
+          </span>
+        )}
         {group.totalPresent > 0 && (
           <span className="rounded-full bg-surface-muted px-2 py-0.5 font-mono text-xs font-medium tabular-nums">
             {group.totalPresent}
@@ -316,7 +323,13 @@ function ContractorGroup({
           assumed.
         </p>
       )}
-      {!collapsed && visible.length === 0 && !(many && chosen == null) && (
+      {!collapsed && group.archived && (
+        <p className="px-3 pb-2 pl-8 text-xs text-foreground-subtle">
+          Archived — no new attendance can be recorded for them. Anything already
+          recorded stays here, stays correctable, and can still be settled.
+        </p>
+      )}
+      {!collapsed && visible.length === 0 && !(many && chosen == null) && !group.archived && (
         <p className="px-3 pb-3 pl-8 text-xs text-foreground-subtle">
           No labour types configured for this contractor.
         </p>
@@ -342,7 +355,9 @@ function ContractorGroup({
 
       {/* A missing labour type is fixed here, not on a separate admin screen —
           and never by inventing an agreement just to hold it. */}
-      {!collapsed && group.configured && canConfigure && group.contractorId && !(many && chosen == null) && (
+      {/* Not offered while archived: a new labour type exists only to record new
+          attendance against, which the server refuses. */}
+      {!collapsed && group.configured && !group.archived && canConfigure && group.contractorId && !(many && chosen == null) && (
         <div className="px-3 pb-3 pl-8">
           <button
             onClick={() => setAddOpen(true)}
@@ -421,8 +436,6 @@ export function AttendanceView() {
     params.set("project", id);
     router.replace(`${pathname}?${params.toString()}`, { scroll: false });
   }
-  /** Group collapse key (contractorId, or a stable token for unattributed). */
-  const groupKey = (g: SheetGroup) => g.contractorId ?? "__unattributed__";
   function toggleGroup(key: string) {
     setCollapsed((prev) => {
       const next = new Set(prev);

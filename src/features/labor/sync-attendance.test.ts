@@ -15,6 +15,8 @@ const h = vi.hoisted(() => ({
   user: null as SessionUser | null,
   prisma: {
     project: { findFirst: vi.fn() },
+    // The archived-contractor guard on the offline path reads the status.
+    contractor: { findFirst: vi.fn() },
     labourAttendance: {
       findFirst: vi.fn(),
       deleteMany: vi.fn(),
@@ -62,6 +64,7 @@ beforeEach(() => {
   );
   Object.values(h.eligibility).forEach((f) => f.mockReset());
   h.prisma.project.findFirst.mockResolvedValue({ id: PROJECT });
+  h.prisma.contractor.findFirst.mockResolvedValue({ status: "ACTIVE" });
   h.prisma.labourAttendance.findFirst.mockResolvedValue(null);
   h.prisma.labourAttendance.deleteMany.mockResolvedValue({ count: 0 });
   h.eligibility.isAttributionEligible.mockResolvedValue(true);

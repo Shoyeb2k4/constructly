@@ -18,6 +18,12 @@ import {
 } from "../calc";
 import { paiseFromBigInt, paiseFromNullableBigInt } from "@/lib/money";
 import {
+  findDuplicates,
+  newBusinessBlockedReason,
+  type DuplicateMatch,
+  type NewBusinessAction,
+} from "../lifecycle";
+import {
   createContractorSchema,
   updateContractorSchema,
   recordAdvanceSchema,
@@ -26,6 +32,7 @@ import {
 import type {
   Contractor,
   ContractorFilters,
+  ContractorStatus,
   ContractorLedger,
   ContractorLedgerEntry,
   ContractorSettlement,
@@ -64,6 +71,18 @@ function settlementScope(user: SessionUser) {
 function ledgerScope(user: SessionUser) {
   if (canSeeAllProjects(user)) return {};
   return { OR: [{ project: { pmId: user.id } }] };
+}
+
+/**
+ * Refuse NEW business for an archived contractor, while leaving every historical
+ * correction open. See ../lifecycle.ts for why the line is drawn there.
+ */
+function assertAcceptsNewBusiness(
+  contractor: { name: string; status: ContractorStatus },
+  action: NewBusinessAction,
+): void {
+  const blocked = newBusinessBlockedReason(contractor.status, action, contractor.name);
+  if (blocked) throw new Error(`CONTRACTOR_ARCHIVED: ${blocked}`);
 }
 
 /** Project access for a contractor write/read targeting one project. */
@@ -317,9 +336,14 @@ export async function listContractors(filters: ContractorFilters = {}): Promise<
     },
     orderBy: { name: "asc" },
   });
-  // One query for every ledger movement in the company, folded per contractor.
+  // POLICY B (see getLedger): a caller without `contractors.view_all` /
+  // `projects.view_all` gets a PROJECT-SCOPED balance, not the contractor's
+  // company-wide position. The catalog is explicit that `view_all` is what
+  // unlocks cross-project lifetime figures, and this list previously folded
+  // every entry for anyone holding plain `contractors.view` — the same figure
+  // the detail page was careful to withhold.
   const entries = await prisma.contractorLedgerEntry.findMany({
-    where: { companyId: user.company.id },
+    where: { companyId: user.company.id, ...ledgerScope(user) },
     select: { contractorId: true, type: true, amountPaise: true },
   });
   const balByContractor = new Map<string, { type: ContractorLedgerEntry["type"]; amountPaise: number }[]>();
@@ -338,34 +362,123 @@ export async function getContractor(id: string): Promise<Contractor | null> {
   return toContractor(c, await outstandingAdvanceFor(user.company.id, id));
 }
 
-export async function createContractor(input: CreateContractorInput): Promise<Contractor> {
+/**
+ * Existing contractors that look like this one. A read, so the form can warn
+ * BEFORE a duplicate is created rather than after.
+ */
+export async function findContractorDuplicates(candidate: {
+  name: string;
+  phone?: string | null;
+}): Promise<DuplicateMatch[]> {
+  const user = await requirePermission("contractors.create");
+  if (!candidate.name?.trim()) return [];
+  const existing = await prisma.contractor.findMany({
+    where: { companyId: user.company.id },
+    select: { id: true, name: true, phone: true, status: true },
+  });
+  return findDuplicates(candidate, existing);
+}
+
+/**
+ * Create a contractor, with its opening advance, ATOMICALLY.
+ *
+ * The two writes used to be separate statements. A failure between them left a
+ * contractor whose `openingAdvancePaise` said one thing and whose ledger — the
+ * authoritative source of the balance — said zero, with no entry to explain the
+ * difference. One transaction, or neither row.
+ *
+ * Duplicates are a WARNING, not a constraint: two genuinely different crews can
+ * share a name, so the caller passes `allowDuplicate` once it has seen the
+ * matches and decided. Refusing outright would leave real work unrecordable.
+ */
+export async function createContractor(
+  input: CreateContractorInput & { allowDuplicate?: boolean },
+): Promise<Contractor | { duplicates: DuplicateMatch[] }> {
   const user = await requirePermission("contractors.create");
   const data = createContractorSchema.parse(input);
   const opening = data.openingAdvancePaise ?? 0;
-  const c = await prisma.contractor.create({
-    data: {
-      companyId: user.company.id,
-      name: data.name,
-      phone: data.phone ?? null,
-      openingAdvancePaise: opening,
-    },
-  });
-  if (opening > 0) {
-    await prisma.contractorLedgerEntry.create({
+
+  if (!input.allowDuplicate) {
+    const existing = await prisma.contractor.findMany({
+      where: { companyId: user.company.id },
+      select: { id: true, name: true, phone: true, status: true },
+    });
+    const duplicates = findDuplicates(data, existing);
+    // Returned, not thrown: Next masks Server Action messages in production, so
+    // a thrown code could never carry the names the user needs to decide.
+    if (duplicates.length > 0) return { duplicates };
+  }
+
+  const c = await prisma.$transaction(async (tx) => {
+    const created = await tx.contractor.create({
       data: {
         companyId: user.company.id,
-        contractorId: c.id,
-        date: new Date(),
-        type: "OPENING_ADVANCE",
-        amountPaise: opening,
-        advanceBalanceAfterPaise: opening,
-        notes: "Opening advance",
-        createdById: user.id,
+        name: data.name,
+        phone: data.phone ?? null,
+        openingAdvancePaise: opening,
       },
     });
-  }
+    if (opening > 0) {
+      await tx.contractorLedgerEntry.create({
+        data: {
+          companyId: user.company.id,
+          contractorId: created.id,
+          date: new Date(),
+          type: "OPENING_ADVANCE",
+          amountPaise: opening,
+          advanceBalanceAfterPaise: opening,
+          notes: "Opening advance",
+          createdById: user.id,
+        },
+      });
+    }
+    return created;
+  });
+
   await logActivity(user, "contractor.created", c.id, `Added contractor ${c.name}`);
   return toContractor(c, opening);
+}
+
+/**
+ * Archive (deactivate) a contractor.
+ *
+ * Nothing is deleted and nothing is hidden: every agreement, settlement, payment
+ * and attendance row stays exactly where it is, and the contractor remains
+ * readable everywhere. What stops is NEW business — see ../lifecycle.ts.
+ */
+export async function archiveContractor(id: string): Promise<Contractor> {
+  const user = await requirePermission("contractors.archive");
+  const existing = await prisma.contractor.findFirst({
+    where: { id, companyId: user.company.id },
+    select: { id: true, name: true, status: true },
+  });
+  if (!existing) throw new Error("NOT_FOUND");
+  if (existing.status === "INACTIVE") throw new Error("ALREADY_ARCHIVED");
+
+  const c = await prisma.contractor.update({
+    where: { id, companyId: user.company.id },
+    data: { status: "INACTIVE" },
+  });
+  await logActivity(user, "contractor.archived", c.id, `Archived contractor ${c.name}`);
+  return toContractor(c, await outstandingAdvanceFor(user.company.id, id));
+}
+
+/** Bring an archived contractor back into circulation for new work. */
+export async function restoreContractor(id: string): Promise<Contractor> {
+  const user = await requirePermission("contractors.restore");
+  const existing = await prisma.contractor.findFirst({
+    where: { id, companyId: user.company.id },
+    select: { id: true, name: true, status: true },
+  });
+  if (!existing) throw new Error("NOT_FOUND");
+  if (existing.status === "ACTIVE") throw new Error("NOT_ARCHIVED");
+
+  const c = await prisma.contractor.update({
+    where: { id, companyId: user.company.id },
+    data: { status: "ACTIVE" },
+  });
+  await logActivity(user, "contractor.restored", c.id, `Restored contractor ${c.name}`);
+  return toContractor(c, await outstandingAdvanceFor(user.company.id, id));
 }
 
 export async function updateContractor(
@@ -373,6 +486,12 @@ export async function updateContractor(
   patch: UpdateContractorInput,
 ): Promise<Contractor> {
   const user = await requirePermission("contractors.edit");
+  // Lifecycle has its own permissions and its own audit events — archiving is
+  // not an incidental field edit. The schema no longer accepts a status; this is
+  // belt and braces against a hand-rolled payload.
+  if ("status" in patch && (patch as { status?: unknown }).status !== undefined) {
+    throw new Error("USE_ARCHIVE");
+  }
   const data = updateContractorSchema.parse(patch);
   const c = await prisma.contractor.update({
     where: { id, companyId: user.company.id },
@@ -390,9 +509,10 @@ export async function recordAdvance(input: RecordAdvanceInput): Promise<Contract
   const data = recordAdvanceSchema.parse(input);
   const c = await prisma.contractor.findFirst({
     where: { id: data.contractorId, companyId: user.company.id },
-    select: { id: true, name: true },
+    select: { id: true, name: true, status: true },
   });
   if (!c) throw new Error("NOT_FOUND");
+  assertAcceptsNewBusiness(c, "RECORD_ADVANCE");
 
   // Scope validation. An agreement-scoped advance must name a project, and that
   // agreement must belong to the SAME company + contractor + project — the DB
@@ -435,24 +555,59 @@ export async function recordAdvance(input: RecordAdvanceInput): Promise<Contract
 }
 
 // ── ledger ────────────────────────────────────────────────────────────
+/**
+ * The contractor's ledger: an AUTHORITATIVE balance, plus the entries this
+ * caller may inspect.
+ *
+ * These are two different questions and were previously answered with one query.
+ * The visible rows were folded and the result presented as "Advance balance", so
+ * a project-scoped user saw a number that was arithmetically real but
+ * commercially false — the contractor's actual outstanding advance is whatever
+ * the settlement allocator will draw against, and that has never been scoped.
+ *
+ * The balance is therefore computed exactly as `outstandingAdvanceFor` computes
+ * it (and as `listContractors` already showed on the list page); only `entries`
+ * is filtered. Hidden rows never reach the DTO — the caller learns that some
+ * exist and how many, and nothing else about them.
+ */
 export async function getLedger(contractorId: string): Promise<ContractorLedger> {
   const user = await requirePermission("contractors.view");
   const c = await prisma.contractor.findFirst({
     where: { id: contractorId, companyId: user.company.id },
   });
   if (!c) throw new Error("NOT_FOUND");
-  const rows = await prisma.contractorLedgerEntry.findMany({
-    // Project-scoped: without contractors.view_all a caller sees only entries on
-    // projects they can access. Company-wide (unattributed) advances are hidden,
-    // because they cannot be attributed to any project the caller is limited to.
-    where: { companyId: user.company.id, contractorId, ...ledgerScope(user) },
-    orderBy: { createdAt: "asc" },
-    include: {
-      settlement: { select: { project: { select: { name: true } } } },
-      project: { select: { name: true } },
-      contract: { select: { title: true } },
-    },
-  });
+
+  const scope = ledgerScope(user);
+  const [rows, totalCount, authoritative] = await Promise.all([
+    prisma.contractorLedgerEntry.findMany({
+      // Project-scoped: without contractors.view_all a caller sees only entries
+      // on projects they can access. Company-wide (unattributed) advances carry
+      // no project, so they are not visible to a caller limited to some.
+      where: { companyId: user.company.id, contractorId, ...scope },
+      orderBy: { createdAt: "asc" },
+      include: {
+        settlement: { select: { project: { select: { name: true } } } },
+        project: { select: { name: true } },
+        contract: { select: { title: true } },
+      },
+    }),
+    prisma.contractorLedgerEntry.count({ where: { companyId: user.company.id, contractorId } }),
+    // POLICY B. A caller who may see every entry gets the AUTHORITATIVE balance —
+    // the same unscoped fold the settlement allocator draws against. A
+    // project-scoped caller gets the fold of what they may see, and the DTO says
+    // so, because `contractors.view_all` is precisely the permission that grants
+    // cross-project lifetime figures.
+    //
+    // The alternative — showing everyone the true total — is arithmetically
+    // tidier and was this module's behaviour until now, but it hands a project
+    // manager the company's whole advance exposure to a contractor. Correctness
+    // of the number must not become a visibility leak; what matters is that a
+    // partial figure is never LABELLED as the contractor's balance.
+    canSeeAllProjects(user)
+      ? outstandingAdvanceFor(user.company.id, contractorId)
+      : Promise.resolve(null),
+  ]);
+
   const entries = rows.map((e) =>
     toLedgerEntry(
       e,
@@ -460,14 +615,23 @@ export async function getLedger(contractorId: string): Promise<ContractorLedger>
       e.contract?.title ?? null,
     ),
   );
-  // CURRENT balance is always the fold — never a stored snapshot.
-  const balance = advanceBalancePaise(
+  const hiddenEntryCount = Math.max(0, totalCount - rows.length);
+  const visibleBalance = advanceBalancePaise(
     rows.map((e) => ({
       type: e.type,
       amountPaise: paiseFromBigInt(e.amountPaise, "ledger.amountPaise"),
     })),
   );
-  return { contractor: toContractor(c, balance), entries };
+
+  return {
+    // Authoritative when permitted, otherwise the fold of the visible rows —
+    // which `scope` labels so no caller can mistake one for the other.
+    contractor: toContractor(c, authoritative ?? visibleBalance),
+    entries,
+    scope: authoritative == null ? "PROJECT" : "COMPANY",
+    isPartial: hiddenEntryCount > 0,
+    hiddenEntryCount,
+  };
 }
 
 // ── settlements ───────────────────────────────────────────────────────
@@ -562,9 +726,16 @@ export async function createSettlement(
   const data = createSettlementSchema.parse(input);
   const contractor = await prisma.contractor.findFirst({
     where: { id: data.contractorId, companyId: user.company.id },
-    select: { id: true, name: true },
+    select: { id: true, name: true, status: true },
   });
   if (!contractor) throw new Error("NOT_FOUND");
+  // NO archived check here, deliberately. A settlement recognises attendance
+  // that is ALREADY on record; it commits the contractor to nothing. Refusing it
+  // because they were archived would strand a real liability — a crew that
+  // worked 1–18 August and left could never be paid for it. The integrity that
+  // matters is upstream: attendance itself stops at archive (see
+  // labor/server/actions.ts), so everything a settlement here can bill was
+  // recorded while the contractor was still active.
   const project = await prisma.project.findFirst({
     where: { id: data.projectId, companyId: user.company.id },
     select: { id: true, name: true },
@@ -1073,7 +1244,12 @@ export async function contractorCostSummary(): Promise<ContractorCostRow[]> {
   const contractors = await listContractors();
   const grouped = await prisma.contractorSettlement.groupBy({
     by: ["contractorId"],
-    where: { companyId: user.company.id },
+    // A REVERSED settlement contributes to nothing — the same rule the ledger,
+    // reconciliation and agreement credit already follow. It keeps its row, its
+    // figures and its ledger entries for audit; it simply stops being counted.
+    // Without this filter a reversal permanently inflated every figure in the
+    // cost summary and its Excel/PDF exports.
+    where: { companyId: user.company.id, reversedAt: null },
     _sum: { labourBillPaise: true, netPaymentPaise: true, advanceAdjustmentPaise: true },
     _count: { _all: true },
   });

@@ -16,6 +16,9 @@
 # next.js
 /.next/
 /out/
+# Alternate build dir used by NEXT_DIST_DIR (e.g. a demo preview run alongside
+# `npm run dev`). Ignored so Tailwind's source scan skips its compiled chunks.
+/.next-demo/
 
 # production
 /build

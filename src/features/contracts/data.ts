@@ -27,6 +27,7 @@ const serverRepository: ContractsRepository = {
   createMilestone: milestones.createMilestone,
   createMilestonesBulk: milestones.createMilestonesBulk,
   updateMilestone: milestones.updateMilestone,
+  reorderMilestones: milestones.reorderMilestones,
   setMilestoneStatus: milestones.setMilestoneStatus,
   deleteMilestone: milestones.deleteMilestone,
 

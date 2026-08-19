@@ -627,3 +627,113 @@ describe("backward compatibility", () => {
     expect(row.contractId).toBeNull();
   });
 });
+
+/* ── The archived-contractor boundary (Pass 5.1) ─────────────────────────── */
+
+/**
+ * Demo parity for the rule the server enforces: an archived contractor takes on
+ * NO new attendance, but everything already recorded stays visible, stays
+ * correctable, and stays settleable. Exercised here because the demo store is
+ * what the browser walkthrough drives.
+ */
+describe("archiving a contractor stops new attendance, not closure", () => {
+  it("records attendance while ACTIVE, then refuses a new day once archived", async () => {
+    await labor.setQuantity({
+      projectId: SKY,
+      date: DATE,
+      subcategoryId: MASON,
+      quantity: 6,
+      contractorId: PAPPU,
+      contractId: STRUCTURE,
+    });
+
+    await contractors.archiveContractor(PAPPU);
+
+    await expect(
+      labor.setQuantity({
+        projectId: SKY,
+        date: "2026-06-16",
+        subcategoryId: MASON,
+        quantity: 4,
+        contractorId: PAPPU,
+        contractId: STRUCTURE,
+      }),
+    ).rejects.toThrow("CONTRACTOR_ARCHIVED");
+  });
+
+  it("offers no blank rows while archived, but keeps the recorded one", async () => {
+    await labor.setQuantity({
+      projectId: SKY,
+      date: DATE,
+      subcategoryId: MASON,
+      quantity: 6,
+      contractorId: PAPPU,
+      contractId: STRUCTURE,
+    });
+    const before = await groupFor(SKY, PAPPU);
+    expect(before.archived).toBe(false);
+    expect(before.rows.length).toBeGreaterThan(1);
+
+    await contractors.archiveContractor(PAPPU);
+
+    const after = await groupFor(SKY, PAPPU);
+    expect(after.archived).toBe(true);
+    expect(after.rows).toHaveLength(1);
+    expect(after.rows[0].quantity).toBe(6);
+    // The value is untouched — archiving moves no money.
+    expect(after.estimatedCostPaise).toBe(before.estimatedCostPaise);
+  });
+
+  it("still allows CORRECTING and CLEARING the row recorded before archiving", async () => {
+    await labor.setQuantity({
+      projectId: SKY,
+      date: DATE,
+      subcategoryId: MASON,
+      quantity: 6,
+      contractorId: PAPPU,
+      contractId: STRUCTURE,
+    });
+    await contractors.archiveContractor(PAPPU);
+
+    await labor.setQuantity({
+      projectId: SKY,
+      date: DATE,
+      subcategoryId: MASON,
+      quantity: 7,
+      contractorId: PAPPU,
+      contractId: STRUCTURE,
+    });
+    expect((await groupFor(SKY, PAPPU)).rows[0].quantity).toBe(7);
+
+    await labor.setQuantity({
+      projectId: SKY,
+      date: DATE,
+      subcategoryId: MASON,
+      quantity: 0,
+      contractorId: PAPPU,
+      contractId: STRUCTURE,
+    });
+    // The group survives (they are still assigned to the project), but with no
+    // rows at all — nothing recorded, and nothing offered while archived.
+    const cleared = await groupFor(SKY, PAPPU);
+    expect(cleared.rows).toEqual([]);
+    expect(cleared.estimatedCostPaise).toBe(0);
+  });
+
+  it("RESTORING brings the blank rows and new attendance back", async () => {
+    await contractors.archiveContractor(PAPPU);
+    await contractors.restoreContractor(PAPPU);
+
+    await labor.setQuantity({
+      projectId: SKY,
+      date: DATE,
+      subcategoryId: MASON,
+      quantity: 3,
+      contractorId: PAPPU,
+      contractId: STRUCTURE,
+    });
+    const g = await groupFor(SKY, PAPPU);
+    expect(g.archived).toBe(false);
+    expect(g.rows.find((r) => r.subcategoryId === MASON)!.quantity).toBe(3);
+  });
+});

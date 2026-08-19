@@ -10,7 +10,7 @@
 
 import type { Paise } from "@/lib/money";
 import { formatPaiseSmart } from "@/lib/money";
-import { reconcileAgreement, reconcileAsOf } from "./reconcile";
+import { positionFor, reconcileAgreement, reconcileAsOf } from "./reconcile";
 import type {
   AgreementReconciliation,
   AgreementSnapshot,
@@ -272,6 +272,176 @@ export function impliedAgreementStatus(milestones: MilestoneEntry[]): ContractSt
   if (live.every((m) => m.status === "COMPLETED")) return "COMPLETED";
   if (live.some((m) => m.status === "IN_PROGRESS" || m.status === "COMPLETED")) {
     return "IN_PROGRESS";
+  }
+  return null;
+}
+
+/* ── UI projections (pure) ──────────────────────────────────────────────── */
+
+/**
+ * PLANNED COVERAGE — how much of the authorised value the milestone plan
+ * accounts for.
+ *
+ * Deliberately derived from the engine's own `milestoneCoveragePaise` and
+ * `milestoneCoverageVariancePaise` rather than re-summing milestones, so the tab
+ * and the statement can never disagree.
+ *
+ * Over-coverage is a WARNING, not an error: planning six slabs that briefly
+ * total more than the agreement is a normal setup state. What is blocked is
+ * RECOGNISING more than the authorised value — see validateMilestoneCompletion.
+ */
+export type CoverageState = "EXACT" | "UNDER" | "OVER" | "NONE";
+
+export function milestoneCoverage(
+  r: Pick<
+    AgreementReconciliation,
+    "milestoneCoveragePaise" | "milestoneCoverageVariancePaise" | "currentContractValuePaise"
+  >,
+): {
+  state: CoverageState;
+  plannedPaise: Paise;
+  authorisedPaise: Paise;
+  /** Signed: positive = over-covered, negative = unallocated. */
+  variancePaise: Paise;
+  /** Unsigned, for display alongside the wording. */
+  magnitudePaise: Paise;
+  message: string;
+} {
+  const planned = r.milestoneCoveragePaise;
+  const authorised = r.currentContractValuePaise;
+  const variance = r.milestoneCoverageVariancePaise;
+  const magnitude = Math.abs(variance);
+
+  const state: CoverageState =
+    planned === 0 ? "NONE" : variance === 0 ? "EXACT" : variance > 0 ? "OVER" : "UNDER";
+
+  const message =
+    state === "NONE"
+      ? `No milestones yet — none of the ${formatPaiseSmart(authorised)} agreement value is allocated.`
+      : state === "EXACT"
+        ? `Coverage complete — ${formatPaiseSmart(planned)} / ${formatPaiseSmart(authorised)}.`
+        : state === "UNDER"
+          ? `${formatPaiseSmart(magnitude)} not yet allocated to milestones.`
+          : `${formatPaiseSmart(magnitude)} above the authorised agreement value.`;
+
+  return { state, plannedPaise: planned, authorisedPaise: authorised, variancePaise: variance, magnitudePaise: magnitude, message };
+}
+
+/**
+ * What completing this milestone would do to the agreement's position.
+ *
+ * Uses `positionFor` — the very function the statement's Due/Ahead lines are
+ * built from — so the preview cannot drift from the result. Earned is clamped to
+ * the authorised value exactly as the engine clamps it; `blockedReason` carries
+ * the same refusal the server would raise, so the dialog can explain it before
+ * the user commits rather than after.
+ */
+export function previewMilestoneCompletion(args: {
+  reconciliation: Pick<
+    AgreementReconciliation,
+    "earnedValuePaise" | "totalCreditedPaise" | "currentContractValuePaise"
+  >;
+  milestoneValuePaise: Paise;
+}): {
+  earnedBeforePaise: Paise;
+  earnedAfterPaise: Paise;
+  creditedPaise: Paise;
+  dueBeforePaise: Paise;
+  aheadBeforePaise: Paise;
+  dueAfterPaise: Paise;
+  aheadAfterPaise: Paise;
+  blockedReason: string | null;
+} {
+  const { reconciliation: r, milestoneValuePaise } = args;
+  const before = positionFor(r.earnedValuePaise, r.totalCreditedPaise);
+
+  const blockedReason = validateMilestoneCompletion({
+    alreadyCompletedValuePaise: r.earnedValuePaise,
+    thisMilestoneValuePaise: milestoneValuePaise,
+    currentContractValuePaise: r.currentContractValuePaise,
+  });
+
+  const earnedAfter = Math.min(
+    r.earnedValuePaise + milestoneValuePaise,
+    r.currentContractValuePaise,
+  );
+  const after = positionFor(earnedAfter, r.totalCreditedPaise);
+
+  return {
+    earnedBeforePaise: r.earnedValuePaise,
+    earnedAfterPaise: earnedAfter,
+    creditedPaise: r.totalCreditedPaise,
+    dueBeforePaise: before.currentDuePaise,
+    aheadBeforePaise: before.advanceCreditPaise,
+    dueAfterPaise: after.currentDuePaise,
+    aheadAfterPaise: after.advanceCreditPaise,
+    blockedReason,
+  };
+}
+
+/** One action the milestone row may offer, already proven legal. */
+export interface MilestoneAction {
+  status: MilestoneStatus;
+  label: string;
+  /** Consequential enough to confirm; completion also previews its effect. */
+  confirm: boolean;
+  /** CANCELLED needs one; the server refuses without it. */
+  requiresReason: boolean;
+}
+
+const MILESTONE_ACTION_LABEL: Record<MilestoneStatus, string> = {
+  NOT_STARTED: "Move back to not started",
+  IN_PROGRESS: "Mark in progress",
+  COMPLETED: "Mark completed",
+  CANCELLED: "Cancel milestone",
+};
+
+/**
+ * The status changes `setMilestoneStatus` will accept for this milestone.
+ *
+ * Reopening a completed milestone is COMPLETED → IN_PROGRESS: the one legal move
+ * out of COMPLETED, and the auditable correction path for work signed off early
+ * and later rejected. It REDUCES earned value, so it confirms first.
+ *
+ * Returns nothing at all once the agreement itself is cancelled or settled —
+ * mirroring assertMilestoneChangeAllowed on the server.
+ */
+export function availableMilestoneActions(
+  milestone: Pick<MilestoneEntry, "status">,
+  agreementStatus: ContractStatus,
+): MilestoneAction[] {
+  if (agreementStatus === "CANCELLED" || agreementStatus === "SETTLED") return [];
+  return MILESTONE_TRANSITIONS[milestone.status].map((status) => ({
+    status,
+    label:
+      milestone.status === "COMPLETED" && status === "IN_PROGRESS"
+        ? "Reopen milestone"
+        : MILESTONE_ACTION_LABEL[status],
+    confirm: status === "COMPLETED" || status === "CANCELLED" || milestone.status === "COMPLETED",
+    requiresReason: status === "CANCELLED",
+  }));
+}
+
+/**
+ * Why a milestone cannot be deleted, or null when it can.
+ *
+ * Mirrors `deleteMilestone`: only a never-started milestone with no payments
+ * booked against it may go. Anything else is CANCELLED instead, so earned-value
+ * history stays reconstructable.
+ */
+export function deleteMilestoneBlockedReason(
+  milestone: Pick<MilestoneEntry, "status">,
+  agreementStatus: ContractStatus,
+): string | null {
+  if (agreementStatus === "CANCELLED") return "The agreement is cancelled.";
+  if (agreementStatus === "SETTLED") {
+    return "The agreement is closed out as settled — move it back to completed first.";
+  }
+  if (milestone.status === "COMPLETED") {
+    return "Completed milestones can't be deleted — reopen it first, or cancel it.";
+  }
+  if (milestone.status !== "NOT_STARTED") {
+    return "Only a milestone that hasn't started can be deleted. Cancel it instead, which keeps the record.";
   }
   return null;
 }

@@ -15,6 +15,7 @@ import type {
 } from "../types";
 import { rowTotals, sheetTotals, summarize } from "../calc";
 import { ensureAgreementStoresSeeded } from "@/features/contracts/demo/demo-repository";
+import { newBusinessBlockedReason } from "@/features/contractors/lifecycle";
 import {
   DEMO_CATEGORIES,
   DEMO_SUBCATEGORIES,
@@ -93,6 +94,17 @@ function loadProjectsRaw(): DemoProjectRec[] {
 function contractorNames(): Map<string, string> {
   const rows = readRaw<{ id: string; name: string }>(K.contractors) ?? [];
   return new Map(rows.map((c) => [c.id, c.name]));
+}
+
+/** Lifecycle status by contractor id — parity with the server's archived rules. */
+function contractorStatuses(): Map<string, string> {
+  const rows = readRaw<{ id: string; status: string }>(K.contractors) ?? [];
+  return new Map(rows.map((c) => [c.id, c.status]));
+}
+
+/** True when this contractor is archived and so takes no new attendance. */
+function isContractorArchivedDemo(contractorId: string): boolean {
+  return contractorStatuses().get(contractorId) === "INACTIVE";
 }
 
 /** The configured project+contractor rate for a subcategory, or undefined when
@@ -381,6 +393,7 @@ function buildSheet(
   const todays = attendance.filter((a) => a.projectId === projectId && a.date === date);
   const config = loadProjectsRaw().find((p) => p.id === projectId)?.contractors ?? [];
   const names = contractorNames();
+  const statuses = contractorStatuses();
   const subName = new Map(subcategories.map((s) => [s.id, s.name]));
   const subCat = new Map(subcategories.map((s) => [s.id, s.categoryId]));
   const catName = new Map(loadCategories().map((c) => [c.id, c.name]));
@@ -400,12 +413,17 @@ function buildSheet(
     .map((pc) => {
       const mine = eligibleAgreementsDemo(projectId, pc.contractorId);
       const rows: SheetRow[] = [];
+      // Parity with the server: an archived contractor is offered no blank rows,
+      // but every row that already holds a record still shows and stays
+      // correctable.
+      const archived = statuses.get(pc.contractorId) === "INACTIVE";
 
       for (const ag of mine) {
         for (const item of scopeItems.filter((s) => s.contractId === ag.id)) {
           const k = attKey(pc.contractorId, item.labourSubcategoryId, ag.id);
           const rec = byKey.get(k);
           if (rec) consumed.add(k);
+          if (!rec && archived) continue;
           rows.push({
             subcategoryId: item.labourSubcategoryId,
             name: item.subcategoryName,
@@ -432,6 +450,7 @@ function buildSheet(
           const k = attKey(pc.contractorId, lr.labourSubcategoryId, null);
           const rec = byKey.get(k);
           if (rec) consumed.add(k);
+          if (!rec && archived) continue;
           rows.push({
             subcategoryId: lr.labourSubcategoryId,
             name: lr.subcategoryName,
@@ -452,6 +471,7 @@ function buildSheet(
         contractRatePaise: pc.contractRatePaise,
         contractRateUnit: pc.contractRateUnit,
         configured: true,
+        archived,
         agreements: mine.map((a) => ({
           contractId: a.id,
           title: a.title,
@@ -498,6 +518,7 @@ function buildSheet(
       contractRatePaise: null,
       contractRateUnit: null,
       configured: false,
+      archived: false,
       agreements: [],
       requiresAgreementChoice: false,
       rows: g.rows,
@@ -772,6 +793,19 @@ export const demoLaborRepository: LaborRepository = {
     ) {
       throw new Error("ATTENDANCE_SETTLED");
     }
+    // An archived contractor takes on NO NEW attendance (parity with the
+    // server). A row that already exists stays correctable — it was recorded
+    // while they were active, and freezing a wrong headcount would only get it
+    // settled wrong. Clearing a row is a correction too, so it never reaches
+    // this guard.
+    if (quantity > 0 && !existing && effContractor != null && isContractorArchivedDemo(effContractor)) {
+      const blocked = newBusinessBlockedReason(
+        "INACTIVE",
+        "RECORD_ATTENDANCE",
+        contractorNames().get(effContractor),
+      );
+      throw new Error(`CONTRACTOR_ARCHIVED: ${blocked}`);
+    }
     if (quantity <= 0) {
       attendance = attendance.filter((a) => a !== existing);
     } else if (existing) {
@@ -812,7 +846,13 @@ export const demoLaborRepository: LaborRepository = {
       .at(-1);
     if (prev) {
       const source = attendance.filter((a) => a.projectId === projectId && a.date === prev);
+      // Parity with the server: rows belonging to a contractor archived since
+      // yesterday are SKIPPED. This path writes directly rather than going
+      // through setQuantity, so without this it would be a way to create new
+      // attendance for an archived contractor.
+      const statuses = contractorStatuses();
       for (const rec of source) {
+        if (rec.contractorId != null && statuses.get(rec.contractorId) === "INACTIVE") continue;
         const cid = rec.contractorId ?? null;
         const agreementId = rec.contractId ?? null;
         // Replace the same (subcategory, contractor, AGREEMENT) slot on the

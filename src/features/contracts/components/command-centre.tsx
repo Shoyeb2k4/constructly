@@ -18,6 +18,7 @@ import * as React from "react";
 import { FileText, Info, Plus } from "lucide-react";
 import { EmptyState } from "@/components/patterns/empty-state";
 import { MoneyText } from "@/components/patterns/money-text";
+import { formatPaiseSmart } from "@/lib/money";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { formatDate } from "@/features/projects/format";
@@ -33,6 +34,7 @@ import {
   PAYMENT_MODE_LABEL,
   PAYMENT_TYPE_LABEL,
 } from "../constants";
+import { RecordPaymentLauncher, ReversePaymentButton } from "./payment-actions";
 
 /**
  * The settlement fields these tabs render. Declared structurally rather than
@@ -186,7 +188,14 @@ export function OverviewTab({
 
 /* ── Agreements ─────────────────────────────────────────────────────────── */
 
-function AgreementRow({ contract: c }: { contract: Contract }) {
+function AgreementRow({
+  contract: c,
+  actions,
+}: {
+  contract: Contract;
+  /** The agreement's action menu. Omitted on read-only surfaces. */
+  actions?: React.ReactNode;
+}) {
   const r = c.reconciliation;
   return (
     <div className="px-4 py-3">
@@ -204,7 +213,19 @@ function AgreementRow({ contract: c }: { contract: Contract }) {
             </span>
           </div>
           {c.scope && <p className="mt-0.5 text-xs text-foreground-subtle">{c.scope}</p>}
+          {c.quantity != null && (
+            <p className="text-xs text-foreground-subtle">
+              {c.quantity}
+              {c.unit ? ` ${c.unit}` : ""}
+            </p>
+          )}
+          {c.status === "CANCELLED" && c.cancelledReason && (
+            <p className="mt-0.5 text-xs text-danger-foreground">
+              Cancelled: {c.cancelledReason}
+            </p>
+          )}
         </div>
+        {actions}
       </div>
 
       <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-3">
@@ -266,14 +287,24 @@ export function CreateAgreementButton({
   );
 }
 
+/**
+ * The canonical place to ACT on an agreement.
+ *
+ * Overview deliberately stays a read surface — the same agreement appears there
+ * as part of a lifetime rollup, and two action menus for one record is two places
+ * to keep correct. Everything an agreement can do lives here.
+ */
 export function AgreementsTab({
   profile,
   unattributedPaise,
   onCreateAgreement,
+  /** Rendered per agreement. Omitted when the viewer may do nothing to them. */
+  renderActions,
 }: {
   profile: ContractorProfile;
   unattributedPaise: number;
   onCreateAgreement?: () => void;
+  renderActions?: (contract: Contract) => React.ReactNode;
 }) {
   if (profile.projects.length === 0) {
     return (
@@ -302,7 +333,7 @@ export function AgreementsTab({
           </div>
           <div className="divide-y divide-border">
             {g.contracts.map((c) => (
-              <AgreementRow key={c.id} contract={c} />
+              <AgreementRow key={c.id} contract={c} actions={renderActions?.(c)} />
             ))}
           </div>
         </div>
@@ -342,7 +373,9 @@ export function ReconciliationStatement({
           <Line
             label="Amendments"
             paise={r.amendmentDeltaPaise}
-            note={`original ${r.originalContractValuePaise / 100}`}
+            // Raw paise/100 printed an unformatted "6000000" beside a column of
+            // properly formatted money. Use the shared formatter.
+            note={`original ${formatPaiseSmart(r.originalContractValuePaise)}`}
           />
         )}
         <Line label="Earned till date" paise={r.earnedValuePaise} />
@@ -428,6 +461,8 @@ export function PaymentsTab({
   settledAttendancePaise,
   labourAdvanceOutstandingPaise,
   onReverseSettlement,
+  payableContracts,
+  onReversePayment,
 }: {
   payments: ContractPaymentHistoryRow[];
   settlements?: SettlementRow[];
@@ -435,6 +470,10 @@ export function PaymentsTab({
   labourAdvanceOutstandingPaise: number;
   /** Omitted when the viewer lacks contractors.settle_reverse. */
   onReverseSettlement?: (settlement: SettlementRow) => void;
+  /** The agreements a payment may be recorded against. Omitted without contracts.pay. */
+  payableContracts?: Contract[];
+  /** Omitted when the viewer lacks contracts.pay_delete. */
+  onReversePayment?: (payment: ContractPaymentHistoryRow) => void;
 }) {
   const live = payments.filter((p) => p.reversedAt == null);
   const reversed = payments.filter((p) => p.reversedAt != null);
@@ -462,11 +501,16 @@ export function PaymentsTab({
       <Group
         title="Agreement payments"
         meaning="Direct commercial payment against an agreement. Credits it immediately — reducing Currently Due, or creating Ahead Credit when it exceeds earned value."
+        action={
+          payableContracts && payableContracts.length > 0 ? (
+            <RecordPaymentLauncher contracts={payableContracts} />
+          ) : undefined
+        }
       >
         {live.length === 0 ? (
           <p className="px-4 py-3 text-sm text-foreground-subtle">No payments recorded.</p>
         ) : (
-          <PaymentRows rows={live} />
+          <PaymentRows rows={live} onReverse={onReversePayment} />
         )}
       </Group>
 
@@ -539,17 +583,22 @@ function SettlementRowView({
 function Group({
   title,
   meaning,
+  action,
   children,
 }: {
   title: string;
   meaning: string;
+  action?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <div className="rounded-xl border border-border bg-surface">
-      <div className="border-b border-border px-4 py-2.5">
-        <h3 className="text-sm font-semibold">{title}</h3>
-        <p className="mt-0.5 text-xs text-foreground-subtle">{meaning}</p>
+      <div className="flex flex-wrap items-start justify-between gap-2 border-b border-border px-4 py-2.5">
+        <div className="min-w-0">
+          <h3 className="text-sm font-semibold">{title}</h3>
+          <p className="mt-0.5 text-xs text-foreground-subtle">{meaning}</p>
+        </div>
+        {action}
       </div>
       {children}
     </div>
@@ -559,9 +608,12 @@ function Group({
 function PaymentRows({
   rows,
   reversed,
+  onReverse,
 }: {
   rows: ContractPaymentHistoryRow[];
   reversed?: boolean;
+  /** Omitted when the viewer lacks contracts.pay_delete, and for reversed rows. */
+  onReverse?: (payment: ContractPaymentHistoryRow) => void;
 }) {
   return (
     <div className="divide-y divide-border">
@@ -583,7 +635,10 @@ function PaymentRows({
               <p className="text-xs no-underline">Reversed: {p.reversalReason}</p>
             )}
           </div>
-          <MoneyText paise={p.amountPaise} className="font-mono" />
+          <span className="flex items-center gap-2">
+            <MoneyText paise={p.amountPaise} className="font-mono" />
+            {onReverse && <ReversePaymentButton payment={p} onSelect={onReverse} />}
+          </span>
         </div>
       ))}
     </div>

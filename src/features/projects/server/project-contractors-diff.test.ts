@@ -28,7 +28,7 @@ const h = vi.hoisted(() => ({
   user: null as SessionUser | null,
   prisma: {
     project: { findFirst: vi.fn() },
-    contractor: { count: vi.fn() },
+    contractor: { count: vi.fn(), findMany: vi.fn() },
     labourSubcategory: { count: vi.fn() },
     projectContractor: {
       findMany: vi.fn(),
@@ -41,7 +41,11 @@ const h = vi.hoisted(() => ({
       update: vi.fn(),
       deleteMany: vi.fn(),
     },
-    labourAttendance: { findFirst: vi.fn() },
+    // The removal guard now asks about agreements and settlements too, and
+    // counts attendance per contractor rather than probing for one row.
+    labourAttendance: { findFirst: vi.fn(), groupBy: vi.fn() },
+    contractorContract: { findMany: vi.fn() },
+    contractorSettlement: { groupBy: vi.fn() },
     activityLog: { create: vi.fn() },
     $transaction: vi.fn(),
   },
@@ -91,6 +95,14 @@ beforeEach(() => {
   h.prisma.projectContractorLabourRate.update.mockReset().mockResolvedValue({ id: "lr-mason" });
   h.prisma.projectContractorLabourRate.deleteMany.mockReset().mockResolvedValue({ count: 0 });
   h.prisma.labourAttendance.findFirst.mockReset().mockResolvedValue(null);
+  // Nothing blocks a removal unless a test says so.
+  h.prisma.contractor.findMany.mockReset().mockResolvedValue([
+    { id: PAPPU, name: "Pappu Contractor" },
+    { id: SADDAM, name: "Saddam Crew" },
+  ]);
+  h.prisma.labourAttendance.groupBy.mockReset().mockResolvedValue([]);
+  h.prisma.contractorContract.findMany.mockReset().mockResolvedValue([]);
+  h.prisma.contractorSettlement.groupBy.mockReset().mockResolvedValue([]);
   h.prisma.activityLog.create.mockReset().mockResolvedValue({ id: "a" });
   h.prisma.$transaction.mockReset().mockImplementation(async (arg: unknown) =>
     typeof arg === "function" ? (arg as (tx: unknown) => unknown)(h.prisma) : Promise.all(arg as unknown[]),
@@ -237,13 +249,21 @@ describe("setProjectContractors — dropping a contractor is governed", () => {
 
   it("refuses to drop a contractor that already has attendance", async () => {
     withExisting([existingPappu]);
-    h.prisma.labourAttendance.findFirst.mockResolvedValue({ id: "att-1" });
+    h.prisma.labourAttendance.groupBy.mockResolvedValue([
+      { contractorId: PAPPU, _count: { _all: 1 } },
+    ]);
 
-    await expect(setProjectContractors("p1", [])).rejects.toThrow("CONTRACTOR_HAS_ATTENDANCE");
+    // Returned, not thrown: Next masks Server Action messages in production, so
+    // the reason now travels as a typed result the client can turn into a
+    // sentence naming what is in the way. The rule itself is unchanged.
+    const res = await setProjectContractors("p1", []);
+    expect(res).toHaveProperty("blockedRemovals");
+    const [blocked] = (res as { blockedRemovals: { attendanceCount: number }[] }).blockedRemovals;
+    expect(blocked.attendanceCount).toBe(1);
     expect(h.prisma.projectContractor.deleteMany).not.toHaveBeenCalled();
   });
 
-  it("scopes the attendance check to the dropped contractors only", async () => {
+  it("scopes the dependency checks to the dropped contractors only", async () => {
     withExisting([
       existingPappu,
       {
@@ -259,18 +279,19 @@ describe("setProjectContractors — dropping a contractor is governed", () => {
       { contractorId: PAPPU, labourRates: [{ labourSubcategoryId: MASON, ratePaise: 90_000 }] },
     ]);
 
-    const where = h.prisma.labourAttendance.findFirst.mock.calls[0][0].where;
+    const where = h.prisma.labourAttendance.groupBy.mock.calls[0][0].where;
     expect(where).toMatchObject({ companyId: "c1", projectId: "p1" });
     expect(where.contractorId).toEqual({ in: [SADDAM] });
   });
 
-  it("never queries attendance when nothing is being dropped", async () => {
+  it("never queries dependencies when nothing is being dropped", async () => {
     withExisting([existingPappu]);
 
     await setProjectContractors("p1", [
       { contractorId: PAPPU, labourRates: [{ labourSubcategoryId: MASON, ratePaise: 95_000 }] },
     ]);
 
-    expect(h.prisma.labourAttendance.findFirst).not.toHaveBeenCalled();
+    expect(h.prisma.labourAttendance.groupBy).not.toHaveBeenCalled();
+    expect(h.prisma.contractorContract.findMany).not.toHaveBeenCalled();
   });
 });

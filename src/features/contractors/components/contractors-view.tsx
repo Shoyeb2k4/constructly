@@ -25,6 +25,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
+import { useCan } from "@/features/rbac/permission-context";
 import {
   useContractors,
   useOutstandingAdvances,
@@ -34,7 +35,11 @@ import {
 import type { ContractorStatus } from "../types";
 import { AddContractorSheet } from "./add-contractor-sheet";
 
-export function ContractorsView({ isOwner }: { isOwner: boolean }) {
+export function ContractorsView() {
+  const can = useCan();
+  // The server demands `contractors.create`; the UI now asks the same question
+  // instead of "are you the Owner?".
+  const canCreate = can("contractors.create");
   const [search, setSearch] = React.useState("");
   const [status, setStatus] = React.useState<ContractorStatus | "ALL">("ALL");
   const [addOpen, setAddOpen] = React.useState(false);
@@ -80,7 +85,7 @@ export function ContractorsView({ isOwner }: { isOwner: boolean }) {
                   onSelect={async () => (await import("../exports")).exportCostSummaryPdf(costSummary)}>PDF</DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
-            {isOwner && (
+            {canCreate && (
               <Button variant="primary" onClick={() => setAddOpen(true)}>
                 <Plus />
                 Add contractor
@@ -105,7 +110,8 @@ export function ContractorsView({ isOwner }: { isOwner: boolean }) {
           <SelectContent>
             <SelectItem value="ALL">All statuses</SelectItem>
             <SelectItem value="ACTIVE">Active</SelectItem>
-            <SelectItem value="INACTIVE">Inactive</SelectItem>
+            {/* INACTIVE *is* archived — one lifecycle, one word for it. */}
+            <SelectItem value="INACTIVE">Archived</SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -122,7 +128,7 @@ export function ContractorsView({ isOwner }: { isOwner: boolean }) {
               : "Add a labour contractor to record advances and weekly settlements."
           }
           action={
-            isOwner && !(search || status !== "ALL") ? (
+            canCreate && !(search || status !== "ALL") ? (
               <Button variant="primary" size="sm" onClick={() => setAddOpen(true)}>
                 <Plus />
                 Add contractor
@@ -147,7 +153,7 @@ export function ContractorsView({ isOwner }: { isOwner: boolean }) {
                   <span className="truncate text-sm font-medium">{c.name}</span>
                   {c.status === "INACTIVE" && (
                     <span className="rounded-full bg-surface-muted px-2 py-0.5 text-xs text-foreground-subtle">
-                      Inactive
+                      Archived
                     </span>
                   )}
                 </div>

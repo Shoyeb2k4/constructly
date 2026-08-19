@@ -10,6 +10,8 @@ import {
   isAttributionEligible,
   resolveAttendanceRate,
 } from "./assignment-eligibility";
+import { newBusinessBlockedReason } from "@/features/contractors/lifecycle";
+import type { ContractorStatus } from "@/features/contractors/types";
 import type {
   AttendanceFilters,
   AttendanceRecordItem,
@@ -74,6 +76,56 @@ async function assertNotSettled(companyId: string, key: AttendanceKey): Promise<
     select: { id: true },
   });
   if (settled) throw new Error("ATTENDANCE_SETTLED");
+}
+
+/**
+ * Refuse NEW attendance for an ARCHIVED contractor, while leaving a row that
+ * already exists correctable.
+ *
+ * Recording attendance is new operational work — the single largest way a
+ * contractor accrues a liability — so it stops at archive along with new
+ * agreements, advances and project assignments. Without this, archiving was
+ * self-contradicting in the worst possible direction: labour could still be
+ * booked against a contractor the company had finished with.
+ *
+ * The line is drawn at "does a row already exist at this exact five-field
+ * identity?", not at the date:
+ *
+ *   • No row yet → this is NEW work. Refused.
+ *   • Row exists → this is a CORRECTION of something recorded while the
+ *     contractor was still active. Allowed — freezing it would let a wrong
+ *     headcount recorded on the 17th become permanent, and then get settled at
+ *     the wrong value. Settled rows are already immutable via assertNotSettled,
+ *     which runs first, so only unsettled rows are correctable here.
+ *   • Clearing a row (quantity ≤ 0) never reaches this guard: removing a
+ *     mistaken entry is a correction too.
+ *
+ * Drawing it here rather than at an `archivedAt` date is deliberate: `status` is
+ * the whole lifecycle model (see contractors/lifecycle.ts), and restoring the
+ * contractor is the intended, one-click way to re-enable attendance.
+ */
+async function assertContractorAcceptsAttendance(
+  companyId: string,
+  key: AttendanceKey,
+): Promise<void> {
+  if (key.contractorId == null) return; // unattributed rows have no lifecycle
+  const existing = await prisma.labourAttendance.findFirst({
+    where: { ...key, companyId },
+    select: { id: true },
+  });
+  if (existing) return;
+  const contractor = await prisma.contractor.findFirst({
+    where: { id: key.contractorId, companyId },
+    select: { name: true, status: true },
+  });
+  // A missing contractor is the attribution checks' business, not this one's.
+  if (!contractor) return;
+  const blocked = newBusinessBlockedReason(
+    contractor.status as ContractorStatus,
+    "RECORD_ATTENDANCE",
+    contractor.name,
+  );
+  if (blocked) throw new Error(`CONTRACTOR_ARCHIVED: ${blocked}`);
 }
 
 /**
@@ -487,7 +539,7 @@ async function buildSheet(companyId: string, projectId: string, date: string): P
     prisma.projectContractor.findMany({
       where: { companyId, projectId },
       include: {
-        contractor: { select: { name: true } },
+        contractor: { select: { name: true, status: true } },
         labourRates: {
           include: {
             subcategory: {
@@ -564,12 +616,18 @@ async function buildSheet(companyId: string, projectId: string, date: string): P
   const groups: SheetGroup[] = projectContractors.map((pc) => {
     const mine = agreementsByContractor.get(pc.contractorId) ?? [];
     const rows: SheetRow[] = [];
+    // An archived contractor is offered NO blank rows: the server would refuse
+    // the write, so showing an inviting empty box is a trap. Rows that already
+    // hold a record still appear — history must not vanish because a contractor
+    // was archived, and an unsettled row may still need correcting.
+    const archived = pc.contractor.status === "INACTIVE";
 
     for (const ag of mine) {
       for (const item of ag.scopeItems) {
         const k = attKey(pc.contractorId, item.labourSubcategoryId, ag.id);
         const rec = byKey.get(k);
         if (rec) consumed.add(k);
+        if (!rec && archived) continue;
         rows.push({
           subcategoryId: item.labourSubcategoryId,
           name: item.subcategory.name,
@@ -595,6 +653,7 @@ async function buildSheet(companyId: string, projectId: string, date: string): P
         const k = attKey(pc.contractorId, lr.labourSubcategoryId, null);
         const rec = byKey.get(k);
         if (rec) consumed.add(k);
+        if (!rec && archived) continue;
         rows.push({
           subcategoryId: lr.labourSubcategoryId,
           name: lr.subcategory.name,
@@ -615,6 +674,7 @@ async function buildSheet(companyId: string, projectId: string, date: string): P
       contractRatePaise: pc.contractRatePaise,
       contractRateUnit: pc.contractRateUnit,
       configured: true,
+      archived,
       agreements: mine.map((a) => ({
         contractId: a.id,
         title: a.title,
@@ -662,6 +722,7 @@ async function buildSheet(companyId: string, projectId: string, date: string): P
       contractRatePaise: null,
       contractRateUnit: null,
       configured: false,
+      archived: false,
       agreements: [],
       requiresAgreementChoice: false,
       rows: g.rows,
@@ -783,6 +844,10 @@ export async function setQuantity(input: SetQuantityInput): Promise<AttendanceSh
   // credit away from the settlement that recognised it.
   await assertNotSettled(user.company.id, key);
   if (agreementId != null) await assertNotSettledElsewhere(user.company.id, key);
+  // An archived contractor takes on no NEW attendance. Runs after the settled
+  // guards (a settled row is immutable whatever the lifecycle says) and only for
+  // a write, since clearing a row is a correction.
+  if (quantity > 0) await assertContractorAcceptsAttendance(user.company.id, key);
 
   if (quantity <= 0) {
     // Deleting a row: attribution is moot, so no eligibility check (avoids
@@ -864,7 +929,28 @@ export async function copyPreviousDay(projectId: string, date: string): Promise<
     const source = await prisma.labourAttendance.findMany({
       where: { companyId: user.company.id, projectId, date: prev.date },
     });
+    // Yesterday may include a contractor archived since. Their rows are SKIPPED,
+    // not copied and not allowed to abort the run: setQuantity would throw on
+    // the first one and leave the day half-copied, punishing every other
+    // contractor for one archived crew. The sheet then shows them with no rows
+    // and the "no new attendance" note, which explains the absence.
+    const sourceIds = [
+      ...new Set(source.map((r) => r.contractorId).filter((id): id is string => id != null)),
+    ];
+    const archivedIds = new Set(
+      sourceIds.length === 0
+        ? []
+        : (
+            await prisma.contractor.findMany({
+              where: { companyId: user.company.id, id: { in: sourceIds } },
+              select: { id: true, status: true },
+            })
+          )
+            .filter((c) => c.status === "INACTIVE")
+            .map((c) => c.id),
+    );
     for (const rec of source) {
+      if (rec.contractorId != null && archivedIds.has(rec.contractorId)) continue;
       // Preserve the FULL attribution so each contractor's — and each
       // agreement's — rows copy forward independently (Pappu/Structure and
       // Pappu/Compound Wall stay split, as do two contractors on one type).

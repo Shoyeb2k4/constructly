@@ -77,6 +77,23 @@ export function otherPaymentCreditPaise(payments: PaymentEntry[]): Paise {
   return sumPaise(payments.filter((p) => p.reversedAt == null).map((p) => p.amountPaise));
 }
 
+/**
+ * The DUE / AHEAD split for a given earned and credited position.
+ *
+ * Exported so that a "what would completing this milestone do?" preview reads
+ * the same arithmetic the statement itself is built from, rather than restating
+ * it. At most one of the two is ever non-zero.
+ */
+export function positionFor(
+  earnedPaise: Paise,
+  creditedPaise: Paise,
+): { currentDuePaise: Paise; advanceCreditPaise: Paise } {
+  return {
+    currentDuePaise: Math.max(0, earnedPaise - creditedPaise),
+    advanceCreditPaise: Math.max(0, creditedPaise - earnedPaise),
+  };
+}
+
 /* ── The composite ──────────────────────────────────────────────────────── */
 
 function build(
@@ -121,8 +138,7 @@ function build(
     totalCreditedPaise: credited,
 
     // At most one of these is ever non-zero.
-    currentDuePaise: Math.max(0, earned - credited),
-    advanceCreditPaise: Math.max(0, credited - earned),
+    ...positionFor(earned, credited),
 
     remainingUnearnedPaise: currentValue - earned,
     overallBalancePaise: currentValue - credited,

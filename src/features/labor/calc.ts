@@ -16,6 +16,28 @@ export function estimateCostPaise(dailyRatePaise: number | null, quantity: numbe
   return Math.round((dailyRatePaise ?? 0) * quantity);
 }
 
+/**
+ * The stable identity of one sheet group.
+ *
+ * `contractorId` ALONE is not unique. `buildSheet` legitimately emits two groups
+ * for the same contractor: the configured one (their current labour types and
+ * agreements) and a synthesized historical one holding rows recorded against a
+ * contractor/type/agreement combination that has since been de-configured. Both
+ * carry the same `contractorId`, so keying React on it alone made the two
+ * collide — React may then reuse, omit or duplicate the wrong subtree, which on
+ * an attendance sheet means a headcount shown against the wrong row. The
+ * collapse state was keyed on the same value, so collapsing one closed both.
+ *
+ * `configured` is the missing half and is enough: there is at most one configured
+ * group per contractor (one ProjectContractor row) and at most one historical
+ * group per contractor (they are folded into a Map keyed on contractor id). An
+ * array index would also be unique, but it is not STABLE — inserting a group
+ * above shifts every key below it, which is the bug this exists to prevent.
+ */
+export function groupKey(g: Pick<SheetGroup, "contractorId" | "configured">): string {
+  return `${g.contractorId ?? "__unattributed__"}|${g.configured ? "configured" : "historical"}`;
+}
+
 export function rowTotals(rows: SheetRow[]): { totalPresent: number; estimatedCostPaise: number } {
   return {
     totalPresent: rows.reduce((s, r) => s + r.quantity, 0),

@@ -11,17 +11,20 @@ import { SectionEditSheet } from "./section-edit-sheet";
 
 export function ContractorsEditSheet({
   projectId,
+  projectName,
   initial,
   open,
   onOpenChange,
 }: {
   projectId: string;
+  /** Named in a removal refusal, so the message says which project. */
+  projectName?: string;
   /** Current contractor config from the loaded project detail (no extra fetch). */
   initial: ProjectContractorItem[];
   open: boolean;
   onOpenChange: (o: boolean) => void;
 }) {
-  const save = useSetProjectContractors(projectId);
+  const save = useSetProjectContractors(projectId, projectName);
   const [rows, setRows] = React.useState<ProjectContractorInput[]>([]);
 
   // Seed the editor from the persisted config each time it opens

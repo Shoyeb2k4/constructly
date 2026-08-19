@@ -1,3 +1,4 @@
+import type { ContractorRemovalBlocker } from "./contractor-removal";
 import type {
   ProjectContractorInput,
   CreateProjectInput,
@@ -55,5 +56,5 @@ export interface ProjectsRepository {
   setProjectContractors(
     projectId: string,
     rows: ProjectContractorInput[],
-  ): Promise<ProjectContractorItem[]>;
+  ): Promise<ProjectContractorItem[] | { blockedRemovals: ContractorRemovalBlocker[] }>;
 }

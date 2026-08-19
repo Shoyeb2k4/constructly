@@ -8,6 +8,7 @@ import {
   validateAdjustment,
   type BillComposition,
 } from "../calc";
+import { findDuplicates, newBusinessBlockedReason } from "../lifecycle";
 import type {
   ContractorsRepository,
   SettlementFilters,
@@ -19,7 +20,6 @@ import type {
   ContractorLedgerEntry,
   ContractorSettlement,
   ContractorCostRow,
-  CreateContractorInput,
   CreateSettlementInput,
   RecordAdvanceInput,
   UpdateContractorInput,
@@ -177,6 +177,15 @@ function loadSettlements() {
 
 function balanceFor(contractorId: string): number {
   return advanceBalancePaise(loadLedger().filter((e) => e.contractorId === contractorId));
+}
+
+/** Parity with the server: an archived contractor takes on no new business. */
+function assertAcceptsNewBusiness(
+  rec: ContractorRec,
+  action: Parameters<typeof newBusinessBlockedReason>[1],
+): void {
+  const blocked = newBusinessBlockedReason(rec.status, action, rec.name);
+  if (blocked) throw new Error(`CONTRACTOR_ARCHIVED: ${blocked}`);
 }
 
 function toContractor(c: ContractorRec): Contractor {
@@ -356,23 +365,32 @@ export const demoContractorsRepository: ContractorsRepository = {
     return c ? toContractor(c) : null;
   },
 
-  async createContractor(input: CreateContractorInput) {
+  async findContractorDuplicates(candidate) {
+    return findDuplicates(candidate, loadContractors());
+  },
+
+  async createContractor(input) {
     const rows = loadContractors();
+    if (!input.allowDuplicate) {
+      const duplicates = findDuplicates(input, rows);
+      if (duplicates.length > 0) return { duplicates };
+    }
     const rec: ContractorRec = {
       id: uid(),
-      name: input.name.trim(),
-      phone: input.phone?.trim() || null,
+      name: input.name,
+      phone: input.phone ?? null,
       status: "ACTIVE",
       openingAdvancePaise: input.openingAdvancePaise ?? 0,
       createdAt: new Date().toISOString(),
     };
-    write(K.contractors, [...rows, rec]);
+    rows.push(rec);
+    write(K.contractors, rows);
     if (rec.openingAdvancePaise > 0) {
       const ledger = loadLedger();
       ledger.push({
         id: uid(),
         contractorId: rec.id,
-        date: rec.createdAt.slice(0, 10),
+        date: new Date().toISOString().slice(0, 10),
         type: "OPENING_ADVANCE",
         amountPaise: rec.openingAdvancePaise,
         advanceBalanceAfterPaise: rec.openingAdvancePaise,
@@ -385,10 +403,30 @@ export const demoContractorsRepository: ContractorsRepository = {
         reversesEntryId: null,
         fundsContractId: null,
         projectName: null,
-        createdAt: rec.createdAt,
+        createdAt: new Date().toISOString(),
       });
       write(K.ledger, ledger);
     }
+    return toContractor(rec);
+  },
+
+  async archiveContractor(id) {
+    const rows = loadContractors();
+    const rec = rows.find((c) => c.id === id);
+    if (!rec) throw new Error("NOT_FOUND");
+    if (rec.status === "INACTIVE") throw new Error("ALREADY_ARCHIVED");
+    rec.status = "INACTIVE";
+    write(K.contractors, rows);
+    return toContractor(rec);
+  },
+
+  async restoreContractor(id) {
+    const rows = loadContractors();
+    const rec = rows.find((c) => c.id === id);
+    if (!rec) throw new Error("NOT_FOUND");
+    if (rec.status === "ACTIVE") throw new Error("NOT_ARCHIVED");
+    rec.status = "ACTIVE";
+    write(K.contractors, rows);
     return toContractor(rec);
   },
 
@@ -407,6 +445,9 @@ export const demoContractorsRepository: ContractorsRepository = {
   },
 
   async recordAdvance(input: RecordAdvanceInput) {
+    const contractor = loadContractors().find((x) => x.id === input.contractorId);
+    if (!contractor) throw new Error("NOT_FOUND");
+    assertAcceptsNewBusiness(contractor, "RECORD_ADVANCE");
     const ledger = loadLedger();
     const balance = balanceFor(input.contractorId) + input.amountPaise;
     const entry: LedgerRec = {
@@ -520,7 +561,17 @@ export const demoContractorsRepository: ContractorsRepository = {
     const entries = loadLedger()
       .filter((e) => e.contractorId === contractorId)
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-    return { contractor: toContractor(c), entries };
+    // Demo mode runs as a single full-access company, so the visible entries
+    // ARE every entry and the fold matches the authoritative balance.
+    return {
+      contractor: toContractor(c),
+      entries,
+      // Demo runs as a single full-access company: every entry is visible, so
+      // the balance is the authoritative one.
+      scope: "COMPANY" as const,
+      isPartial: false,
+      hiddenEntryCount: 0,
+    };
   },
 
   async previewSettlement(input: SettlementPreviewInput) {
@@ -555,6 +606,9 @@ export const demoContractorsRepository: ContractorsRepository = {
   async createSettlement(input: CreateSettlementInput) {
     const c = loadContractors().find((x) => x.id === input.contractorId);
     if (!c) throw new Error("NOT_FOUND");
+    // No archived check — parity with the server. A settlement closes out
+    // attendance already recorded, so archiving must not strand it. New
+    // attendance is what stops (see labor/demo/demo-repository.ts).
 
     const attendance = loadAttendance();
     const rows = periodRows(
@@ -689,7 +743,9 @@ export const demoContractorsRepository: ContractorsRepository = {
     return loadContractors()
       .map(toContractor)
       .map((c) => {
-        const mine = settlements.filter((s) => s.contractorId === c.id);
+        // Reversed settlements are excluded here exactly as they are on the
+        // server — they keep their record but count towards nothing.
+        const mine = settlements.filter((s) => s.contractorId === c.id && !s.reversedAt);
         return {
           contractorId: c.id,
           name: c.name,

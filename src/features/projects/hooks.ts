@@ -6,6 +6,10 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { toast } from "sonner";
+import {
+  ContractorRemovalBlockedError,
+  describeRemovalBlockers,
+} from "./contractor-removal";
 import { projectsApi, projectKeys } from "./data";
 import type {
   ProjectContractorInput,
@@ -78,11 +82,22 @@ export function useProjectContractors(projectId: string | null, enabled = true) 
 
 /** Replace a project's contractor config (Contractors edit sheet). Refreshes the
  *  detail and the config list so Labour picks up the change immediately. */
-export function useSetProjectContractors(projectId: string) {
+export function useSetProjectContractors(projectId: string, projectName?: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (rows: ProjectContractorInput[]) =>
-      projectsApi.setProjectContractors(projectId, rows),
+    // A blocked removal is a DECISION, not a transient failure. The app-wide
+    // default retries a failed mutation once (see app/providers.tsx), which for a
+    // deterministic refusal means running the whole dependency check twice and
+    // delaying the explanation for no reason. Opt out.
+    retry: false,
+    // The server returns blockers as a typed RESULT rather than throwing a code,
+    // because Next masks Server Action messages in production. Re-thrown here,
+    // browser-side, so `onError` can say exactly what is in the way.
+    mutationFn: async (rows: ProjectContractorInput[]) => {
+      const res = await projectsApi.setProjectContractors(projectId, rows);
+      if ("blockedRemovals" in res) throw new ContractorRemovalBlockedError(res.blockedRemovals);
+      return res;
+    },
     onSuccess: (items) => {
       qc.setQueryData(projectKeys.projectContractors(projectId), items);
       qc.invalidateQueries({ queryKey: projectKeys.detail(projectId) });
@@ -91,7 +106,14 @@ export function useSetProjectContractors(projectId: string) {
       qc.invalidateQueries({ queryKey: ["labor"] });
       toast.success("Contractors updated");
     },
-    onError: () => toast.error("Couldn't update contractors"),
+    onError: (e: unknown) =>
+      toast.error(
+        e instanceof ContractorRemovalBlockedError
+          ? describeRemovalBlockers(e.blockers, projectName)
+          : "Couldn't update contractors",
+        // A refusal explains a domain rule and is worth reading properly.
+        e instanceof ContractorRemovalBlockedError ? { duration: 10_000 } : undefined,
+      ),
   });
 }
 

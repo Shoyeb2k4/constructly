@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { contractorsApi, contractorKeys } from "./data";
+import { describeContractorError } from "./lifecycle";
 import type {
   ContractorFilters,
   CreateContractorInput,
@@ -60,15 +61,55 @@ function useInvalidateAll() {
   return () => qc.invalidateQueries({ queryKey: contractorKeys.all });
 }
 
+/**
+ * Create a contractor.
+ *
+ * A look-alike comes back as `{ duplicates }` rather than a thrown code — two
+ * genuinely different crews can share a name, so the caller shows the matches
+ * and lets the user decide, then retries with `allowDuplicate`. Nothing is
+ * created on the first call in that case.
+ */
 export function useCreateContractor() {
   const invalidate = useInvalidateAll();
   return useMutation({
-    mutationFn: (input: CreateContractorInput) => contractorsApi.createContractor(input),
-    onSuccess: () => {
+    mutationFn: (input: CreateContractorInput & { allowDuplicate?: boolean }) =>
+      contractorsApi.createContractor(input),
+    onSuccess: (res) => {
+      if ("duplicates" in res) return; // a question, not a result
       invalidate();
       toast.success("Contractor added");
     },
-    onError: () => toast.error("Couldn't add contractor"),
+    onError: (e: unknown) => toast.error(describeContractorError(e, "Couldn't add the contractor.")),
+  });
+}
+
+/**
+ * Archive (deactivate). Keeps every agreement, settlement, payment and
+ * attendance row; stops new business only.
+ */
+export function useArchiveContractor() {
+  const invalidate = useInvalidateAll();
+  return useMutation({
+    mutationFn: (id: string) => contractorsApi.archiveContractor(id),
+    onSuccess: () => {
+      invalidate();
+      toast.success("Contractor archived");
+    },
+    onError: (e: unknown) =>
+      toast.error(describeContractorError(e, "Couldn't archive the contractor.")),
+  });
+}
+
+export function useRestoreContractor() {
+  const invalidate = useInvalidateAll();
+  return useMutation({
+    mutationFn: (id: string) => contractorsApi.restoreContractor(id),
+    onSuccess: () => {
+      invalidate();
+      toast.success("Contractor restored");
+    },
+    onError: (e: unknown) =>
+      toast.error(describeContractorError(e, "Couldn't restore the contractor.")),
   });
 }
 
@@ -81,7 +122,8 @@ export function useUpdateContractor() {
       invalidate();
       toast.success("Contractor updated");
     },
-    onError: () => toast.error("Couldn't update contractor"),
+    onError: (e: unknown) =>
+      toast.error(describeContractorError(e, "Couldn't update the contractor.")),
   });
 }
 
@@ -93,7 +135,8 @@ export function useRecordAdvance() {
       invalidate();
       toast.success("Advance recorded");
     },
-    onError: () => toast.error("Couldn't record advance"),
+    onError: (e: unknown) =>
+      toast.error(describeContractorError(e, "Couldn't record the advance.")),
   });
 }
 
@@ -106,7 +149,7 @@ export function useCreateSettlement() {
       toast.success("Settlement recorded");
     },
     onError: (e: unknown) =>
-      toast.error(e instanceof Error && e.message ? e.message : "Couldn't record settlement"),
+      toast.error(describeContractorError(e, "Couldn't record the settlement.")),
   });
 }
 
@@ -132,6 +175,6 @@ export function useReverseSettlement() {
       toast.success("Settlement reversed — its attendance is editable again");
     },
     onError: (e: unknown) =>
-      toast.error(e instanceof Error && e.message ? e.message : "Couldn't reverse settlement"),
+      toast.error(describeContractorError(e, "Couldn't reverse the settlement.")),
   });
 }

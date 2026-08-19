@@ -12,15 +12,9 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { toPaise } from "@/lib/money";
 import { useCreateContractor, useUpdateContractor } from "../hooks";
+import { describeDuplicates, type DuplicateMatch } from "../lifecycle";
 import type { Contractor } from "../types";
 
 function Field({
@@ -58,7 +52,9 @@ export function AddContractorSheet({
   const [name, setName] = React.useState("");
   const [phone, setPhone] = React.useState("");
   const [openingRupees, setOpeningRupees] = React.useState("");
-  const [status, setStatus] = React.useState<"ACTIVE" | "INACTIVE">("ACTIVE");
+  // Look-alikes the server found. A QUESTION, not a refusal: two different crews
+  // can share a name, so the user confirms and we retry with allowDuplicate.
+  const [duplicates, setDuplicates] = React.useState<DuplicateMatch[]>([]);
 
   // Re-seed the form whenever the target changes (derive-during-render).
   const [key, setKey] = React.useState<string | null>(null);
@@ -68,26 +64,38 @@ export function AddContractorSheet({
     setName(contractor?.name ?? "");
     setPhone(contractor?.phone ?? "");
     setOpeningRupees("");
-    setStatus(contractor?.status ?? "ACTIVE");
+    setDuplicates([]);
   }
 
   const pending = create.isPending || update.isPending;
   const canSave = name.trim().length > 0 && !pending;
 
-  function submit() {
+  function submit(allowDuplicate = false) {
     if (!canSave) return;
     if (editing) {
+      // Status is deliberately absent — archiving and restoring are their own
+      // permissioned actions, not a field on this form.
       update.mutate(
-        { id: contractor!.id, patch: { name: name.trim(), phone: phone.trim() || null, status } },
+        { id: contractor!.id, patch: { name: name.trim(), phone: phone.trim() || null } },
         { onSuccess: () => onOpenChange(false) },
       );
-    } else {
-      const opening = openingRupees.trim() ? toPaise(Number(openingRupees) || 0) : undefined;
-      create.mutate(
-        { name: name.trim(), phone: phone.trim() || null, openingAdvancePaise: opening },
-        { onSuccess: () => onOpenChange(false) },
-      );
+      return;
     }
+    const opening = openingRupees.trim() ? toPaise(Number(openingRupees) || 0) : undefined;
+    create.mutate(
+      { name: name.trim(), phone: phone.trim() || null, openingAdvancePaise: opening, allowDuplicate },
+      {
+        onSuccess: (res) => {
+          // Nothing was created: the server is asking whether this really is a
+          // different contractor.
+          if ("duplicates" in res) {
+            setDuplicates(res.duplicates);
+            return;
+          }
+          onOpenChange(false);
+        },
+      },
+    );
   }
 
   return (
@@ -109,17 +117,7 @@ export function AddContractorSheet({
           <Field label="Mobile">
             <Input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+91 …" inputMode="tel" />
           </Field>
-          {editing ? (
-            <Field label="Status">
-              <Select value={status} onValueChange={(v) => setStatus(v as "ACTIVE" | "INACTIVE")}>
-                <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="ACTIVE">Active</SelectItem>
-                  <SelectItem value="INACTIVE">Inactive</SelectItem>
-                </SelectContent>
-              </Select>
-            </Field>
-          ) : (
+          {!editing && (
             <Field label="Opening advance (₹)" hint="Optional — an advance already paid before using the app.">
               <Input
                 type="number"
@@ -130,12 +128,43 @@ export function AddContractorSheet({
               />
             </Field>
           )}
+          {editing && (
+            <p className="text-xs text-foreground-subtle">
+              Archiving and restoring are separate actions on the contractor&rsquo;s page — a
+              lifecycle change carries its own permission and its own audit entry, so it never
+              rides along inside a detail edit.
+            </p>
+          )}
+
+          {duplicates.length > 0 && (
+            <div className="space-y-2 rounded-lg border border-warning/40 bg-warning-subtle/50 px-3 py-2.5 text-xs text-warning-foreground">
+              <p className="font-medium">{describeDuplicates(duplicates)}</p>
+              <ul className="space-y-0.5">
+                {duplicates.map((d) => (
+                  <li key={d.id}>
+                    {d.name}
+                    {d.phone ? ` · ${d.phone}` : ""}
+                    {d.status === "INACTIVE" ? " · archived" : ""}
+                    {d.on === "PHONE" ? " — same mobile" : ""}
+                  </li>
+                ))}
+              </ul>
+              <p>
+                Nothing has been created. If this really is a different crew, add it anyway —
+                otherwise cancel and use the existing one.
+              </p>
+            </div>
+          )}
         </div>
 
         <SheetFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button variant="primary" onClick={submit} disabled={!canSave}>
-            {editing ? "Save" : "Add contractor"}
+          <Button
+            variant="primary"
+            onClick={() => submit(duplicates.length > 0)}
+            disabled={!canSave}
+          >
+            {editing ? "Save" : duplicates.length > 0 ? "Add anyway" : "Add contractor"}
           </Button>
         </SheetFooter>
       </SheetContent>

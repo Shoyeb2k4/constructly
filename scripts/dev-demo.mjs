@@ -18,7 +18,16 @@ const child = spawn(
   [new URL("../node_modules/next/dist/bin/next", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"), "dev"],
   {
     stdio: "inherit",
-    env: { ...process.env, CONSTRUCTLY_DEMO: "1", NEXT_PUBLIC_CONSTRUCTLY_DEMO: "1" },
+    env: {
+      ...process.env,
+      CONSTRUCTLY_DEMO: "1",
+      NEXT_PUBLIC_CONSTRUCTLY_DEMO: "1",
+      // Its own build directory, so a demo preview can run ALONGSIDE the normal
+      // dev server instead of fighting it for Next's single-instance lock on
+      // `.next` (which ends with one of them exiting on startup). Reads the
+      // env-gated `distDir` in next.config.ts; `.next-demo/` is already ignored.
+      NEXT_DIST_DIR: process.env.NEXT_DIST_DIR ?? ".next-demo",
+    },
   },
 );
 

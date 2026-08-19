@@ -39,7 +39,7 @@ import type {
 } from "../types";
 import {
   agreementInclude,
-  assertContractorAccess,
+  assertContractorAcceptsNewWork,
   assertProjectAccess,
   loadAgreement,
   logContract,
@@ -116,7 +116,7 @@ export async function createContract(input: CreateContractInput): Promise<Contra
   const user = await requirePermission("contracts.create");
   const data = createContractSchema.parse(input);
   await assertProjectAccess(user, data.projectId);
-  await assertContractorAccess(user, data.contractorId);
+  await assertContractorAcceptsNewWork(user, data.contractorId);
 
   const created = await prisma.$transaction(async (tx) => {
     // Ensure the contractor↔project link exists. It carries no billing method —
@@ -260,6 +260,29 @@ export async function setContractStatus(id: string, status: ContractStatus): Pro
   }
 
   const updated = await prisma.$transaction(async (tx) => {
+    // Reviving a cancelled agreement re-establishes the contractor↔project link,
+    // exactly as createContract does. A cancelled agreement is the one state
+    // that permits the relationship to be removed (see projects/
+    // contractor-removal.ts), so without this the agreement would come back live
+    // with no relationship — and the attendance sheet, which walks
+    // ProjectContractor, would never offer it.
+    if (existing.status === "CANCELLED") {
+      await tx.projectContractor.upsert({
+        where: {
+          projectId_contractorId: {
+            projectId: existing.projectId,
+            contractorId: existing.contractorId,
+          },
+        },
+        update: {},
+        create: {
+          companyId: user.company.id,
+          projectId: existing.projectId,
+          contractorId: existing.contractorId,
+        },
+      });
+    }
+
     const row = await tx.contractorContract.update({
       where: { id },
       data: {

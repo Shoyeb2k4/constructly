@@ -112,6 +112,37 @@ async function applyLabourAttendance(clientUuid: string, payload: unknown, user:
   });
   if (settled) return;
 
+  // ARCHIVED contractors take on no new attendance, and the offline queue is the
+  // one other way a row could be created. Treated like the settled case above —
+  // dropped, not degraded: silently rewriting it to an UNATTRIBUTED row would
+  // turn a queued mutation into labour nobody is responsible for, which is worse
+  // than not applying it. An EXISTING row is still updated, because that is a
+  // correction of work recorded while the contractor was active.
+  //
+  // Cost of this choice: a genuinely field-recorded day that syncs after the
+  // contractor was archived is not applied. The remedy is to restore the
+  // contractor, which is one click and re-enables the write.
+  if (contractorId != null) {
+    const alreadyRecorded = await prisma.labourAttendance.findFirst({
+      where: {
+        companyId: user.company.id,
+        projectId: p.projectId,
+        date,
+        labourSubcategoryId: p.labourSubcategoryId,
+        contractorId,
+        contractId,
+      },
+      select: { id: true },
+    });
+    if (!alreadyRecorded) {
+      const contractor = await prisma.contractor.findFirst({
+        where: { id: contractorId, companyId: user.company.id },
+        select: { status: true },
+      });
+      if (contractor?.status === "INACTIVE") return;
+    }
+  }
+
   // Identity is FIVE fields: project, date, labour type, contractor AND
   // agreement. Every WHERE below carries all five — dropping `contractId` would
   // make an offline edit for one agreement overwrite, or clear, another's row.

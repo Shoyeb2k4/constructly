@@ -29,7 +29,7 @@ const h = vi.hoisted(() => ({
   user: null as SessionUser | null,
   prisma: {
     project: { findFirst: vi.fn(), create: vi.fn() },
-    contractor: { count: vi.fn() },
+    contractor: { count: vi.fn(), findMany: vi.fn() },
     labourSubcategory: { count: vi.fn() },
     projectContractor: {
       deleteMany: vi.fn(),
@@ -70,6 +70,9 @@ beforeEach(() => {
   h.prisma.project.findFirst.mockReset();
   h.prisma.project.create.mockReset();
   h.prisma.contractor.count.mockReset();
+  // The assignment guard reads the added contractors' status; none are archived
+  // unless a test says so.
+  h.prisma.contractor.findMany.mockReset().mockResolvedValue([]);
   h.prisma.labourSubcategory.count.mockReset();
   h.prisma.projectContractor.deleteMany.mockReset().mockResolvedValue({ count: 0 });
   h.prisma.projectContractor.create.mockReset().mockResolvedValue({ id: "pc1" });

@@ -1,3 +1,4 @@
+import type { DuplicateMatch } from "./lifecycle";
 import type {
   Contractor,
   ContractorFilters,
@@ -34,7 +35,18 @@ export interface SettlementFilters {
 export interface ContractorsRepository {
   listContractors(filters?: ContractorFilters): Promise<Contractor[]>;
   getContractor(id: string): Promise<Contractor | null>;
-  createContractor(input: CreateContractorInput): Promise<Contractor>;
+  /** Returns `{ duplicates }` instead of creating when a look-alike exists and
+   *  the caller has not yet passed `allowDuplicate`. */
+  createContractor(
+    input: CreateContractorInput & { allowDuplicate?: boolean },
+  ): Promise<Contractor | { duplicates: DuplicateMatch[] }>;
+  findContractorDuplicates(candidate: {
+    name: string;
+    phone?: string | null;
+  }): Promise<DuplicateMatch[]>;
+  /** Deactivate: keeps every record, stops new business. */
+  archiveContractor(id: string): Promise<Contractor>;
+  restoreContractor(id: string): Promise<Contractor>;
   updateContractor(id: string, patch: UpdateContractorInput): Promise<Contractor>;
 
   /** Record an advance payment to a contractor (appends an ADVANCE entry). */

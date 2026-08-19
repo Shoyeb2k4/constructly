@@ -16,6 +16,8 @@ import { demoSeed, DEMO_MANAGERS } from "./seed";
 import { demoProjectSpend } from "@/features/budget/spend";
 import { demoContractorsRepository } from "@/features/contractors/demo/demo-repository";
 import { demoLaborRepository } from "@/features/labor/demo/demo-repository";
+import { demoContractsRepository } from "@/features/contracts/demo/demo-repository";
+import { agreementBlocksRemoval, hasBlockers } from "../contractor-removal";
 
 const KEY = "constructly.demo.projects.v1";
 const RETENTION_KEY = "constructly.demo.projects.retention.v1";
@@ -472,10 +474,23 @@ export const demoRepository: ProjectsRepository = {
     const dropped = current.filter((pc) => !desired.has(pc.contractorId));
     if (dropped.length > 0) {
       const attendance = await demoLaborRepository.listAttendance({ projectId });
-      const droppedIds = new Set(dropped.map((pc) => pc.contractorId));
-      if (attendance.some((a) => a.contractorId != null && droppedIds.has(a.contractorId))) {
-        throw new Error("CONTRACTOR_HAS_ATTENDANCE");
-      }
+      const agreements = await demoContractsRepository.listContracts({ projectId });
+      const settlements = await demoContractorsRepository.listSettlements({ projectId });
+
+      const blockers = dropped
+        .map((pc) => ({
+          contractorId: pc.contractorId,
+          contractorName: pc.contractorName,
+          // Everything except CANCELLED still needs the relationship.
+          agreements: agreements
+            .filter((a) => a.contractorId === pc.contractorId && agreementBlocksRemoval(a.status))
+            .map((a) => ({ id: a.id, title: a.title, status: a.status })),
+          attendanceCount: attendance.filter((a) => a.contractorId === pc.contractorId).length,
+          settlementCount: settlements.filter((x) => x.contractorId === pc.contractorId).length,
+        }))
+        .filter(hasBlockers);
+
+      if (blockers.length > 0) return { blockedRemovals: blockers };
     }
     const resolved = await resolveContractors(rows, current);
     return mutate(projectId, (p) => {

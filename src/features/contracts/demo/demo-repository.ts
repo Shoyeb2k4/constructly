@@ -12,7 +12,10 @@
  */
 
 import { reconcileAgreement, reconciliationTimeline, rollUpReconciliations, validateCreditCeiling } from "../reconcile";
-import { effectiveRateOn, rateBands, validateRateRevision } from "../rates";
+import { validateRevisedValue } from "../amendments";
+import { effectiveRateOn, rateBands, rateRevisionBlockedReason, validateRateRevision } from "../rates";
+import { newBusinessBlockedReason } from "@/features/contractors/lifecycle";
+import type { ContractorStatus } from "@/features/contractors/types";
 import {
   canSettleAgreement,
   canTransitionAgreement,
@@ -944,10 +947,51 @@ const toAmendment = (a: AmendmentRec): Amendment => ({
   createdAt: a.createdAt,
 });
 
+/**
+ * Mirrors assertMilestoneChangeAllowed on the server: a cancelled agreement is
+ * void, and a settled one was closed out only while earned === credited ===
+ * authorised, so nothing may move earned value or planned coverage underneath it.
+ */
+function assertMilestoneChangeAllowed(rec: ContractRec, opts: { affectsEarnedValue: boolean }) {
+  if (rec.status === "CANCELLED") throw new Error("AGREEMENT_CANCELLED");
+  if (rec.status === "SETTLED" && opts.affectsEarnedValue) throw new Error("AGREEMENT_SETTLED");
+}
+
 function liveContract(id: string): ContractRec {
   const rec = loadContracts().find((c) => c.id === id && !c.deletedAt);
   if (!rec) throw new Error("NOT_FOUND");
   return rec;
+}
+
+/**
+ * Parity with the server's `assertRateWriteAllowed`: a rate may only be written
+ * where it could still price labour — the agreement open, the contractor active.
+ */
+function assertRateWriteAllowedDemo(rec: ContractRec): void {
+  const blocked = rateRevisionBlockedReason(rec.status);
+  if (blocked) throw new Error(blocked);
+  // The contractors store is owned by the contractors feature. Read it RAW —
+  // `read()` would seed the key with [] when absent, and the contractors feature
+  // would then treat its own store as already seeded and stay empty forever.
+  // An unreadable or not-yet-seeded store simply means no archived check here;
+  // the server is the authority either way.
+  let contractor: { name: string; status: ContractorStatus } | undefined;
+  try {
+    const raw =
+      typeof window === "undefined"
+        ? null
+        : window.localStorage.getItem("constructly.demo.contractors.v1");
+    contractor = raw
+      ? (JSON.parse(raw) as { id: string; name: string; status: ContractorStatus }[]).find(
+          (c) => c.id === rec.contractorId,
+        )
+      : undefined;
+  } catch {
+    /* ignore */
+  }
+  if (!contractor) return;
+  const archived = newBusinessBlockedReason(contractor.status, "REVISE_RATE", contractor.name);
+  if (archived) throw new Error(`CONTRACTOR_ARCHIVED: ${archived}`);
 }
 
 function detailFor(rec: ContractRec): AgreementDetail {
@@ -1111,6 +1155,7 @@ export const demoContractsRepository: ContractsRepository = {
 
   async addScopeItem(input) {
     const contract = liveContract(input.contractId);
+    assertRateWriteAllowedDemo(contract);
     const invalid = validateRateRevision({
       ratePaise: input.ratePaise,
       effectiveFrom: input.effectiveFrom,
@@ -1199,6 +1244,7 @@ export const demoContractsRepository: ContractsRepository = {
     const rec = items.find((s) => s.id === input.scopeItemId && !s.deletedAt);
     if (!rec) throw new Error("NOT_FOUND");
     const contract = liveContract(rec.contractId);
+    assertRateWriteAllowedDemo(contract);
 
     const invalid = validateRateRevision({
       ratePaise: input.ratePaise,
@@ -1251,7 +1297,7 @@ export const demoContractsRepository: ContractsRepository = {
   },
 
   async createMilestonesBulk(contractId, inputs) {
-    liveContract(contractId);
+    assertMilestoneChangeAllowed(liveContract(contractId), { affectsEarnedValue: true });
     const rows = loadMilestones();
     const base = rows.filter((m) => m.contractId === contractId && !m.deletedAt).length;
     inputs.forEach((input, i) => {
@@ -1282,6 +1328,7 @@ export const demoContractsRepository: ContractsRepository = {
     const rec = rows.find((m) => m.id === id && !m.deletedAt);
     if (!rec) throw new Error("NOT_FOUND");
     const contract = liveContract(rec.contractId);
+    assertMilestoneChangeAllowed(contract, { affectsEarnedValue: patch.valuePaise !== undefined });
 
     if (patch.valuePaise !== undefined && rec.status === "COMPLETED") {
       const snapshot = snapshotFor(contract);
@@ -1310,6 +1357,7 @@ export const demoContractsRepository: ContractsRepository = {
     const rec = rows.find((m) => m.id === id && !m.deletedAt);
     if (!rec) throw new Error("NOT_FOUND");
     const contract = liveContract(rec.contractId);
+    assertMilestoneChangeAllowed(contract, { affectsEarnedValue: true });
     if (status === "CANCELLED" && !opts.reason) throw new Error("CANCEL_REASON_REQUIRED");
 
     const linked = loadPayments()
@@ -1353,6 +1401,7 @@ export const demoContractsRepository: ContractsRepository = {
     const rows = loadMilestones();
     const rec = rows.find((m) => m.id === id && !m.deletedAt);
     if (!rec) throw new Error("NOT_FOUND");
+    assertMilestoneChangeAllowed(liveContract(rec.contractId), { affectsEarnedValue: true });
     if (rec.status !== "NOT_STARTED") throw new Error("MILESTONE_HAS_HISTORY");
     if (loadPayments().some((p) => p.milestoneId === id && !p.deletedAt)) {
       throw new Error("MILESTONE_HAS_PAYMENTS");
@@ -1360,6 +1409,21 @@ export const demoContractsRepository: ContractsRepository = {
     rec.deletedAt = nowISO();
     write(K.milestones, rows);
     return this.listMilestones(rec.contractId);
+  },
+
+  async reorderMilestones(contractId, orderedIds) {
+    // Ordering is presentation, not value — permitted on a settled agreement.
+    assertMilestoneChangeAllowed(liveContract(contractId), { affectsEarnedValue: false });
+    const rows = loadMilestones();
+    const mine = rows.filter((m) => m.contractId === contractId && !m.deletedAt);
+    const owned = new Set(mine.map((m) => m.id));
+    if (orderedIds.some((id) => !owned.has(id))) throw new Error("INVALID_MILESTONE");
+    orderedIds.forEach((id, i) => {
+      const rec = rows.find((m) => m.id === id);
+      if (rec) rec.sequence = i;
+    });
+    write(K.milestones, rows);
+    return this.listMilestones(contractId);
   },
 
   /* ── Amendments ───────────────────────────────────────────────────────── */
@@ -1375,9 +1439,11 @@ export const demoContractsRepository: ContractsRepository = {
     if (contract.status === "CANCELLED") throw new Error("AGREEMENT_CANCELLED");
     if (!input.reason.trim()) throw new Error("REASON_REQUIRED");
 
-    const recon = reconcileAgreement(snapshotFor(contract));
-    if (input.revisedAmountPaise < recon.totalCreditedPaise) throw new Error("REVISION_BELOW_CREDITED");
-    if (input.revisedAmountPaise < recon.earnedValuePaise) throw new Error("REVISION_BELOW_EARNED");
+    const floor = validateRevisedValue({
+      revisedAmountPaise: input.revisedAmountPaise,
+      reconciliation: reconcileAgreement(snapshotFor(contract)),
+    });
+    if (floor) throw new Error(floor);
     if (input.revisedAmountPaise === contract.currentAmountPaise) throw new Error("NO_VALUE_CHANGE");
 
     const rows = loadAmendments();
@@ -1412,9 +1478,20 @@ export const demoContractsRepository: ContractsRepository = {
     const contracts = loadContracts();
     const contract = contracts.find((c) => c.id === rec.contractId && !c.deletedAt);
     if (!contract) throw new Error("NOT_FOUND");
+    if (contract.status === "CANCELLED") throw new Error("AGREEMENT_CANCELLED");
+    if (contract.status === "SETTLED") throw new Error("AGREEMENT_SETTLED");
     // Another amendment landed first — this one was proposed against a value
     // nobody is looking at any more.
     if (contract.currentAmountPaise !== rec.previousAmountPaise) throw new Error("AMENDMENT_STALE");
+
+    // The floor, re-checked against the position NOW rather than at proposal
+    // time: a reduction proposed while little was earned must not land after
+    // milestones have carried earned value above it.
+    const blocked = validateRevisedValue({
+      revisedAmountPaise: rec.revisedAmountPaise,
+      reconciliation: reconcileAgreement(snapshotFor(contract)),
+    });
+    if (blocked) throw new Error(blocked);
 
     rec.status = "APPROVED";
     rec.approvedByName = "Aarav Mehta";

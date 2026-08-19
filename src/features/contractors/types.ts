@@ -69,9 +69,39 @@ export interface ContractorSettlement {
   createdAt: string;
 }
 
+/**
+ * A contractor's ledger, with the two concepts kept explicitly apart.
+ *
+ * `scope` says what `contractor.advanceBalancePaise` MEANS, and every consumer
+ * must read it before labelling that number:
+ *
+ *   COMPANY — the authoritative balance: the fold over every ledger entry
+ *             belonging to this contractor, and the same figure the settlement
+ *             allocator draws against. Granted by `contractors.view_all` or
+ *             `projects.view_all`.
+ *   PROJECT — the fold of the entries this caller may see. A real number about a
+ *             real subset, and NOT the contractor's balance. `contractors.view`
+ *             is project-scoped by design; the catalog reserves cross-project
+ *             lifetime figures for `view_all`.
+ *
+ * `entries` is always only what the caller may inspect. `isPartial` says whether
+ * rows exist beyond them. Conflating a partial fold with a balance is how a
+ * project manager was shown someone else's money labelled as this contractor's.
+ */
+export type LedgerScope = "COMPANY" | "PROJECT";
+
 export interface ContractorLedger {
   contractor: Contractor;
   entries: ContractorLedgerEntry[];
+  /** What `contractor.advanceBalancePaise` covers. Read before labelling it. */
+  scope: LedgerScope;
+  /** True when `entries` is a subset — do not fold it and call it a balance. */
+  isPartial: boolean;
+  /**
+   * How many entries exist beyond the visible ones. A count only: no amount,
+   * project, agreement, actor, date or reason is disclosed.
+   */
+  hiddenEntryCount: number;
 }
 
 // ── Inputs ──────────────────────────────────────────────────────────────

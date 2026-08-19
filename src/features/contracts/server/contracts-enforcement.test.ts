@@ -46,7 +46,14 @@ const h = vi.hoisted(() => ({
     },
     contractScopeItem: { findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn(), update: vi.fn() },
     contractScopeRateRevision: { findMany: vi.fn(), create: vi.fn() },
-    contractMilestone: { findFirst: vi.fn(), findMany: vi.fn(), count: vi.fn(), create: vi.fn(), update: vi.fn() },
+    contractMilestone: {
+      findFirst: vi.fn(),
+      findFirstOrThrow: vi.fn(),
+      findMany: vi.fn(),
+      count: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+    },
     contractAmendment: { findFirst: vi.fn(), findMany: vi.fn(), count: vi.fn(), create: vi.fn(), update: vi.fn() },
     labourAttendance: { count: vi.fn(), findFirst: vi.fn() },
     labourSubcategory: { findFirst: vi.fn() },
@@ -54,6 +61,7 @@ const h = vi.hoisted(() => ({
     project: { findFirst: vi.fn() },
     projectContractor: { upsert: vi.fn() },
     activityLog: { create: vi.fn() },
+    $queryRaw: vi.fn(),
     $transaction: vi.fn(),
   },
 }));
@@ -149,6 +157,15 @@ beforeEach(() => {
   h.prisma.labourAttendance.count.mockResolvedValue(0);
   h.prisma.project.findFirst.mockResolvedValue({ id: "p1" });
   h.prisma.contractor.findFirst.mockResolvedValue({ id: "ct1" });
+  // setMilestoneStatus now locks the agreement row FOR UPDATE and re-reads the
+  // milestone under that lock (see server/milestone-lifecycle.test.ts). Default
+  // both so the ceiling assertions below still reach the check they test.
+  h.prisma.$queryRaw.mockReset().mockResolvedValue([]);
+  h.prisma.contractMilestone.findFirstOrThrow.mockImplementation(async () => {
+    const pre = await h.prisma.contractMilestone.findFirst();
+    return { status: pre?.status ?? "NOT_STARTED", valuePaise: pre?.valuePaise ?? BigInt(0) };
+  });
+
   // $transaction is a bare vi.fn(), so the typeof-"object" sweep above skips it
   // and its call history would leak between tests — reset it explicitly.
   h.prisma.$transaction.mockReset();

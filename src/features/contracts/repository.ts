@@ -56,6 +56,8 @@ export interface ContractsRepository {
   createMilestone(input: CreateMilestoneInput): Promise<Milestone[]>;
   createMilestonesBulk(contractId: string, inputs: CreateMilestoneInput[]): Promise<Milestone[]>;
   updateMilestone(id: string, patch: UpdateMilestoneInput): Promise<Milestone[]>;
+  /** Presentation order only — never touches value. */
+  reorderMilestones(contractId: string, orderedIds: string[]): Promise<Milestone[]>;
   /** COMPLETED is blocked past the authorised value (EARNED_VALUE_EXCEEDS_CONTRACT). */
   setMilestoneStatus(id: string, status: MilestoneStatus, opts?: { reason?: string | null }): Promise<Milestone[]>;
   deleteMilestone(id: string): Promise<Milestone[]>;

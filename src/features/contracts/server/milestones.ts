@@ -26,6 +26,7 @@ import {
   updateMilestoneSchema,
 } from "../schema";
 import type {
+  ContractStatus,
   CreateMilestoneInput,
   Milestone,
   MilestoneStatus,
@@ -33,6 +34,32 @@ import type {
 } from "../types";
 import { loadAgreement, logContract, toMilestones, toSnapshot } from "./internal";
 import { reconcileAgreement } from "../reconcile";
+
+/**
+ * LIFECYCLE GUARD — a milestone change must respect the agreement's own state.
+ *
+ * Neither `loadAgreement` nor the milestone actions previously looked at the
+ * agreement's status, so earned value could be recognised on an agreement that
+ * had been cancelled, and a close-out signed off as SETTLED could be silently
+ * contradicted by reopening a milestone underneath it.
+ *
+ * CANCELLED is void: nothing about it should move again.
+ * SETTLED is a close-out that was only permitted while earned === credited ===
+ * authorised, so any change to earned value or planned coverage would make the
+ * label a lie. Cosmetic edits (a title, a note, ordering) stay allowed.
+ *
+ * Mirrors the precedent already set by `recordContractPayment`, which refuses a
+ * payment against a cancelled agreement for the same reason.
+ */
+function assertMilestoneChangeAllowed(
+  agreementStatus: ContractStatus,
+  opts: { affectsEarnedValue: boolean },
+) {
+  if (agreementStatus === "CANCELLED") throw new Error("AGREEMENT_CANCELLED");
+  if (agreementStatus === "SETTLED" && opts.affectsEarnedValue) {
+    throw new Error("AGREEMENT_SETTLED");
+  }
+}
 
 export async function listMilestones(contractId: string): Promise<Milestone[]> {
   const user = await requirePermission("contracts.view");
@@ -43,6 +70,7 @@ export async function createMilestone(input: CreateMilestoneInput): Promise<Mile
   const user = await requirePermission("contracts.edit");
   const data = createMilestoneSchema.parse(input);
   const contract = await loadAgreement(user, data.contractId);
+  assertMilestoneChangeAllowed(contract.status, { affectsEarnedValue: true });
 
   await prisma.$transaction(async (tx) => {
     const nextSequence =
@@ -87,6 +115,7 @@ export async function createMilestonesBulk(
 ): Promise<Milestone[]> {
   const user = await requirePermission("contracts.edit");
   const contract = await loadAgreement(user, contractId);
+  assertMilestoneChangeAllowed(contract.status, { affectsEarnedValue: true });
   const parsed = inputs.map((i) => createMilestoneSchema.parse({ ...i, contractId }));
   if (parsed.length === 0) return toMilestones(contract);
 
@@ -135,6 +164,9 @@ export async function updateMilestone(
   });
   if (!existing) throw new Error("NOT_FOUND");
   const contract = await loadAgreement(user, existing.contractId);
+  assertMilestoneChangeAllowed(contract.status, {
+    affectsEarnedValue: data.valuePaise !== undefined,
+  });
 
   // Editing the value of an ALREADY-completed milestone changes recognised
   // earned value, so it must respect the same ceiling as completing one.
@@ -150,6 +182,15 @@ export async function updateMilestone(
   }
 
   await prisma.$transaction(async (tx) => {
+    // Raising a COMPLETED milestone's value recognises more earned work, so it
+    // is held behind the same agreement lock as completing one.
+    if (data.valuePaise !== undefined) {
+      await tx.$queryRaw`
+        SELECT id FROM contractor_contracts
+        WHERE id = ${existing.contractId}::uuid
+          AND company_id = ${user.company.id}::uuid
+        FOR UPDATE`;
+    }
     await tx.contractMilestone.update({
       where: { id },
       data: {
@@ -183,7 +224,9 @@ export async function updateMilestone(
 
 export async function reorderMilestones(contractId: string, orderedIds: string[]): Promise<Milestone[]> {
   const user = await requirePermission("contracts.edit");
-  await loadAgreement(user, contractId);
+  const contract = await loadAgreement(user, contractId);
+  // Ordering is presentation, not value — allowed on a settled agreement.
+  assertMilestoneChangeAllowed(contract.status, { affectsEarnedValue: false });
 
   const owned = await prisma.contractMilestone.findMany({
     where: { contractId, companyId: user.company.id, deletedAt: null },
@@ -218,7 +261,8 @@ export async function setMilestoneStatus(
     select: { id: true, contractId: true, title: true, status: true, valuePaise: true },
   });
   if (!existing) throw new Error("NOT_FOUND");
-  await loadAgreement(user, existing.contractId);
+  const agreement = await loadAgreement(user, existing.contractId);
+  assertMilestoneChangeAllowed(agreement.status, { affectsEarnedValue: true });
 
   if (data.status === "CANCELLED" && !data.reason) throw new Error("CANCEL_REASON_REQUIRED");
 
@@ -241,6 +285,31 @@ export async function setMilestoneStatus(
   }
 
   await prisma.$transaction(async (tx) => {
+    // CONCURRENCY. Lock the AGREEMENT row before reading any milestone, so two
+    // completions on the same agreement serialize.
+    //
+    // Without it the ceiling is checkable but not enforceable: under READ
+    // COMMITTED two transactions completing DIFFERENT milestones each read the
+    // other's pre-commit state, both see the same `alreadyCompleted`, both pass
+    // the ceiling, and both commit — recognising more earned value than the
+    // agreement authorises. They never touch the same row, so nothing else made
+    // them wait. Same pattern as createSettlement's FOR UPDATE on attendance.
+    await tx.$queryRaw`
+      SELECT id FROM contractor_contracts
+      WHERE id = ${existing.contractId}::uuid
+        AND company_id = ${user.company.id}::uuid
+      FOR UPDATE`;
+
+    // Re-read the milestone now that we hold the lock. A duplicate submission
+    // that lost the race finds its work already done and returns quietly rather
+    // than writing a second identical status change and a second audit entry.
+    const current = await tx.contractMilestone.findFirstOrThrow({
+      where: { id },
+      select: { status: true, valuePaise: true },
+    });
+    // Already in the target state: the winner did this work. Nothing to write.
+    if (current.status === data.status) return;
+
     if (data.status === "COMPLETED") {
       const fresh = await tx.contractorContract.findFirstOrThrow({
         where: { id: existing.contractId, companyId: user.company.id },
@@ -254,7 +323,7 @@ export async function setMilestoneStatus(
 
       const blocked = validateMilestoneCompletion({
         alreadyCompletedValuePaise: alreadyCompleted,
-        thisMilestoneValuePaise: Number(existing.valuePaise),
+        thisMilestoneValuePaise: Number(current.valuePaise),
         currentContractValuePaise: Number(fresh.currentAmountPaise),
       });
       if (blocked) throw new Error(`EARNED_VALUE_EXCEEDS_CONTRACT: ${blocked}`);
@@ -282,7 +351,7 @@ export async function setMilestoneStatus(
         milestoneId: id,
         from: existing.status,
         to: data.status,
-        valuePaise: Number(existing.valuePaise),
+        valuePaise: Number(current.valuePaise),
         ...(data.reason ? { reason: data.reason } : {}),
       },
     );
@@ -303,7 +372,8 @@ export async function deleteMilestone(id: string): Promise<Milestone[]> {
     select: { id: true, contractId: true, title: true, status: true },
   });
   if (!existing) throw new Error("NOT_FOUND");
-  await loadAgreement(user, existing.contractId);
+  const agreement = await loadAgreement(user, existing.contractId);
+  assertMilestoneChangeAllowed(agreement.status, { affectsEarnedValue: true });
 
   if (existing.status !== "NOT_STARTED") throw new Error("MILESTONE_HAS_HISTORY");
   const linked = await prisma.contractorContractPayment.count({
