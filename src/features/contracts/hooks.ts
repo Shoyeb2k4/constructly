@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { contractsApi, contractKeys } from "./data";
 import { describeAgreementError } from "./agreement-actions";
+import { describeBlocker } from "./attribution";
 import type {
   AddScopeItemInput,
   ContractFilters,
@@ -234,6 +235,104 @@ export function useRemoveScopeItem() {
     onSuccess: invalidate,
     onError: (e: unknown) =>
       toast.error(describeAgreementError(e, "Couldn't remove the labour type.")),
+  });
+}
+
+/* ── Settled-attribution correction ─────────────────────────────────────── */
+
+export function useAttributableLabour(contractorId: string, projectId: string | null) {
+  return useQuery({
+    queryKey: [...contractKeys.all, "attributable", contractorId, projectId],
+    queryFn: () => contractsApi.listAttributableLabour(contractorId, projectId!),
+    enabled: !!contractorId && !!projectId,
+  });
+}
+
+export function useAttributionPreview(input: {
+  contractorId: string;
+  projectId: string | null;
+  contractId: string | null;
+  attendanceIds: string[];
+}) {
+  return useQuery({
+    queryKey: [
+      ...contractKeys.all,
+      "attribution-preview",
+      input.contractorId,
+      input.projectId,
+      input.contractId,
+      // Sorted so re-selecting in a different order doesn't refetch.
+      [...input.attendanceIds].sort().join(","),
+    ],
+    queryFn: () =>
+      contractsApi.previewAttribution({
+        contractorId: input.contractorId,
+        projectId: input.projectId!,
+        contractId: input.contractId!,
+        attendanceIds: input.attendanceIds,
+      }),
+    enabled: !!input.projectId && !!input.contractId && input.attendanceIds.length > 0,
+  });
+}
+
+/**
+ * Invalidate everything a correction moves.
+ *
+ * Attribution changes which agreement a settled row belongs to, so it moves
+ * agreement credit (contracts), the unattributed position (contracts), and the
+ * attendance sheet's own view of the row (labour). The contractor keys carry the
+ * ledger and cost summary, which must NOT change — invalidated anyway so a
+ * reader can see for themselves that they didn't.
+ */
+function useInvalidateAttribution() {
+  const qc = useQueryClient();
+  return () => {
+    qc.invalidateQueries({ queryKey: contractKeys.all });
+    qc.invalidateQueries({ queryKey: ["contractors"] });
+    qc.invalidateQueries({ queryKey: ["labour"] });
+  };
+}
+
+export function useAttributeSettledLabour() {
+  const invalidate = useInvalidateAttribution();
+  return useMutation({
+    mutationFn: (input: {
+      contractorId: string;
+      projectId: string;
+      contractId: string;
+      attendanceIds: string[];
+      reason: string;
+    }) => contractsApi.attributeSettledLabour(input),
+    // A refusal is a DECISION, not a transient failure — never retry it.
+    retry: false,
+    onSuccess: (res) => {
+      invalidate();
+      if ("blockers" in res) return; // the sheet renders the reason
+      toast.success(
+        `Attributed ${res.rowCount} record${res.rowCount === 1 ? "" : "s"} to ${res.contractTitle}`,
+      );
+    },
+    onError: (e: unknown) =>
+      toast.error(describeAgreementError(e, "Couldn't attribute that labour.")),
+  });
+}
+
+export function useReverseAttribution() {
+  const invalidate = useInvalidateAttribution();
+  return useMutation({
+    mutationFn: (input: { correctionId: string; reason: string }) =>
+      contractsApi.reverseAttribution(input),
+    retry: false,
+    onSuccess: (res) => {
+      invalidate();
+      if ("blockers" in res) {
+        toast.error(describeBlocker(res.blockers[0]));
+        return;
+      }
+      toast.success("Attribution reversed — the labour is unattributed again");
+    },
+    onError: (e: unknown) =>
+      toast.error(describeAgreementError(e, "Couldn't reverse that attribution.")),
   });
 }
 

@@ -39,3 +39,33 @@ describe("gatherDemoDashboard — brand-new company", () => {
     expect(() => assembleDashboard(raw)).not.toThrow();
   });
 });
+
+/**
+ * A dashboard that under-reports is worse than one that fails: nothing looks
+ * wrong. Each module's demo repository seeds its own store lazily on first
+ * read, so before this fix the dashboard showed zero purchase orders, zero
+ * vendors and zero labour on a fresh session — and the numbers then changed
+ * underneath the user once they visited those modules.
+ */
+describe("a fresh session, before any module has been visited", () => {
+  it("seeds the stores it reads instead of reporting zero", () => {
+    localStorage.clear();
+
+    const raw = gatherDemoDashboard({ userId: "u1", isOwner: true });
+
+    expect(raw.projects.length, "projects").toBeGreaterThan(0);
+    expect(raw.procurementPOs.length, "purchase orders").toBeGreaterThan(0);
+    expect(raw.labourEntries.length, "labour entries").toBeGreaterThan(0);
+  });
+
+  it("agrees with what the modules themselves would seed", () => {
+    localStorage.clear();
+    const first = gatherDemoDashboard({ userId: "u1", isOwner: true });
+    // A second gather reads the now-persisted stores rather than re-seeding,
+    // and must produce the same picture.
+    const second = gatherDemoDashboard({ userId: "u1", isOwner: true });
+
+    expect(second.procurementPOs.length).toBe(first.procurementPOs.length);
+    expect(second.projects.length).toBe(first.projects.length);
+  });
+});

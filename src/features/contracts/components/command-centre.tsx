@@ -18,6 +18,8 @@ import * as React from "react";
 import { FileText, Info, Plus } from "lucide-react";
 import { EmptyState } from "@/components/patterns/empty-state";
 import { MoneyText } from "@/components/patterns/money-text";
+import { FinancialGrid, FinancialLine } from "@/components/patterns/financial-grid";
+import { StatCard } from "@/components/patterns/stat-card";
 import { formatPaiseSmart } from "@/lib/money";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -35,6 +37,8 @@ import {
   PAYMENT_TYPE_LABEL,
 } from "../constants";
 import { RecordPaymentLauncher, ReversePaymentButton } from "./payment-actions";
+import { AttributeLabourSheet } from "./attribute-labour-sheet";
+import { useCan } from "@/features/rbac/permission-context";
 
 /**
  * The settlement fields these tabs render. Declared structurally rather than
@@ -79,34 +83,27 @@ export function Stat({
   );
 }
 
-function Line({
-  label,
-  paise,
-  tone,
-  strong,
-  note,
-}: {
-  label: string;
-  paise: number;
-  tone?: string;
-  strong?: boolean;
-  note?: string;
-}) {
-  return (
-    <div className="flex items-baseline justify-between gap-4 py-1.5">
-      <span className={cn("text-sm", strong ? "font-medium" : "text-foreground-muted")}>
-        {label}
-        {note && <span className="ml-1.5 text-xs text-foreground-subtle">{note}</span>}
-      </span>
-      <MoneyText paise={paise} className={cn("font-mono", strong && "font-semibold", tone)} />
-    </div>
-  );
+/**
+ * Local alias for the shared pattern. Kept so the many call sites below read
+ * unchanged, but the geometry now comes from `FinancialLine`, which guarantees
+ * the label yields before the amount does.
+ */
+function Line(props: React.ComponentProps<typeof FinancialLine>) {
+  return <FinancialLine {...props} />;
 }
 
 /**
- * Labour recorded on a project that no agreement has claimed. Shown OUTSIDE
- * every agreement total, because reconciliation must not guess which agreement
- * unattributed labour belongs to.
+ * SETTLED labour that no agreement has claimed.
+ *
+ * Deliberately not called missing, lost or unallocated money. It is neither: the
+ * work happened, a settlement paid for it, and it sits correctly in the
+ * contractor's project history. What is absent is an ATTRIBUTION — a link to a
+ * commercial agreement — and that is why no agreement's Due or Ahead figure
+ * includes it. Saying otherwise would send someone hunting for a payment that
+ * was never missing.
+ *
+ * Hidden entirely at zero (the common case): a permanent "₹0 unattributed"
+ * notice is noise that trains people to skip the banner when it matters.
  */
 export function UnattributedBanner({ paise, projectName }: { paise: number; projectName?: string }) {
   if (paise <= 0) return null;
@@ -115,10 +112,84 @@ export function UnattributedBanner({ paise, projectName }: { paise: number; proj
       <Info className="mt-0.5 size-4 shrink-0 text-foreground-subtle" />
       <p>
         <MoneyText paise={paise} className="font-medium text-foreground" /> of settled labour
-        {projectName ? ` on ${projectName}` : ""} isn&rsquo;t attributed to an agreement yet, so it
-        is <strong>not counted</strong> in any agreement below. Attribution arrives with the
-        agreement-aware attendance flow.
+        {/* The explicit {" "} matters: JSX drops the whitespace between an
+            expression and a literal that starts on the next line, which ran
+            "labour" into "is" — caught in browser verification, not by tests. */}
+        {projectName ? ` on ${projectName}` : ""}{" "}
+        is not attributed to an agreement. It is part of this contractor&rsquo;s settled project
+        history, but it is credited to no agreement — so the Due and Ahead figures below{" "}
+        <strong>exclude</strong> it.
       </p>
+    </div>
+  );
+}
+
+/**
+ * The per-project breakdown, shown on Reconciliation where the detail belongs.
+ *
+ * Built entirely from `profile.attendance`, which the server computed and
+ * scoped. Nothing here re-sums attendance — a second calculation in React is
+ * exactly how two screens end up disagreeing about the same money.
+ */
+export function UnattributedBreakdown({ profile }: { profile: ContractorProfile }) {
+  const can = useCan();
+  // The correction changes RECOGNISED financial credit on a closed settlement,
+  // so it has its own danger permission rather than riding on contracts.edit.
+  // A viewer still sees the amount and the explanation — just not the action.
+  const canCorrect = can("contractors.attribute_history");
+  const [attributing, setAttributing] = React.useState<{ projectId: string; projectName: string } | null>(null);
+
+  const rows = profile.attendance.filter((a) => a.settledUnattributedPaise > 0);
+  if (rows.length === 0) return null;
+  return (
+    <div className="rounded-xl border border-border bg-surface">
+      <div className="border-b border-border px-4 py-2.5">
+        <p className="text-sm font-semibold">Settled labour not attributed to an agreement</p>
+        <p className="mt-0.5 text-xs text-foreground-subtle">
+          This is why a contractor&rsquo;s settled labour can exceed the total attendance credit
+          across their agreements. Attributing it after the fact is a governed correction, so
+          nothing here is assigned automatically.
+        </p>
+      </div>
+      <div className="divide-y divide-border">
+        {rows.map((a) => (
+          <div key={a.projectId} className="flex flex-wrap items-baseline justify-between gap-2 px-4 py-2.5 text-sm">
+            <span>{a.projectName}</span>
+            <span className="flex flex-wrap items-baseline gap-3 font-mono text-xs text-foreground-subtle">
+              <span>
+                attributed <MoneyText paise={a.settledAttributedPaise} />
+              </span>
+              <span className="font-medium text-foreground">
+                unattributed <MoneyText paise={a.settledUnattributedPaise} />
+              </span>
+              {canCorrect && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    setAttributing({ projectId: a.projectId, projectName: a.projectName })
+                  }
+                  className="font-sans text-xs text-primary transition-colors hover:underline"
+                >
+                  Review unattributed labour
+                </button>
+              )}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      {attributing && (
+        <AttributeLabourSheet
+          open
+          onOpenChange={(o: boolean) => !o && setAttributing(null)}
+          contractorId={profile.contractor.id}
+          projectId={attributing.projectId}
+          projectName={attributing.projectName}
+          agreements={
+            profile.projects.find((g) => g.projectId === attributing.projectId)?.contracts ?? []
+          }
+        />
+      )}
     </div>
   );
 }
@@ -134,28 +205,85 @@ export function OverviewTab({
   onCreateAgreement?: () => void;
 }) {
   const l = profile.lifetime;
+  const unattributedPaise = profile.attendanceTotals.settledUnattributedPaise;
+
   if (l.agreementCount === 0) {
     return (
-      <EmptyState
-        icon={FileText}
-        title="No agreements yet"
-        description="An agreement is this contractor's commercial arrangement on a project — its value, scope, rates and milestones. Without one you can still record attendance, pay advances and settle weekly; an agreement is what adds earned value and what is genuinely payable today."
-        action={<CreateAgreementButton onClick={onCreateAgreement} />}
-      />
+      <div className="space-y-4">
+        {/* No agreements at all, yet settled labour can still exist — an
+            attendance-only contractor. Saying nothing here would leave that
+            money invisible on the tab people land on. */}
+        <UnattributedBanner paise={unattributedPaise} />
+        <EmptyState
+          icon={FileText}
+          title="No agreements yet"
+          description="An agreement is this contractor's commercial arrangement on a project — its value, scope, rates and milestones. Without one you can still record attendance, pay advances and settle weekly; an agreement is what adds earned value and what is genuinely payable today."
+          action={<CreateAgreementButton onClick={onCreateAgreement} />}
+        />
+      </div>
     );
   }
 
   return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-        <Stat label="Agreement value" money={l.totalContractValuePaise} />
-        <Stat label="Earned" money={l.totalEarnedPaise} />
-        <Stat label="Credited" money={l.totalCreditedPaise} tone="text-success-foreground" />
-        {/* Due and Ahead sit side by side and are NEVER combined. */}
-        <Stat label="Currently due" money={l.totalCurrentDuePaise} tone="text-warning-foreground" />
-        <Stat label="Paid ahead" money={l.totalAdvanceCreditPaise} />
-        <Stat label="Unsettled labour" money={l.totalUnsettledAttendancePaise} />
+    <div className="space-y-5">
+      {/* DECISION METRICS — what a user opens this record to decide. Due and
+          Ahead sit side by side and are NEVER combined: one agreement's advance
+          does not settle another's liability.
+
+          Tone is meaning, not category. Due carries attention because it may
+          need acting on; Ahead is simply a fact, so it is neutral — the old grid
+          coloured both amber, which told the reader that two opposite states
+          were the same kind of thing. */}
+      <div className="grid gap-3 sm:grid-cols-2">
+        <StatCard
+          label="Currently due"
+          value={<MoneyText paise={l.totalCurrentDuePaise} />}
+          tone={l.totalCurrentDuePaise > 0 ? "attention" : "default"}
+          hint="Earned work not yet credited, summed across agreements."
+        />
+        <StatCard
+          label="Paid ahead"
+          value={<MoneyText paise={l.totalAdvanceCreditPaise} />}
+          hint="Credited beyond what has been earned so far."
+        />
       </div>
+
+      {/* COMMERCIAL CONTEXT — the frame those decisions sit in. Secondary
+          weight: a bordered strip rather than three more cards. */}
+      <div className="rounded-xl border border-border bg-surface px-4 py-3">
+        <FinancialGrid>
+          <FinancialLine label="Authorised work" paise={l.totalContractValuePaise} />
+          <FinancialLine label="Earned" paise={l.totalEarnedPaise} />
+          <FinancialLine
+            label="Credited"
+            paise={l.totalCreditedPaise}
+            tone="text-success-foreground"
+          />
+        </FinancialGrid>
+      </div>
+
+      {/* SUPPORTING — explicitly not part of the statement above. */}
+      {l.totalUnsettledAttendancePaise > 0 && (
+        <div className="rounded-xl border border-border bg-surface px-4 py-3">
+          <FinancialGrid>
+            <FinancialLine
+              label="Unsettled labour"
+              paise={l.totalUnsettledAttendancePaise}
+              note="informational"
+            />
+          </FinancialGrid>
+        </div>
+      )}
+
+      {/* Compact and only when non-zero. The full explanation lives on
+          Reconciliation; Overview just makes sure nobody misses that it exists. */}
+      {unattributedPaise > 0 && (
+        <p className="text-xs text-foreground-muted">
+          <MoneyText paise={unattributedPaise} className="font-medium text-foreground" /> of
+          settled labour is not attributed to any agreement, so the figures above exclude it.{" "}
+          <span className="text-foreground-subtle">See Reconciliation for the breakdown.</span>
+        </p>
+      )}
 
       <p className="text-xs text-foreground-subtle">
         Due and Ahead belong to different agreements and are shown separately — one agreement&rsquo;s
@@ -228,7 +356,7 @@ function AgreementRow({
         {actions}
       </div>
 
-      <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-3">
+      <FinancialGrid className="mt-2">
         <Line label="Authorised value" paise={c.currentAmountPaise} />
         <Line
           label="Earned"
@@ -253,7 +381,7 @@ function AgreementRow({
         {r.unsettledAttendancePaise > 0 && (
           <Line label="Unsettled labour" paise={r.unsettledAttendancePaise} note="informational" />
         )}
-      </div>
+      </FinancialGrid>
 
       {r.earnedValueExcessPaise > 0 && (
         <p className="mt-1.5 text-xs text-danger-foreground">
@@ -296,16 +424,15 @@ export function CreateAgreementButton({
  */
 export function AgreementsTab({
   profile,
-  unattributedPaise,
   onCreateAgreement,
   /** Rendered per agreement. Omitted when the viewer may do nothing to them. */
   renderActions,
 }: {
   profile: ContractorProfile;
-  unattributedPaise: number;
   onCreateAgreement?: () => void;
   renderActions?: (contract: Contract) => React.ReactNode;
 }) {
+  const unattributedPaise = profile.attendanceTotals.settledUnattributedPaise;
   if (profile.projects.length === 0) {
     return (
       <EmptyState
@@ -420,22 +547,28 @@ export function ReconciliationStatement({
 
 export function ReconciliationTab({
   profile,
-  unattributedPaise,
   onCreateAgreement,
 }: {
   profile: ContractorProfile;
-  unattributedPaise: number;
   onCreateAgreement?: () => void;
 }) {
   const contracts = profile.projects.flatMap((g) => g.contracts);
+  // The figure comes from the server's bucketing, never from summing here.
+  const unattributedPaise = profile.attendanceTotals.settledUnattributedPaise;
+
   if (contracts.length === 0) {
     return (
-      <EmptyState
-        icon={FileText}
-        title="Nothing to reconcile"
-        description="Reconciliation compares what an agreement has earned against what it has been credited. Create one to see it."
-        action={<CreateAgreementButton onClick={onCreateAgreement} />}
-      />
+      <div className="space-y-4">
+        {/* An attendance-only contractor has no agreement to reconcile, but may
+            still hold settled labour — which is unattributed by definition. */}
+        <UnattributedBreakdown profile={profile} />
+        <EmptyState
+          icon={FileText}
+          title="Nothing to reconcile"
+          description="Reconciliation compares what an agreement has earned against what it has been credited. Create one to see it."
+          action={<CreateAgreementButton onClick={onCreateAgreement} />}
+        />
+      </div>
     );
   }
   return (
@@ -444,6 +577,7 @@ export function ReconciliationTab({
       {contracts.map((c) => (
         <ReconciliationStatement key={c.id} contract={c} />
       ))}
+      <UnattributedBreakdown profile={profile} />
     </div>
   );
 }

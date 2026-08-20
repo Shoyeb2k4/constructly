@@ -9,8 +9,8 @@ import { RowsSkeleton } from "@/components/patterns/loading-state";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Card } from "@/components/ui/card";
 import { MoneyText } from "@/components/patterns/money-text";
+import { DataTable } from "@/components/patterns/data-table";
 import {
   Select,
   SelectContent,
@@ -32,12 +32,62 @@ import { useRecentVendors } from "../recently-vendors";
 import { useCan } from "@/features/rbac/permission-context";
 import { AddVendorSheet } from "./add-vendor-sheet";
 
-export function VendorsView() {
+/** Pin, edit and lifecycle for one vendor. Kept out of the row link. */
+function VendorRowActions({ vendor: v }: { vendor: Vendor }) {
   const can = useCan();
-  const canCreate = can("vendors.create");
   const canEdit = can("vendors.edit");
   const canArchive = can("vendors.archive");
   const canRestore = can("vendors.restore");
+  const { setStatus: setStatusM, toggleFavorite } = useVendorMutations();
+
+  const lifecycle = v.status === "ACTIVE" ? canArchive : canRestore;
+  return (
+    <span className="flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
+      <button
+        onClick={() => toggleFavorite.mutate(v.id)}
+        aria-label={v.isFavorite ? `Unpin ${v.businessName}` : `Pin ${v.businessName}`}
+        aria-pressed={v.isFavorite}
+        className="rounded-sm p-1 text-foreground-subtle transition-colors hover:text-warning focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <Star className={cn("size-4", v.isFavorite && "fill-warning text-warning")} />
+      </button>
+      {lifecycle && (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon" className="size-8" aria-label={`Actions for ${v.businessName}`}>
+              <MoreHorizontal className="size-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            {canEdit && (
+              <DropdownMenuItem asChild>
+                <Link href={`/vendors/${v.id}`}>
+                  <Pencil />
+                  Open vendor
+                </Link>
+              </DropdownMenuItem>
+            )}
+            <DropdownMenuItem
+              onSelect={() =>
+                setStatusM.mutate({
+                  id: v.id,
+                  status: v.status === "ACTIVE" ? "INACTIVE" : "ACTIVE",
+                })
+              }
+            >
+              {v.status === "ACTIVE" ? <UserX /> : <UserCheck />}
+              {v.status === "ACTIVE" ? "Deactivate" : "Activate"}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
+    </span>
+  );
+}
+
+export function VendorsView() {
+  const can = useCan();
+  const canCreate = can("vendors.create");
   const [search, setSearch] = React.useState("");
   const [status, setStatus] = React.useState<VendorStatus | "ALL">("ALL");
   const [material, setMaterial] = React.useState("ALL");
@@ -48,7 +98,6 @@ export function VendorsView() {
   const filters: VendorFilters = { search, status, material, favoritesOnly };
   const { data: vendors = [], isLoading } = useVendors(filters);
   const { data: materials = [] } = useMaterials();
-  const { setStatus: setStatusM, toggleFavorite } = useVendorMutations();
   const recent = useRecentVendors();
 
   return (
@@ -83,7 +132,7 @@ export function VendorsView() {
           </SelectContent>
         </Select>
         <Select value={status} onValueChange={(v) => setStatus(v as VendorStatus | "ALL")}>
-          <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
+          <SelectTrigger className="w-32" aria-label="Filter by vendor status"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="ALL">All</SelectItem>
             <SelectItem value="ACTIVE">Active</SelectItem>
@@ -105,56 +154,123 @@ export function VendorsView() {
           action={canCreate ? <Button variant="primary" size="sm" onClick={() => setAddOpen(true)}><Plus />Add vendor</Button> : undefined}
         />
       ) : (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {vendors.map((v) => (
-            <Card key={v.id} className={cn("p-5 transition-shadow hover:shadow-[0_2px_12px_rgba(16,18,29,0.06)]", v.status === "INACTIVE" && "opacity-70")}>
+        <DataTable
+          caption="Vendors"
+          rows={vendors}
+          getRowKey={(v) => v.id}
+          rowHref={(v) => `/vendors/${v.id}`}
+          columns={[
+            {
+              key: "vendor",
+              header: "Vendor",
+              cell: (v) => (
+                <span className="block min-w-0">
+                  <span className="block font-medium">{v.businessName}</span>
+                  <span className="text-xs text-foreground-subtle">
+                    {v.contactPerson || "No contact"}
+                  </span>
+                </span>
+              ),
+            },
+            {
+              key: "status",
+              header: "Status",
+              cell: (v) => (
+                <Badge variant={v.status === "INACTIVE" ? "neutral" : "success"}>
+                  {v.status === "INACTIVE" ? "Inactive" : "Active"}
+                </Badge>
+              ),
+            },
+            {
+              key: "materials",
+              header: "Supplies",
+              hideBelow: "xl",
+              cell: (v) =>
+                v.materialsSupplied.length > 0 ? (
+                  <span className="flex flex-wrap gap-1">
+                    {v.materialsSupplied.slice(0, 2).map((m) => (
+                      <TagChip key={m} label={m} />
+                    ))}
+                    {v.materialsSupplied.length > 2 && (
+                      <TagChip label={`+${v.materialsSupplied.length - 2}`} />
+                    )}
+                  </span>
+                ) : (
+                  <span className="text-xs text-foreground-subtle">—</span>
+                ),
+            },
+            {
+              key: "pos",
+              header: "POs",
+              numeric: true,
+              hideBelow: "lg",
+              cell: (v) => <span className="text-foreground-muted">{v.poCount}</span>,
+            },
+            {
+              key: "purchased",
+              header: "Lifetime purchases",
+              numeric: true,
+              hideBelow: "md",
+              // Ordinary spend, ordinary tone. Colouring every rupee amber
+              // teaches the eye to ignore the colour that should mean "act".
+              cell: (v) => (
+                <span className="text-foreground-muted">
+                  <MoneyText paise={v.totalPurchasedPaise} compact />
+                </span>
+              ),
+            },
+            {
+              key: "outstanding",
+              header: "Outstanding",
+              numeric: true,
+              hideBelow: "lg",
+              cell: (v) => <MoneyText paise={v.outstandingPaise} compact />,
+            },
+            {
+              key: "actions",
+              header: "Actions",
+              headerHidden: true,
+              numeric: true,
+              cell: (v) => <VendorRowActions vendor={v} />,
+            },
+          ]}
+          renderCard={(v) => (
+            <div className="rounded-xl border border-border bg-surface p-3">
               <div className="flex items-start justify-between gap-2">
-                <Link href={`/vendors/${v.id}`} className="min-w-0 flex-1">
-                  <p className="truncate font-medium hover:underline">{v.businessName}</p>
-                  {v.contactPerson && <p className="mt-0.5 truncate text-xs text-foreground-subtle">{v.contactPerson}</p>}
+                <Link
+                  href={`/vendors/${v.id}`}
+                  className="min-w-0 rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <span className="block font-medium">{v.businessName}</span>
+                  <span className="text-xs text-foreground-subtle">
+                    {v.contactPerson || "No contact"}
+                  </span>
                 </Link>
-                <div className="flex items-center">
-                  <button onClick={() => toggleFavorite.mutate(v.id)} aria-label="Favorite" className="p-1 text-foreground-subtle hover:text-warning">
-                    <Star className={cn("size-4", v.isFavorite && "fill-warning text-warning")} />
-                  </button>
-                  {(canEdit || (v.status === "ACTIVE" ? canArchive : canRestore)) && (
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="icon" className="size-8 text-foreground-subtle" aria-label="Actions"><MoreHorizontal className="size-4" /></Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        {canEdit && (
-                          <DropdownMenuItem onSelect={() => setEditVendor(v)}>
-                            <Pencil />
-                            Edit
-                          </DropdownMenuItem>
-                        )}
-                        {(v.status === "ACTIVE" ? canArchive : canRestore) && (
-                          <DropdownMenuItem onSelect={() => setStatusM.mutate({ id: v.id, status: v.status === "ACTIVE" ? "INACTIVE" : "ACTIVE" })}>
-                            {v.status === "ACTIVE" ? <UserX /> : <UserCheck />}
-                            {v.status === "ACTIVE" ? "Deactivate" : "Activate"}
-                          </DropdownMenuItem>
-                        )}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  )}
-                </div>
+                <VendorRowActions vendor={v} />
               </div>
-              <div className="mt-3 flex flex-wrap gap-1">
-                {v.materialsSupplied.slice(0, 3).map((m) => <TagChip key={m} label={m} />)}
-                {v.materialsSupplied.length > 3 && <TagChip label={`+${v.materialsSupplied.length - 3}`} />}
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <Badge variant={v.status === "INACTIVE" ? "neutral" : "success"}>
+                  {v.status === "INACTIVE" ? "Inactive" : "Active"}
+                </Badge>
+                <span className="text-xs text-foreground-muted">
+                  {v.poCount} PO{v.poCount === 1 ? "" : "s"}
+                </span>
               </div>
-              <div className="mt-4 flex items-end justify-between border-t border-border pt-3">
-                <div>
-                  <p className="text-xs text-foreground-subtle">Lifetime purchases</p>
-                  <p className="font-mono text-sm font-medium"><MoneyText paise={v.totalPurchasedPaise} /></p>
-                </div>
-                <span className="text-xs text-foreground-subtle">{v.poCount} PO{v.poCount === 1 ? "" : "s"}</span>
+              <div className="mt-2 flex items-baseline justify-between gap-3 text-xs">
+                <span className="text-foreground-muted">Lifetime purchases</span>
+                <span className="shrink-0 font-mono tabular-nums">
+                  <MoneyText paise={v.totalPurchasedPaise} compact />
+                </span>
               </div>
-              {v.status === "INACTIVE" && <Badge variant="neutral" className="mt-3">Inactive</Badge>}
-            </Card>
-          ))}
-        </div>
+              <div className="flex items-baseline justify-between gap-3 text-xs">
+                <span className="text-foreground-muted">Outstanding</span>
+                <span className="shrink-0 font-mono tabular-nums">
+                  <MoneyText paise={v.outstandingPaise} compact />
+                </span>
+              </div>
+            </div>
+          )}
+        />
       )}
 
       <AddVendorSheet open={addOpen} onOpenChange={setAddOpen} />

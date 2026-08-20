@@ -236,7 +236,7 @@ export function RolesManager() {
                 className={cn(
                   "group flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-sm transition-colors",
                   active
-                    ? "bg-primary/10 text-primary ring-1 ring-inset ring-primary/20"
+                    ? "bg-primary-subtle text-primary-emphasis ring-1 ring-inset ring-primary/20"
                     : "text-foreground hover:bg-surface-muted",
                 )}
               >

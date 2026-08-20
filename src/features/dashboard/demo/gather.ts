@@ -10,6 +10,17 @@ import type {
   RawSpendEntry,
 } from "../types";
 import { poPaymentStatus } from "@/features/procurement/calc";
+import {
+  DEMO_VENDORS,
+  demoPayments,
+  demoPurchaseOrders,
+} from "@/features/procurement/demo/seed";
+import {
+  DEMO_CATEGORIES,
+  DEMO_SUBCATEGORIES,
+  demoLabourAttendance,
+} from "@/features/labor/demo/seed";
+import { demoSeed as demoProjectSeed } from "@/features/projects/demo/seed";
 import type { PurchaseOrderListItem } from "@/features/procurement/types";
 
 const K = {
@@ -24,13 +35,36 @@ const K = {
   payments: "constructly.demo.vendorPayments.v1",
 };
 
-function read<T>(key: string): T[] {
+/**
+ * Read a demo store, SEEDING it if it does not exist yet.
+ *
+ * DEFECT FIX. Each module's demo repository seeds its store on first read, so a
+ * store only exists once that module has been visited. This gatherer used to
+ * read the raw keys and return `[]` when they were missing — so on a fresh
+ * session the dashboard silently reported zero purchase orders, zero vendors
+ * and zero labour until the user had toured every module, and then the numbers
+ * changed underneath them. A summary that under-reports is worse than one that
+ * fails, because nothing looks wrong.
+ *
+ * The seeds used here are the SAME functions the module repositories use, so
+ * the dashboard can never disagree with the module it summarises.
+ */
+function read<T>(key: string, seed?: () => unknown[]): T[] {
   if (typeof window === "undefined") return [];
   try {
-    return JSON.parse(window.localStorage.getItem(key) ?? "[]") as T[];
+    const raw = window.localStorage.getItem(key);
+    if (raw != null) return JSON.parse(raw) as T[];
   } catch {
     return [];
   }
+  if (!seed) return [];
+  const seeded = structuredClone(seed()) as T[];
+  try {
+    window.localStorage.setItem(key, JSON.stringify(seeded));
+  } catch {
+    /* storage unavailable — the read still returns the data */
+  }
+  return seeded;
 }
 
 interface StoredProject {
@@ -49,28 +83,37 @@ interface StoredVendor { id: string; businessName: string }
 interface StoredPayment { vendorId: string; projectId: string; purchaseOrderId: string | null; amountPaise: number }
 
 /** Read the current key, falling back to the pre-v2 store if not migrated. */
-function readWithFallback<T>(key: string, legacy: string): T[] {
+function readWithFallback<T>(key: string, legacy: string, seed?: () => unknown[]): T[] {
   if (typeof window === "undefined") return [];
   if (window.localStorage.getItem(key) != null) return read<T>(key);
-  return read<T>(legacy);
+  if (window.localStorage.getItem(legacy) != null) return read<T>(legacy);
+  return read<T>(key, seed);
 }
 
 export function gatherDemoDashboard(opts: { userId: string; isOwner: boolean }): RawDashboardData {
   const today = new Date().toISOString().slice(0, 10);
   const approval = demoApprovalRequired();
 
-  let projects = read<StoredProject>(K.projects);
+  let projects = read<StoredProject>(K.projects, demoProjectSeed);
   if (!opts.isOwner) projects = projects.filter((p) => p.pm?.id === opts.userId);
   const projectIds = new Set(projects.map((p) => p.id));
   const projMeta = new Map(projects.map((p) => [p.id, { name: p.name, code: p.code }]));
 
-  const categories = read<StoredCategory>(K.labourCategories);
+  const categories = read<StoredCategory>(K.labourCategories, () => DEMO_CATEGORIES);
   const catById = new Map(categories.map((c) => [c.id, c]));
-  const subById = new Map(read<StoredSubcategory>(K.labourSubcategories).map((s) => [s.id, s]));
-  const labour = read<StoredLabour>(K.labourAttendance).filter((a) => projectIds.has(a.projectId));
-  const pos = readWithFallback<StoredPO>(K.pos, K.posV1).filter((p) => projectIds.has(p.projectId));
-  const vendors = readWithFallback<StoredVendor>(K.vendors, K.vendorsV1);
-  const payments = read<StoredPayment>(K.payments).filter((p) => projectIds.has(p.projectId));
+  const subById = new Map(
+    read<StoredSubcategory>(K.labourSubcategories, () => DEMO_SUBCATEGORIES).map((s) => [s.id, s]),
+  );
+  const labour = read<StoredLabour>(K.labourAttendance, demoLabourAttendance).filter((a) =>
+    projectIds.has(a.projectId),
+  );
+  const pos = readWithFallback<StoredPO>(K.pos, K.posV1, demoPurchaseOrders).filter((p) =>
+    projectIds.has(p.projectId),
+  );
+  const vendors = readWithFallback<StoredVendor>(K.vendors, K.vendorsV1, () => DEMO_VENDORS);
+  const payments = read<StoredPayment>(K.payments, demoPayments).filter((p) =>
+    projectIds.has(p.projectId),
+  );
   const vendorName = (id: string) => vendors.find((v) => v.id === id)?.businessName ?? "Unknown";
   const paidByPO = new Map<string, number>();
   payments.forEach((p) => {

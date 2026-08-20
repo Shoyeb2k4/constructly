@@ -16,6 +16,7 @@
  */
 
 import type { Paise } from "@/lib/money";
+import type { AttendancePosition } from "./attendance-position";
 
 /** YYYY-MM-DD. */
 export type ISODate = string;
@@ -385,6 +386,18 @@ export interface ProjectAgreementsGroup {
   rollup: PortfolioReconciliation;
 }
 
+/**
+ * Where a contractor's labour sits on ONE project.
+ *
+ * Reported per project, and for EVERY project the contractor has attendance on
+ * — including one where they hold no agreement at all, whose settled labour is
+ * unattributed by definition and would otherwise have nowhere to appear.
+ */
+export interface ContractorProjectAttendance extends AttendancePosition {
+  projectId: string;
+  projectName: string;
+}
+
 /** The Contractor Detail commercial view. */
 export interface ContractorProfile {
   contractor: { id: string; name: string; phone: string | null; status: string };
@@ -392,6 +405,14 @@ export interface ContractorProfile {
   /** Lifetime across every project. Due and Ahead are summed, never netted. */
   lifetime: PortfolioReconciliation;
   payments: ContractPaymentHistoryRow[];
+  /**
+   * Labour position per project, scoped to what the caller may see. Separate
+   * from `projects` because a contractor can have attendance on a project they
+   * hold no agreement on.
+   */
+  attendance: ContractorProjectAttendance[];
+  /** The same buckets summed across every VISIBLE project. */
+  attendanceTotals: AttendancePosition;
 }
 
 export interface ContractPaymentHistoryRow extends ContractPayment {
@@ -412,6 +433,28 @@ export interface ProjectContractorSummaryRow {
 }
 
 /** One audited commercial event on a contractor's agreements. */
+/** A settled-attribution correction that was applied. */
+export interface AttributionApplied {
+  /** The ActivityLog entry id — the correction's own reference, used to reverse it. */
+  correctionId: string;
+  rowCount: number;
+  totalPaise: Paise;
+  /** Null on a reversal, which returns the labour to unattributed. */
+  contractId: string | null;
+  contractTitle: string | null;
+}
+
+/**
+ * A refused correction. Returned as DATA, not thrown, following the convention
+ * already used for duplicate contractors and blocked contractor removals: Next
+ * masks Server Action error messages in production, so a deterministic domain
+ * decision has to travel as a value to survive the boundary.
+ */
+export interface AttributionBlocked {
+  blockers: string[];
+  collisions?: { rowId: string; date: ISODate; labourTypeName: string }[];
+}
+
 export interface HistoryEvent {
   id: string;
   /** Dotted action key, e.g. contract.amendment_approved. */
@@ -425,6 +468,11 @@ export interface HistoryEvent {
   contractId: string | null;
   contractTitle: string | null;
   projectName: string | null;
+  /**
+   * Present only on an attribution correction. Null = still standing and
+   * reversible; a timestamp = already reversed. Absent on every other event.
+   */
+  attributionReversedAt?: string | null;
 }
 
 /* ── Inputs ─────────────────────────────────────────────────────────────── */

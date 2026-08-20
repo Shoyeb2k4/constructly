@@ -46,6 +46,23 @@ export function DialogHeader({ className, ...props }: React.ComponentProps<"div"
   return <div className={cn("flex flex-col gap-1.5", className)} {...props} />;
 }
 
+/**
+ * Action row. Stacks on a phone so Cancel and Confirm never share a cramped
+ * line, and puts the confirming action last on wide screens — the position the
+ * rest of the app's sheets already use.
+ */
+export function DialogFooter({ className, ...props }: React.ComponentProps<"div">) {
+  return (
+    <div
+      className={cn(
+        "flex flex-col-reverse gap-2 pt-2 sm:flex-row sm:justify-end",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
 export function DialogTitle({
   className,
   ...props

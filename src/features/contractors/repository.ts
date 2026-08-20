@@ -1,3 +1,5 @@
+import type { AdvanceScope, RescopePreview } from "./advance-rescope";
+import type { RescopeApplied, RescopeBlocked } from "./server/advance-rescope";
 import type { DuplicateMatch } from "./lifecycle";
 import type {
   Contractor,
@@ -54,6 +56,26 @@ export interface ContractorsRepository {
 
   /** Full immutable ledger for a contractor, chronological. */
   getLedger(contractorId: string): Promise<ContractorLedger>;
+
+  // Governed re-scope of UNUSED advance money. Cash-neutral and balance-neutral;
+  // refusals come back as `{ blockers }` so they survive production masking.
+  previewAdvanceRescope(input: {
+    contractorId: string;
+    advanceId: string;
+    target: AdvanceScope;
+    transferPaise: number;
+  }): Promise<RescopePreview | RescopeBlocked>;
+  rescopeAdvance(input: {
+    contractorId: string;
+    advanceId: string;
+    target: AdvanceScope;
+    transferPaise: number;
+    reason: string;
+  }): Promise<RescopeApplied | RescopeBlocked>;
+  reverseAdvanceRescope(input: {
+    transferId: string;
+    reason: string;
+  }): Promise<RescopeApplied | RescopeBlocked>;
 
   /** Live preview (computed bill + clamped adjustment) — does not persist. */
   previewSettlement(input: SettlementPreviewInput): Promise<SettlementPreview>;

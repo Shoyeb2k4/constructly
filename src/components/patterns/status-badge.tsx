@@ -21,6 +21,21 @@ export const ATTENDANCE_META: Record<string, { label: string; tone: Tone }> = {
   HALF_DAY: { label: "Half-day", tone: "warning" },
 };
 
+/**
+ * PO PAYMENT state — deliberately a separate scale from PO_STATUS_META.
+ *
+ * "Approved" is an operational fact about the order; "Paid" is an accounting
+ * fact about the money. They move independently — an approved order can be
+ * unpaid for weeks — so they get separate columns and separate badges rather
+ * than one blended "state". Unpaid is NEUTRAL: it is the ordinary condition of
+ * a fresh order, not a warning.
+ */
+export const PO_PAYMENT_META: Record<string, { label: string; tone: Tone }> = {
+  UNPAID: { label: "Unpaid", tone: "neutral" },
+  PARTIAL: { label: "Partially paid", tone: "warning" },
+  PAID: { label: "Paid", tone: "success" },
+};
+
 export const PO_STATUS_META: Record<string, { label: string; tone: Tone }> = {
   DRAFT: { label: "Draft", tone: "neutral" },
   SUBMITTED: { label: "Submitted", tone: "warning" },

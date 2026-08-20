@@ -16,20 +16,44 @@
    Light values on :root, dark overrides on .dark.
    Mapped into Tailwind utilities via @theme inline below.
    ───────────────────────────────────────────────────────────── */
+/* ACCESSIBILITY CONTRACT FOR THESE TOKENS
+   Every value below is chosen by measured contrast, not by eye, and is locked
+   by src/app/token-contrast.test.ts. Before changing one, run that test.
+
+     text tokens          >= 4.5:1 on background, surface AND surface-muted (AA)
+     *-foreground tokens  >= 4.5:1 on their own *-subtle fill (badges)
+     primary-foreground   >= 4.5:1 on primary (button labels)
+     border-strong        >= 3.0:1 on all surfaces (WCAG 1.4.11 — it draws the
+                          boundary of inputs, selects, textareas and buttons)
+     border               decorative separators only; 1.4.11 does not apply, so
+                          it stays restrained — but not invisible, which is what
+                          made the UI read as washed out.
+
+   `foreground-subtle` must stay lighter than `foreground-muted`: the ladder is
+   part of the design, and accessibility raises the floor rather than flattening
+   the two together. */
 :root {
   --background: #fbfbfd;
   --surface: #ffffff;
   --surface-muted: #f4f5f7;
-  --border: #e9eaee;
-  --border-strong: #dcdee3;
+  /* was #e9eaee (1.16:1) — invisible on every surface */
+  --border: #c9ccd7;
+  /* was #dcdee3 (1.20:1) — failed 1.4.11 on every form control */
+  --border-strong: #858b9c;
 
   --foreground: #16181d;
   --foreground-muted: #5c6270;
-  --foreground-subtle: #8a909e;
+  /* was #8a909e (2.93:1) — the single token behind 149 of 181 axe violations */
+  --foreground-subtle: #6a7080;
 
   --primary: #2e5bff;
   --primary-hover: #2449d6;
   --primary-foreground: #ffffff;
+  /* Selected/active surfaces. `bg-primary/10 text-primary` was the ad-hoc
+     spelling in 7 places and composited to 4.36:1 — under AA. Making the pair
+     explicit lets the contrast test hold it. */
+  --primary-subtle: #e7ebfd;
+  --primary-emphasis: #2449d6;
 
   --secondary: #64748b;
   --secondary-foreground: #ffffff;
@@ -37,15 +61,18 @@
   --accent: #0ea5e9;
   --accent-foreground: #ffffff;
 
-  --success: #0e9f6e;
+  /* was #0e9f6e (3.10:1) */
+  --success: #0a7a54;
   --success-subtle: #e1f5ee;
   --success-foreground: #0f6e56;
 
-  --warning: #d98a00;
+  /* was #d98a00 (2.54:1) — worst offender after foreground-subtle */
+  --warning: #965f00;
   --warning-subtle: #faeeda;
   --warning-foreground: #854f0b;
 
-  --danger: #e02424;
+  /* was #e02424 (4.33:1 on surface-muted) */
+  --danger: #d41c1c;
   --danger-subtle: #fcebeb;
   --danger-foreground: #a32d2d;
 
@@ -61,16 +88,27 @@
   --background: #0b0c0f;
   --surface: #141619;
   --surface-muted: #1c1f24;
-  --border: #262a31;
-  --border-strong: #333842;
+  /* was #262a31 (1.15:1) */
+  --border: #3a414b;
+  /* was #333842 (1.26:1) — failed 1.4.11 */
+  --border-strong: #606a7c;
 
   --foreground: #f2f3f5;
   --foreground-muted: #a0a6b0;
-  --foreground-subtle: #6c727e;
+  /* was #6c727e (3.42:1). Dark mode was never scanned by axe, so this failed
+     silently. */
+  --foreground-subtle: #858b97;
 
-  --primary: #4b77ff;
-  --primary-hover: #6a8fff;
-  --primary-foreground: #ffffff;
+  /* Dark mode cannot satisfy both roles with one blue: a fill dark enough for a
+     white label (needs luminance <= 0.17) can never also be light enough to read
+     as TEXT on #1c1f24 (needs >= 0.24), and `text-primary` is used in 58 places.
+     Primary is therefore tuned for TEXT, and the label on it goes dark — exactly
+     what --accent-foreground and --secondary-foreground already do here. */
+  --primary: #5a83ff;
+  --primary-hover: #7f9fff;
+  --primary-foreground: #0b0c0f;
+  --primary-subtle: #1a2547;
+  --primary-emphasis: #9ab4ff;
 
   --secondary: #94a3b8;
   --secondary-foreground: #0b0c0f;
@@ -90,11 +128,11 @@
   --danger-subtle: #2c1414;
   --danger-foreground: #f09595;
 
-  --info: #4b77ff;
+  --info: #5a83ff;
   --info-subtle: #10233f;
   --info-foreground: #85b7eb;
 
-  --ring: #4b77ff;
+  --ring: #5a83ff;
 }
 
 @theme inline {
@@ -111,6 +149,8 @@
   --color-primary: var(--primary);
   --color-primary-hover: var(--primary-hover);
   --color-primary-foreground: var(--primary-foreground);
+  --color-primary-subtle: var(--primary-subtle);
+  --color-primary-emphasis: var(--primary-emphasis);
 
   --color-secondary: var(--secondary);
   --color-secondary-foreground: var(--secondary-foreground);

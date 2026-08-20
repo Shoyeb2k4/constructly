@@ -4,29 +4,41 @@
     {
       "name": "constructly",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeArgs": [
+        "run",
+        "dev"
+      ],
       "port": 3000,
       "autoPort": true
     },
     {
       "name": "constructly-prod",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "start"],
+      "runtimeArgs": [
+        "run",
+        "start"
+      ],
       "port": 3000,
       "autoPort": true
     },
     {
       "name": "constructly-demo",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev:demo"],
-      "port": 3000,
+      "runtimeArgs": [
+        "run",
+        "dev:demo"
+      ],
+      "port": 3100,
       "autoPort": true
     },
     {
       "name": "constructly-demo-prod",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "start:demo"],
-      "port": 3000,
+      "runtimeArgs": [
+        "run",
+        "start:demo"
+      ],
+      "port": 3100,
       "autoPort": true
     }
   ]

@@ -12,9 +12,10 @@ test("sidebar navigation works", async ({ page }) => {
   await page.goto("/dashboard");
   await page.getByRole("link", { name: "Projects" }).first().click();
   await expect(page).toHaveURL(/\/projects$/);
-  await expect(
-    page.getByRole("heading", { name: "No projects yet" }),
-  ).toBeVisible();
+  // Demo mode seeds projects. This used to assert the empty state, which only
+  // held because the browser bundle was built without the demo flag and so
+  // fetched from a real, empty backend.
+  await expect(page.getByText("Skyline Residency").filter({ visible: true }).first()).toBeVisible();
 });
 
 test("style guide renders the design system", async ({ page }) => {

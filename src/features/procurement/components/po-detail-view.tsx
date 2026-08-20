@@ -3,13 +3,24 @@
 import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ChevronRight, Send, Check, Pencil, Trash2, ShoppingCart, CopyPlus, IndianRupee } from "lucide-react";
+import { ChevronRight, Send, Check, Pencil, Trash2, ShoppingCart, CopyPlus, IndianRupee, MoreHorizontal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmptyState } from "@/components/patterns/empty-state";
 import { MoneyText } from "@/components/patterns/money-text";
-import { StatusBadge, PO_STATUS_META } from "@/components/patterns/status-badge";
+import { StatusBadge, PO_STATUS_META, PO_PAYMENT_META } from "@/components/patterns/status-badge";
+import { PageHeader } from "@/components/patterns/page-header";
+import { Callout } from "@/components/patterns/callout";
+import { DataTable } from "@/components/patterns/data-table";
+import { FinancialGrid, FinancialLine } from "@/components/patterns/financial-grid";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Dialog,
   DialogContent,
@@ -61,104 +72,212 @@ export function PODetailView({ id }: { id: string }) {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <nav className="flex items-center gap-1 text-sm text-foreground-subtle">
-            <Link href="/procurement" className="hover:text-foreground">Procurement</Link>
-            <ChevronRight className="size-3.5" />
-            <span className="font-mono text-xs">{po.poNumber}</span>
-          </nav>
-          <div className="mt-1 flex items-center gap-2.5">
-            <h1 className="font-mono text-2xl font-semibold tracking-tight">{po.poNumber}</h1>
+      <nav aria-label="Breadcrumb" className="text-sm">
+        <ol className="flex items-center gap-1 text-foreground-muted">
+          <li>
+            <Link href="/procurement" className="rounded-sm hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+              Procurement
+            </Link>
+          </li>
+          <ChevronRight className="size-3.5 text-foreground-subtle" aria-hidden="true" />
+          <li className="font-mono text-xs">{po.poNumber}</li>
+        </ol>
+      </nav>
+
+      {/* Order state and payment state are shown as SEPARATE badges because they
+          are separate facts: an approved order can sit unpaid for weeks, and
+          collapsing them into one "state" is how a commitment gets mistaken for
+          cash that has left. */}
+      <PageHeader
+        title={
+          <>
+            <span className="font-mono">{po.poNumber}</span>
             <StatusBadge meta={PO_STATUS_META} value={po.status} />
-          </div>
-          {po.revisedFromNumber && (
-            <p className="mt-1 text-xs text-foreground-subtle">Revised from {po.revisedFromNumber}</p>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          {po.status === "DRAFT" && canEditAction && (
-            <Button variant="primary" onClick={() => submit.mutate(po.id)} disabled={submit.isPending}>
-              <Send />
-              Submit for approval
-            </Button>
-          )}
-          {po.status === "SUBMITTED" && can("purchase_orders.approve") && (
-            <Button variant="primary" onClick={() => approve.mutate(po.id)} disabled={approve.isPending}>
-              <Check />
-              Approve
-            </Button>
-          )}
-          {approved && can("payments.create") && (
-            <Button variant="primary" onClick={() => setPayOpen(true)}>
-              <IndianRupee />
-              Record payment
-            </Button>
-          )}
-          {canEdit && (
-            <Button variant="secondary" onClick={() => setEditOpen(true)}>
-              <Pencil />
-              Edit
-            </Button>
-          )}
-          {can("purchase_orders.create") && (
-            <Button
-              variant="ghost"
-              onClick={() => duplicate.mutate(po.id, { onSuccess: (p) => router.push(`/procurement/${p.id}`) })}
-              disabled={duplicate.isPending}
-              title="Clone as a new draft dated today"
-            >
-              <CopyPlus />
-              Duplicate
-            </Button>
-          )}
-          {can("purchase_orders.delete") && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="text-danger-foreground"
-              onClick={() => setConfirmDelete(true)}
-              aria-label="Delete"
-              title="Delete"
-            >
-              <Trash2 className="size-4" />
-            </Button>
-          )}
-        </div>
-      </div>
+            <StatusBadge meta={PO_PAYMENT_META} value={po.paymentStatus} />
+          </>
+        }
+        meta={
+          <>
+            <Link href={`/vendors/${po.vendor.id}`} className="rounded-sm hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+              {po.vendor.name}
+            </Link>
+            <span aria-hidden="true">·</span>
+            <Link href={`/projects/${po.project.id}`} className="rounded-sm hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+              {po.project.name}
+            </Link>
+            <span aria-hidden="true">·</span>
+            <span>{formatDate(po.purchaseDate)}</span>
+            {po.revisedFromNumber && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span>Revised from {po.revisedFromNumber}</span>
+              </>
+            )}
+          </>
+        }
+        actions={
+          <>
+            {/* One primary, chosen by where the order actually is in its
+                lifecycle — not six buttons of equal weight. */}
+            {po.status === "DRAFT" && canEditAction && (
+              <Button variant="primary" onClick={() => submit.mutate(po.id)} disabled={submit.isPending}>
+                <Send />
+                Submit for approval
+              </Button>
+            )}
+            {po.status === "SUBMITTED" && can("purchase_orders.approve") && (
+              <Button variant="primary" onClick={() => approve.mutate(po.id)} disabled={approve.isPending}>
+                <Check />
+                Approve
+              </Button>
+            )}
+            {approved && can("payments.create") && (
+              <Button variant="primary" onClick={() => setPayOpen(true)}>
+                <IndianRupee />
+                Record payment
+              </Button>
+            )}
+            {canEdit && (
+              <Button variant="secondary" onClick={() => setEditOpen(true)}>
+                <Pencil />
+                Edit
+              </Button>
+            )}
+            {(can("purchase_orders.create") || can("purchase_orders.delete")) && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon" aria-label="More purchase order actions">
+                    <MoreHorizontal className="size-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  {can("purchase_orders.create") && (
+                    <DropdownMenuItem
+                      disabled={duplicate.isPending}
+                      onSelect={() =>
+                        duplicate.mutate(po.id, {
+                          onSuccess: (p) => router.push(`/procurement/${p.id}`),
+                        })
+                      }
+                    >
+                      <CopyPlus />
+                      Duplicate as draft
+                    </DropdownMenuItem>
+                  )}
+                  {can("purchase_orders.delete") && (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem
+                        className="text-danger-foreground"
+                        onSelect={() => setConfirmDelete(true)}
+                      >
+                        <Trash2 />
+                        Delete purchase order
+                      </DropdownMenuItem>
+                    </>
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+          </>
+        }
+      />
+
+      {/* Why an action is unavailable, stated once rather than inferred from a
+          missing button. */}
+      {po.status !== "DRAFT" && canEditAction && !can("purchase_orders.edit_all") && (
+        <Callout tone="neutral" title="This order can no longer be edited here">
+          It has been submitted for approval. Editing a submitted or approved order needs the
+          broader purchase-order permission, so the record stays trustworthy once it is in the
+          approval chain.
+        </Callout>
+      )}
 
       <div className="grid gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">
           <CardHeader><CardTitle>Line items</CardTitle></CardHeader>
           <CardContent className="p-0">
-            <div className="grid grid-cols-[1fr_70px_90px_64px_100px] gap-2 border-b border-border px-5 py-2 text-xs text-foreground-subtle">
-              <span>Material</span><span>Qty</span><span>Rate</span><span>GST</span><span className="text-right">Amount</span>
-            </div>
-            {po.lineItems.map((l) => (
-              <div key={l.id} className="grid grid-cols-[1fr_70px_90px_64px_100px] gap-2 border-b border-border px-5 py-3 text-sm last:border-0">
-                <span className="min-w-0">
-                  <span className="block truncate font-medium">{l.material}</span>
-                  {l.category && <span className="block truncate text-xs text-foreground-subtle">{l.category}</span>}
-                </span>
-                <span className="text-foreground-muted">{l.quantity} {l.unit}</span>
-                <span className="font-mono text-foreground-muted"><MoneyText paise={l.ratePaise} whole /></span>
-                <span className="text-foreground-muted">{l.gstRateBps / 100}%</span>
-                <span className="text-right font-mono"><MoneyText paise={l.amountPaise} whole /></span>
-              </div>
-            ))}
-            <div className="space-y-1 px-5 py-3">
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-foreground-muted">Subtotal</span>
-                <span className="font-mono tabular-nums"><MoneyText paise={po.subtotalPaise} /></span>
-              </div>
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-foreground-muted">GST</span>
-                <span className="font-mono tabular-nums"><MoneyText paise={po.gstPaise} /></span>
-              </div>
-              <div className="flex items-center justify-between pt-1">
-                <span className="text-sm font-medium">Grand total</span>
-                <span className="text-lg font-semibold"><MoneyText paise={po.totalPaise} /></span>
-              </div>
+            <DataTable
+              caption={`Line items on ${po.poNumber}`}
+              rows={po.lineItems}
+              getRowKey={(l) => l.id}
+              className="rounded-none border-0"
+              columns={[
+                {
+                  key: "material",
+                  header: "Material",
+                  cell: (l) => (
+                    <span className="block min-w-0">
+                      <span className="block font-medium">{l.material}</span>
+                      {l.category && (
+                        <span className="block text-xs text-foreground-subtle">{l.category}</span>
+                      )}
+                    </span>
+                  ),
+                },
+                {
+                  key: "qty",
+                  header: "Qty",
+                  numeric: true,
+                  cell: (l) => (
+                    <span className="text-foreground-muted">
+                      {l.quantity} <span className="font-sans">{l.unit}</span>
+                    </span>
+                  ),
+                },
+                {
+                  key: "rate",
+                  header: "Rate",
+                  numeric: true,
+                  cell: (l) => (
+                    <span className="text-foreground-muted">
+                      <MoneyText paise={l.ratePaise} whole />
+                    </span>
+                  ),
+                },
+                {
+                  key: "gst",
+                  header: "GST",
+                  numeric: true,
+                  hideBelow: "sm",
+                  cell: (l) => (
+                    <span className="text-foreground-muted">{l.gstRateBps / 100}%</span>
+                  ),
+                },
+                {
+                  key: "amount",
+                  header: "Amount",
+                  numeric: true,
+                  cell: (l) => <MoneyText paise={l.amountPaise} whole />,
+                },
+              ]}
+              renderCard={(l) => (
+                <div className="rounded-xl border border-border bg-surface p-3">
+                  <div className="flex items-baseline justify-between gap-3">
+                    <span className="min-w-0 font-medium">{l.material}</span>
+                    <span className="shrink-0 font-mono tabular-nums">
+                      <MoneyText paise={l.amountPaise} whole />
+                    </span>
+                  </div>
+                  <p className="mt-1 text-xs text-foreground-muted">
+                    {l.quantity} {l.unit} × <MoneyText paise={l.ratePaise} whole /> · GST{" "}
+                    {l.gstRateBps / 100}%
+                  </p>
+                  {l.category && (
+                    <p className="text-xs text-foreground-subtle">{l.category}</p>
+                  )}
+                </div>
+              )}
+            />
+            {/* The order's own arithmetic, in the shared financial layout —
+                subtotal and GST make the grand total, and the grand total is
+                what was ORDERED, not what has been paid. */}
+            <div className="border-t border-border px-5 py-3">
+              <FinancialGrid className="sm:grid-cols-1 xl:grid-cols-1">
+                <FinancialLine label="Subtotal" paise={po.subtotalPaise} />
+                <FinancialLine label="GST" paise={po.gstPaise} />
+                <FinancialLine label="Grand total (ordered)" paise={po.totalPaise} strong />
+              </FinancialGrid>
             </div>
           </CardContent>
         </Card>
@@ -174,12 +293,30 @@ export function PODetailView({ id }: { id: string }) {
               <Row label="Invoice #" value={po.invoiceNumber ?? "—"} />
               <Row label="Created by" value={po.createdByName} />
               <Row label="Payment" value={<PaymentStatusBadge status={po.paymentStatus} />} />
-              {po.paidPaise > 0 && (
-                <Row label="Paid" value={<MoneyText paise={po.paidPaise} />} />
-              )}
-              {approved && po.totalPaise - po.paidPaise > 0 && (
-                <Row label="Outstanding" value={<MoneyText paise={po.totalPaise - po.paidPaise} />} />
-              )}
+            </CardContent>
+          </Card>
+
+          {/* MONEY, kept apart from the order's own details. "Ordered" is the
+              commitment, "Paid" is cash that has actually moved, and the
+              difference is what is still owed on this order — three different
+              facts that must never share one label. */}
+          <Card>
+            <CardHeader><CardTitle>Money</CardTitle></CardHeader>
+            <CardContent>
+              <FinancialGrid className="sm:grid-cols-1 xl:grid-cols-1">
+                <FinancialLine label="Ordered" paise={po.totalPaise} />
+                <FinancialLine label="Paid" paise={po.paidPaise} />
+                <FinancialLine
+                  label="Still owed"
+                  paise={po.totalPaise - po.paidPaise}
+                  strong
+                  tone={po.totalPaise - po.paidPaise > 0 ? "text-warning-foreground" : undefined}
+                />
+              </FinancialGrid>
+              <p className="mt-2 text-xs text-foreground-subtle">
+                Ordered is what this purchase order commits to. Paid is what has been recorded
+                against it. Neither says anything about delivery.
+              </p>
             </CardContent>
           </Card>
 

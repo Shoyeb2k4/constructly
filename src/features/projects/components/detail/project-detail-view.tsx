@@ -3,19 +3,25 @@
 import * as React from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { ChevronRight, Star } from "lucide-react";
+import { CalendarCheck, ChevronRight, Star } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { EmptyState } from "@/components/patterns/empty-state";
+import { PageHeader } from "@/components/patterns/page-header";
+import { RecordNav, type RecordNavGroup } from "@/components/patterns/record-nav";
+import { StatusBadge, PROJECT_STAGE_META } from "@/components/patterns/status-badge";
 import { FolderKanban } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { ProjectListItem } from "../../types";
 import { useProject, useToggleFavorite, useProjectDetailActions } from "../../hooks";
 import { pushRecent } from "../../recently-viewed";
+import { deadlineCountdown } from "../../format";
 import { ProjectActionsMenu } from "../project-actions-menu";
 import { useCan } from "@/features/rbac/permission-context";
 import { StageStepper } from "./stage-stepper";
+import { ContractorsTab } from "./contractors-tab";
+import { ContractorsEditSheet } from "./contractors-edit-sheet";
 import { OverviewTab } from "./overview-tab";
 import { DeadlinesTab } from "./deadlines-tab";
 import { DocumentsTab } from "./documents-tab";
@@ -42,6 +48,7 @@ export function ProjectDetailView({
     return t && valid.includes(t) ? t : "overview";
   })();
   const [tab, setTab] = React.useState(initialTab);
+  const [editContractors, setEditContractors] = React.useState(false);
 
   React.useEffect(() => {
     if (project) pushRecent({ id: project.id, name: project.name, code: project.code });
@@ -81,31 +88,110 @@ export function ProjectDetailView({
   const canEdit =
     can("projects.edit") && (can("projects.edit_all") || project.pm?.id === userId);
 
-  return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="space-y-4">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            <nav className="flex items-center gap-1 text-sm text-foreground-subtle">
-              <Link href="/projects" className="hover:text-foreground">Projects</Link>
-              <ChevronRight className="size-3.5" />
-              <span className="font-mono text-xs">{project.code}</span>
-            </nav>
-            <div className="mt-1 flex items-center gap-2.5">
-              <h1 className="text-2xl font-semibold tracking-tight">{project.name}</h1>
-              <button
-                onClick={() => favorite.mutate(project.id)}
-                aria-label={project.isFavorite ? "Unpin" : "Pin"}
-                className="text-foreground-subtle transition-colors hover:text-warning"
-              >
-                <Star className={cn("size-5", project.isFavorite && "fill-warning text-warning")} />
-              </button>
-            </div>
-          </div>
-          <ProjectActionsMenu project={project as ProjectListItem} />
-        </div>
+  // Grouped by the question each section answers, the same philosophy the
+  // contractor record uses: who does the work, what is being bought, what is
+  // recorded about it.
+  const navGroups: RecordNavGroup[] = [
+    { label: "Summary", items: [{ value: "overview", label: "Overview" }] },
+    {
+      label: "Workforce",
+      items: [
+        { value: "contractors", label: "Contractors" },
+        { value: "labour", label: "Labour" },
+      ],
+    },
+    {
+      label: "Operations",
+      items: [
+        { value: "procurement", label: "Procurement" },
+        {
+          value: "deadlines",
+          label: `Deadlines${project.deadlines.length ? ` (${project.deadlines.length})` : ""}`,
+        },
+        {
+          value: "documents",
+          label: `Documents${project.documents.length ? ` (${project.documents.length})` : ""}`,
+        },
+      ],
+    },
+    {
+      label: "Record",
+      items: [
+        {
+          value: "notes",
+          label: `Notes${project.notes.length ? ` (${project.notes.length})` : ""}`,
+        },
+        { value: "activity", label: "Activity" },
+      ],
+    },
+  ];
 
+  return (
+    <div className="space-y-5">
+      <nav aria-label="Breadcrumb" className="text-sm">
+        <ol className="flex items-center gap-1 text-foreground-muted">
+          <li>
+            <Link href="/projects" className="rounded-sm hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+              Projects
+            </Link>
+          </li>
+          <ChevronRight className="size-3.5 text-foreground-subtle" aria-hidden="true" />
+          <li className="font-mono text-xs">{project.code}</li>
+        </ol>
+      </nav>
+
+      {/* A working record, not a hero: name, where it is in its lifecycle, who
+          owns it, and the one action most likely to be next. */}
+      <PageHeader
+        title={
+          <>
+            <span>{project.name}</span>
+            <StatusBadge meta={PROJECT_STAGE_META} value={project.stage} />
+          </>
+        }
+        meta={
+          <>
+            <span>{project.pm ? project.pm.fullName : "No manager assigned"}</span>
+            {project.expectedCompletionDate && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span>{deadlineCountdown(project.expectedCompletionDate).label}</span>
+              </>
+            )}
+            {project.clientName && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span className="truncate">{project.clientName}</span>
+              </>
+            )}
+          </>
+        }
+        actions={
+          <>
+            <Button asChild variant="primary">
+              <Link href={`/labor?project=${project.id}`}>
+                <CalendarCheck />
+                Record attendance
+              </Link>
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => favorite.mutate(project.id)}
+              aria-label={project.isFavorite ? `Unpin ${project.name}` : `Pin ${project.name}`}
+              aria-pressed={project.isFavorite}
+            >
+              <Star className={cn("size-4", project.isFavorite && "fill-warning text-warning")} />
+            </Button>
+            <ProjectActionsMenu project={project as ProjectListItem} />
+          </>
+        }
+      />
+
+      {/* Nine stages do not fit any viewport in a row, so the stepper owns its
+          own scroller instead of clipping — "Closed" used to be cut off at
+          1280px with no affordance to reach it. */}
+      <div className="-mx-1 overflow-x-auto px-1 pb-1">
         <StageStepper
           current={project.stage}
           onChange={(stage) => changeStage.mutate(stage)}
@@ -113,25 +199,29 @@ export function ProjectDetailView({
         />
       </div>
 
-      <Tabs value={tab} onValueChange={setTab}>
-        <TabsList className="w-full justify-start overflow-x-auto">
-          <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="procurement">Procurement</TabsTrigger>
-          <TabsTrigger value="labour">Labour</TabsTrigger>
-          <TabsTrigger value="deadlines">
-            Deadlines{project.deadlines.length ? ` (${project.deadlines.length})` : ""}
-          </TabsTrigger>
-          <TabsTrigger value="documents">
-            Documents{project.documents.length ? ` (${project.documents.length})` : ""}
-          </TabsTrigger>
-          <TabsTrigger value="notes">
-            Notes{project.notes.length ? ` (${project.notes.length})` : ""}
-          </TabsTrigger>
-          <TabsTrigger value="activity">Activity</TabsTrigger>
-        </TabsList>
-
+      <Tabs
+        value={tab}
+        onValueChange={setTab}
+        orientation="vertical"
+        className="lg:flex lg:items-start lg:gap-8"
+      >
+        <RecordNav
+          groups={navGroups}
+          value={tab}
+          onValueChange={setTab}
+          label="Project sections"
+          className="lg:sticky lg:top-20"
+        />
+        <div className="min-w-0 flex-1">
+        <TabsContent value="contractors">
+          <ContractorsTab
+            project={project}
+            canEdit={canEdit}
+            onEdit={() => setEditContractors(true)}
+          />
+        </TabsContent>
         <TabsContent value="overview">
-          <OverviewTab project={project} canEdit={canEdit} />
+          <OverviewTab project={project} canEdit={canEdit} onOpenSection={setTab} />
         </TabsContent>
         <TabsContent value="procurement">
           <ProjectProcurementTab projectId={project.id} />
@@ -151,7 +241,16 @@ export function ProjectDetailView({
         <TabsContent value="activity">
           <ActivityTab project={project} />
         </TabsContent>
+        </div>
       </Tabs>
+
+      <ContractorsEditSheet
+        projectId={project.id}
+        projectName={project.name}
+        initial={project.contractors}
+        open={editContractors}
+        onOpenChange={setEditContractors}
+      />
     </div>
   );
 }

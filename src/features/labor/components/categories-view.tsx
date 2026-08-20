@@ -452,10 +452,10 @@ export function CategoriesView() {
         <p className="mt-0.5">
           Labour types (e.g. Mason, Mason Helper, Centering) grouped by trade, with a default day
           rate. Manage contractors under{" "}
-          <Link href="/labor/contractors" className="text-primary hover:underline">Labour → Contractors</Link>.
+          <Link href="/labor/contractors" className="rounded-sm font-medium text-primary underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Labour → Contractors</Link>.
           Assign contractors and set project-specific rates on each{" "}
-          <Link href="/projects" className="text-primary hover:underline">Project → Contractors</Link>.
-          The <Link href="/labor" className="text-primary hover:underline">Attendance</Link> screen then
+          <Link href="/projects" className="rounded-sm font-medium text-primary underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Project → Contractors</Link>.
+          The <Link href="/labor" className="rounded-sm font-medium text-primary underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Attendance</Link> screen then
           groups labour by contractor.
         </p>
       </div>

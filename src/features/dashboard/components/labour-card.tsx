@@ -19,11 +19,14 @@ export function LabourCard({ labour }: { labour: LabourWidget }) {
       <CardContent className="space-y-4">
         <div className="flex items-end justify-between">
           <div>
-            <p className="text-xs text-foreground-subtle">Today</p>
+            <p className="text-xs text-foreground-muted">Present · today</p>
             <p className="text-2xl font-semibold leading-none">{todayTotal}</p>
           </div>
           <div className="text-right">
-            <p className="text-xs text-foreground-subtle">Est. cost today</p>
+            {/* The Labour module's word for this figure. Never "labour payable"
+                or "labour due" — it becomes agreement credit only when a
+                settlement recognises it. */}
+            <p className="text-xs text-foreground-muted">Attendance value · today</p>
             <p className="text-lg font-semibold leading-none">
               <MoneyText paise={labour.todayCostPaise} />
             </p>

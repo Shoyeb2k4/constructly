@@ -1,10 +1,10 @@
 "use client";
 
 import * as React from "react";
-import { BarChart3, FileSpreadsheet, FileText } from "lucide-react";
+import { BarChart3, Download, FileSpreadsheet, FileText } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Field } from "@/components/patterns/field";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -14,6 +14,16 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { MoneyText } from "@/components/patterns/money-text";
+import { Toolbar, ToolbarGroup, ToolbarSpacer } from "@/components/patterns/toolbar";
+import { StatCard } from "@/components/patterns/stat-card";
+import { DataTable } from "@/components/patterns/data-table";
+import { Badge } from "@/components/ui/badge";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { EmptyState } from "@/components/patterns/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useProjects } from "@/features/projects/hooks";
@@ -35,41 +45,56 @@ export function LaborSummaryView() {
 
   const scope = projectId === "ALL" ? "All projects" : (projects.find((p) => p.id === projectId)?.name ?? "");
   const maxCat = Math.max(1, ...(summary?.byCategory ?? []).map((c) => c.manDays));
-  const maxContractor = Math.max(1, ...(summary?.byContractor ?? []).map((c) => c.manDays));
   const maxDay = Math.max(1, ...(summary?.trend ?? []).map((t) => t.total));
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-end gap-3">
-        <div className="space-y-1.5">
-          <Label>Project</Label>
+      {/* Same toolbar shape as Attendance and the Contractor list: what you
+          are looking at first, exports last and collapsible. */}
+      <Toolbar aria-label="Labour summary filters" className="items-end">
+        <Field label="Project" className="w-full sm:w-52">
           <Select value={projectId} onValueChange={setProjectId}>
-            <SelectTrigger className="w-48"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="w-full" aria-label="Filter by project">
+              <SelectValue />
+            </SelectTrigger>
             <SelectContent>
               <SelectItem value="ALL">All projects</SelectItem>
               {projects.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
             </SelectContent>
           </Select>
-        </div>
-        <div className="space-y-1.5">
-          <Label>From</Label>
+        </Field>
+        <Field label="From">
           <Input type="date" value={from} max={to} onChange={(e) => setFrom(e.target.value)} className="w-40" />
-        </div>
-        <div className="space-y-1.5">
-          <Label>To</Label>
+        </Field>
+        <Field label="To">
           <Input type="date" value={to} min={from} max={todayISO()} onChange={(e) => setTo(e.target.value)} className="w-40" />
-        </div>
-        <div className="ml-auto flex items-center gap-2">
-          <Button variant="ghost" size="sm" disabled={!summary || summary.totalManDays === 0}
-            onClick={async () => { if (summary) (await import("../exports")).exportRangePdf({ records, summary, from, to, scope }); }}>
-            <FileText />PDF
-          </Button>
-          <Button variant="ghost" size="sm" disabled={!summary || summary.totalManDays === 0}
-            onClick={async () => { if (summary) (await import("../exports")).exportRangeExcel({ records, summary, from, to, scope }); }}>
-            <FileSpreadsheet />Excel
-          </Button>
-        </div>
-      </div>
+        </Field>
+        <ToolbarSpacer />
+        <ToolbarGroup>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="secondary" size="sm" disabled={!summary || summary.totalManDays === 0}>
+                <Download className="size-4" />
+                Export
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem
+                onSelect={async () => { if (summary) (await import("../exports")).exportRangePdf({ records, summary, from, to, scope }); }}
+              >
+                <FileText />
+                PDF
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={async () => { if (summary) (await import("../exports")).exportRangeExcel({ records, summary, from, to, scope }); }}
+              >
+                <FileSpreadsheet />
+                Excel
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </ToolbarGroup>
+      </Toolbar>
 
       {isLoading || !summary ? (
         <div className="grid gap-4 sm:grid-cols-3">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-24 rounded-xl" />)}</div>
@@ -81,50 +106,67 @@ export function LaborSummaryView() {
         />
       ) : (
         <>
-          {/* Stat tiles */}
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-            <div className="rounded-xl border border-border bg-surface p-4">
-              <p className="text-xs text-foreground-subtle">Total man-days</p>
-              <p className="mt-1 text-2xl font-semibold">{summary.totalManDays}</p>
-            </div>
-            <div className="rounded-xl border border-border bg-surface p-4">
-              <p className="text-xs text-foreground-subtle">Est. labour cost</p>
-              <p className="mt-1 text-2xl font-semibold"><MoneyText paise={summary.estimatedCostPaise} compact /></p>
-            </div>
-            <div className="rounded-xl border border-border bg-surface p-4">
-              <p className="text-xs text-foreground-subtle">Working days</p>
-              <p className="mt-1 text-2xl font-semibold">{summary.trend.length}</p>
-            </div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <StatCard label="Total man-days" value={summary.totalManDays} />
+            {/* "Attendance value", not "cost" and certainly not "due": this is
+                what the recorded quantities are worth at their snapshot rates.
+                Whether any of it has been settled is a contractor-side figure. */}
+            <StatCard
+              label="Attendance value"
+              value={<MoneyText paise={summary.estimatedCostPaise} compact />}
+              hint="At the rate snapshotted on each day."
+            />
+            <StatCard label="Working days" value={summary.trend.length} />
           </div>
 
           <div className="grid gap-6 lg:grid-cols-2">
-            {/* Man-days by contractor (the owner's primary view). */}
+            {/* A table, not bars: the question here is "who, how many, how
+                much", and three aligned columns answer it faster than three
+                proportional widths the eye has to estimate. */}
             <Card>
               <CardHeader><CardTitle>Man-days by contractor</CardTitle></CardHeader>
-              <CardContent className="space-y-3">
-                {summary.byContractor.length === 0 ? (
-                  <p className="text-sm text-foreground-subtle">No labour recorded in this range.</p>
-                ) : (
-                  summary.byContractor.map((c) => (
-                    <div key={c.contractorId ?? "unattributed"} className="space-y-1.5">
-                      <div className="flex items-center justify-between text-sm font-semibold">
-                        <span className="truncate">{c.name}</span>
-                        <span className="font-mono text-xs">
-                          {c.manDays} · <MoneyText paise={c.estimatedCostPaise} compact />
-                        </span>
-                      </div>
-                      <div className="h-1.5 overflow-hidden rounded-full bg-surface-muted">
-                        <div
-                          className="h-full rounded-full bg-primary"
-                          style={{ width: `${Math.max(2, (c.manDays / maxContractor) * 100)}%` }}
-                        />
-                      </div>
-                    </div>
-                  ))
-                )}
-                <div className="flex items-center justify-between border-t border-border pt-2 text-sm font-semibold">
+              <CardContent>
+                <DataTable
+                  // Distinct from the card heading above it: a screen reader
+                  // should not hear the same phrase twice in a row.
+                  caption="Contractors and their man-days"
+                  rows={summary.byContractor}
+                  getRowKey={(c) => c.contractorId ?? "unattributed"}
+                  className="border-0"
+                  columns={[
+                    {
+                      key: "name",
+                      header: "Contractor",
+                      cell: (c) =>
+                        c.contractorId ? (
+                          <span className="font-medium">{c.name}</span>
+                        ) : (
+                          // Labour recorded without a contractor is not a
+                          // contractor called "Unattributed" — say so plainly,
+                          // and never in language that implies money is missing.
+                          <span className="flex items-center gap-2">
+                            <span className="text-foreground-muted">Not assigned to a contractor</span>
+                            <Badge variant="neutral">Unattributed</Badge>
+                          </span>
+                        ),
+                    },
+                    {
+                      key: "manDays",
+                      header: "Man-days",
+                      numeric: true,
+                      cell: (c) => c.manDays,
+                    },
+                    {
+                      key: "value",
+                      header: "Attendance value",
+                      numeric: true,
+                      cell: (c) => <MoneyText paise={c.estimatedCostPaise} compact />,
+                    },
+                  ]}
+                />
+                <div className="flex items-center justify-between gap-3 border-t border-border pt-2 text-sm font-semibold">
                   <span>Grand total</span>
-                  <span className="font-mono">
+                  <span className="font-mono tabular-nums">
                     {summary.totalManDays} · <MoneyText paise={summary.estimatedCostPaise} compact />
                   </span>
                 </div>

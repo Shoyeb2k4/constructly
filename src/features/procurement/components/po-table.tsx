@@ -12,11 +12,10 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import { MoneyText } from "@/components/patterns/money-text";
-import { StatusBadge, PO_STATUS_META } from "@/components/patterns/status-badge";
-import { cn } from "@/lib/utils";
+import { StatusBadge, PO_STATUS_META, PO_PAYMENT_META } from "@/components/patterns/status-badge";
+import { DataTable } from "@/components/patterns/data-table";
 import { formatDate } from "@/features/projects/format";
-import { PO_PAYMENT_STATUS_LABEL } from "../constants";
-import type { PurchaseOrderListItem, POPaymentStatus } from "../types";
+import type { PurchaseOrderListItem } from "../types";
 
 interface PoColumn {
   key: string;
@@ -30,12 +29,6 @@ interface PoColumn {
   optionalDefaultOff?: boolean;
   cell: (po: PurchaseOrderListItem) => React.ReactNode;
 }
-
-const PAY_TONE: Record<POPaymentStatus, string> = {
-  PAID: "text-success-foreground",
-  PARTIAL: "text-warning-foreground",
-  UNPAID: "text-foreground-muted",
-};
 
 export const PO_COLUMNS: PoColumn[] = [
   {
@@ -57,7 +50,9 @@ export const PO_COLUMNS: PoColumn[] = [
   { key: "amount", label: "Amount", defaultWidth: 120, minWidth: 90, align: "right", cell: (po) => <span className="font-mono text-sm"><MoneyText paise={po.totalPaise} compact /></span> },
   { key: "gst", label: "GST", defaultWidth: 100, minWidth: 70, align: "right", optionalDefaultOff: true, cell: (po) => <span className="font-mono text-sm text-foreground-muted"><MoneyText paise={po.gstPaise} compact /></span> },
   { key: "paid", label: "Paid", defaultWidth: 110, minWidth: 80, align: "right", optionalDefaultOff: true, cell: (po) => <span className="font-mono text-sm text-foreground-muted"><MoneyText paise={po.paidPaise} compact /></span> },
-  { key: "payment", label: "Payment", defaultWidth: 120, minWidth: 90, cell: (po) => <span className={cn("text-xs font-medium", PAY_TONE[po.paymentStatus])}>{PO_PAYMENT_STATUS_LABEL[po.paymentStatus]}</span> },
+  // A badge, not coloured text: payment state must be readable without relying
+  // on colour, exactly like the order status beside it.
+  { key: "payment", label: "Payment", defaultWidth: 120, minWidth: 90, cell: (po) => <StatusBadge meta={PO_PAYMENT_META} value={po.paymentStatus} /> },
   { key: "createdBy", label: "Created by", defaultWidth: 140, minWidth: 90, optionalDefaultOff: true, cell: (po) => <span className="truncate text-sm text-foreground-muted">{po.createdBy?.name ?? "—"}</span> },
   { key: "status", label: "Status", defaultWidth: 120, minWidth: 90, locked: true, cell: (po) => <StatusBadge meta={PO_STATUS_META} value={po.status} /> },
 ];
@@ -166,88 +161,68 @@ export function PoColumnsMenu({
   );
 }
 
+/**
+ * The purchase-order list.
+ *
+ * This was a CSS-grid pseudo-table whose rows were `onClick` divs — no link, no
+ * role, no `tabIndex`. A keyboard user could not open a purchase order at all,
+ * and axe does not catch that shape. Moving onto the shared `DataTable` gives
+ * real `<table>` semantics and a real link per row.
+ *
+ * Column VISIBILITY is kept — it is a genuine ERP affordance and the menu is
+ * unchanged. Column RESIZING is not: it was mouse-only, had no keyboard path,
+ * and its absence costs nothing that the responsive column rules do not already
+ * handle better.
+ */
 export function PoTable({
   items,
   colState,
-  setWidth,
   onRowClick,
 }: {
   items: PurchaseOrderListItem[];
   colState: ColState;
-  setWidth: (key: string, w: number) => void;
-  onRowClick: (id: string) => void;
+  /** Retained for callers that navigate imperatively; rows are links regardless. */
+  onRowClick?: (id: string) => void;
 }) {
+  void onRowClick;
   const cols = PO_COLUMNS.filter((c) => colState.visible[c.key]);
-  const template = cols.map((c) => `${colState.widths[c.key] ?? c.defaultWidth}px`).join(" ");
-  const minWidth = cols.reduce((s, c) => s + (colState.widths[c.key] ?? c.defaultWidth), 0);
-
-  const drag = React.useRef<{ key: string; startX: number; startW: number; min: number } | null>(null);
-
-  function onResizeStart(e: React.MouseEvent, c: PoColumn) {
-    e.preventDefault();
-    e.stopPropagation();
-    drag.current = { key: c.key, startX: e.clientX, startW: colState.widths[c.key] ?? c.defaultWidth, min: c.minWidth };
-    const onMove = (ev: MouseEvent) => {
-      if (!drag.current) return;
-      const w = Math.max(drag.current.min, drag.current.startW + (ev.clientX - drag.current.startX));
-      setWidth(drag.current.key, Math.round(w));
-    };
-    const onUp = () => {
-      drag.current = null;
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-      document.body.style.removeProperty("user-select");
-    };
-    document.body.style.setProperty("user-select", "none");
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-  }
 
   return (
-    <div className="overflow-x-auto rounded-xl border border-border bg-surface">
-      <div style={{ minWidth }}>
-        {/* Header */}
-        <div
-          className="sticky top-0 z-10 grid items-center border-b border-border bg-surface-muted/60 text-xs font-medium text-foreground-subtle backdrop-blur"
-          style={{ gridTemplateColumns: template }}
+    <DataTable
+      caption="Purchase orders"
+      rows={items}
+      getRowKey={(po) => po.id}
+      rowHref={(po) => `/procurement/${po.id}`}
+      columns={cols.map((c) => ({
+        key: c.key,
+        header: c.label,
+        numeric: c.align === "right",
+        cell: c.cell,
+      }))}
+      // A phone gets the fields that decide whether to open a PO, not 38% of a
+      // 860px row behind a horizontal scroller.
+      renderCard={(po) => (
+        <a
+          href={`/procurement/${po.id}`}
+          className="block rounded-xl border border-border bg-surface p-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          {cols.map((c, i) => (
-            <div
-              key={c.key}
-              className={cn("relative h-10 px-4", i === 0 && "pl-4", "flex items-center", c.align === "right" && "justify-end")}
-            >
-              <span className="truncate">{c.label}</span>
-              {i < cols.length - 1 && (
-                <span
-                  role="separator"
-                  aria-orientation="vertical"
-                  onMouseDown={(e) => onResizeStart(e, c)}
-                  className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize hover:bg-primary/40"
-                />
-              )}
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="font-mono text-sm font-medium">{po.poNumber}</p>
+              <p className="text-xs text-foreground-subtle">{po.vendor.name}</p>
             </div>
-          ))}
-        </div>
-
-        {/* Rows */}
-        {items.map((po, r) => (
-          <div
-            key={po.id}
-            onClick={() => onRowClick(po.id)}
-            className={cn(
-              "grid cursor-pointer items-center border-b border-border last:border-0 hover:bg-surface-muted/50",
-              r % 2 === 1 && "bg-surface-muted/20",
-            )}
-            style={{ gridTemplateColumns: template }}
-          >
-            {cols.map((c) => (
-              <div key={c.key} className={cn("min-w-0 px-4 py-3", c.align === "right" && "text-right")}>
-                {c.cell(po)}
-              </div>
-            ))}
+            <span className="shrink-0 font-mono text-sm tabular-nums">
+              <MoneyText paise={po.totalPaise} compact />
+            </span>
           </div>
-        ))}
-      </div>
-    </div>
+          <p className="mt-1.5 text-xs text-foreground-muted">{po.project.name}</p>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <StatusBadge meta={PO_STATUS_META} value={po.status} />
+            <StatusBadge meta={PO_PAYMENT_META} value={po.paymentStatus} />
+            <span className="text-xs text-foreground-subtle">{formatDate(po.purchaseDate)}</span>
+          </div>
+        </a>
+      )}
+    />
   );
 }

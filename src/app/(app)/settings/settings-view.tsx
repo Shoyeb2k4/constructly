@@ -65,7 +65,7 @@ export function SettingsView() {
                 className={cn(
                   "flex shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
                   isActive
-                    ? "bg-primary/10 text-primary"
+                    ? "bg-primary-subtle text-primary-emphasis"
                     : "text-foreground-muted hover:bg-surface-muted hover:text-foreground",
                 )}
               >

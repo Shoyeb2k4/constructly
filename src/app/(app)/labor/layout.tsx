@@ -1,15 +1,12 @@
-import { LaborNav } from "@/features/labor/components/labor-nav";
+import { LaborSectionHeader } from "@/features/labor/components/labor-section-header";
 
 export default function LaborLayout({ children }: { children: React.ReactNode }) {
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Labor</h1>
-        <p className="text-sm text-foreground-muted">
-          Workers, contractors, and daily attendance.
-        </p>
-      </div>
-      <LaborNav />
+      {/* Renders the section title + tabs on list screens and a compact
+          breadcrumb on a record, so a record page carries ONE page title —
+          its own — instead of three stacked ones. */}
+      <LaborSectionHeader />
       {children}
     </div>
   );

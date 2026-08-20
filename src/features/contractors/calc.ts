@@ -13,8 +13,13 @@ export function advanceDeltaPaise(type: ContractorLedgerType, amountPaise: numbe
     // A reversal hands money back to the advance pool: either restoring a
     // drawdown, or turning already-paid net cash into an unapplied advance.
     case "SETTLEMENT_REVERSAL":
+    // A re-scope IN is money arriving at a new scope. Paired with an OUT of the
+    // same amount in the same transaction, so the two net to zero on the
+    // contractor's balance — a transfer is never new money.
+    case "SCOPE_TRANSFER_IN":
       return amountPaise;
     case "ADJUSTMENT":
+    case "SCOPE_TRANSFER_OUT":
       return -amountPaise;
     case "LABOUR_BILL":
     case "PAYMENT":
@@ -157,11 +162,23 @@ export function outstandingPerAdvance(entries: ScopedLedgerEntry[]): Outstanding
       const source = byId.get(e.reversesEntryId)?.drawsFromEntryId;
       if (source) consumed.set(source, (consumed.get(source) ?? 0) - e.amountPaise);
     }
+    // A re-scope DRAINS its source, exactly like a drawdown does — the money is
+    // no longer available at that scope. It is NOT labour consumption though:
+    // it funds no bucket and pays nothing, which is why it never sets
+    // fundsContractId and never carries a settlementId.
+    if (e.type === "SCOPE_TRANSFER_OUT" && e.drawsFromEntryId) {
+      consumed.set(e.drawsFromEntryId, (consumed.get(e.drawsFromEntryId) ?? 0) + e.amountPaise);
+    }
   }
 
+  // What can FUND a settlement. Transferred-in money is a real, spendable
+  // advance at its new scope — omitting it here would leave the balance correct
+  // while the money itself was unspendable, which is the exact stranding this
+  // feature exists to cure.
   const isAdvance = (e: ScopedLedgerEntry) =>
     e.type === "ADVANCE" ||
     e.type === "OPENING_ADVANCE" ||
+    e.type === "SCOPE_TRANSFER_IN" ||
     (e.type === "SETTLEMENT_REVERSAL" && !e.reversesEntryId);
 
   return entries

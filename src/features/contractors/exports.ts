@@ -23,6 +23,10 @@ const TYPE_LABEL: Record<ContractorLedgerType, string> = {
   ADJUSTMENT: "Advance adjusted",
   PAYMENT: "Payment made",
   SETTLEMENT_REVERSAL: "Settlement reversed",
+  // Exports keep both rows so the file reconciles to the ledger; the label says
+  // plainly that no cash moved.
+  SCOPE_TRANSFER_OUT: "Advance re-scoped (out)",
+  SCOPE_TRANSFER_IN: "Advance re-scoped (in)",
 };
 
 function excel(aoa: (string | number)[][], sheetName: string, filename: string) {

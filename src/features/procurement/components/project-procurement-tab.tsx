@@ -10,20 +10,21 @@ import {
   Users,
   AlertTriangle,
   Plus,
-  ChevronRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { MoneyText } from "@/components/patterns/money-text";
-import { StatusBadge, PO_STATUS_META } from "@/components/patterns/status-badge";
+import { StatusBadge, PO_STATUS_META, PO_PAYMENT_META } from "@/components/patterns/status-badge";
+import { DataTable } from "@/components/patterns/data-table";
+import { EmptyState } from "@/components/patterns/empty-state";
 import { cn } from "@/lib/utils";
 import { formatDate } from "@/features/projects/format";
+import type { PurchaseOrderListItem, VendorPaymentItem } from "../types";
 import { useProjectProcurement } from "../hooks";
 import { useCan } from "@/features/rbac/permission-context";
 import { POEditorSheet } from "./po-editor-sheet";
 import { RecordPaymentDialog } from "./record-payment-dialog";
-import { PaymentStatusBadge } from "./payment-bits";
 
 function SummaryCard({
   icon: Icon,
@@ -182,32 +183,76 @@ export function ProjectProcurementTab({ projectId }: { projectId: string }) {
         </CardContent>
       </Card>
 
-      {/* Scoped POs + payments */}
+      {/* Scoped POs + payments. Two lists, never merged: an order is a
+          commitment and a payment is cash that has moved. */}
       <div className="grid gap-6 lg:grid-cols-2">
         <Card>
           <CardHeader>
             <CardTitle>{focusVendor ? `${focusVendor.vendor.name} — orders` : "Purchase orders"}</CardTitle>
           </CardHeader>
           <CardContent className="p-0">
-            {focusPOs.length === 0 ? (
-              <p className="px-5 py-8 text-center text-sm text-foreground-subtle">No purchase orders yet.</p>
-            ) : (
-              focusPOs.map((po) => (
+            <DataTable
+              caption="Purchase orders on this project"
+              rows={focusPOs as PurchaseOrderListItem[]}
+              getRowKey={(po) => po.id}
+              rowHref={(po) => `/procurement/${po.id}`}
+              className="rounded-none border-0"
+              empty={
+                <EmptyState
+                  icon={ShoppingCart}
+                  title="No purchase orders yet"
+                  description="Raise one to start tracking what this project buys."
+                />
+              }
+              columns={[
+                {
+                  key: "po",
+                  header: "PO",
+                  cell: (po) => (
+                    <span className="block min-w-0">
+                      <span className="block font-mono text-sm">{po.poNumber}</span>
+                      <span className="text-xs text-foreground-subtle">{po.vendor.name}</span>
+                    </span>
+                  ),
+                },
+                {
+                  key: "status",
+                  header: "Status",
+                  cell: (po) => (
+                    <span className="flex flex-wrap gap-1">
+                      <StatusBadge meta={PO_STATUS_META} value={po.status} />
+                      <StatusBadge meta={PO_PAYMENT_META} value={po.paymentStatus} />
+                    </span>
+                  ),
+                },
+                {
+                  key: "amount",
+                  header: "Ordered",
+                  numeric: true,
+                  cell: (po) => <MoneyText paise={po.totalPaise} compact />,
+                },
+              ]}
+              renderCard={(po) => (
                 <Link
-                  key={po.id}
                   href={`/procurement/${po.id}`}
-                  className="flex items-center gap-3 border-b border-border px-5 py-3 text-sm transition-colors last:border-0 hover:bg-surface-muted/40"
+                  className="block rounded-xl border border-border bg-surface p-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate font-mono">{po.poNumber}</p>
-                    <p className="truncate text-xs text-foreground-subtle">{po.vendor.name} · {formatDate(po.purchaseDate)}</p>
+                  <div className="flex items-baseline justify-between gap-3">
+                    <span className="font-mono text-sm">{po.poNumber}</span>
+                    <span className="shrink-0 font-mono tabular-nums">
+                      <MoneyText paise={po.totalPaise} compact />
+                    </span>
                   </div>
-                  <PaymentStatusBadge status={po.paymentStatus} />
-                  <span className="font-mono"><MoneyText paise={po.totalPaise} compact /></span>
-                  <StatusBadge meta={PO_STATUS_META} value={po.status} />
+                  <p className="mt-1 text-xs text-foreground-subtle">
+                    {po.vendor.name} · {formatDate(po.purchaseDate)}
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    <StatusBadge meta={PO_STATUS_META} value={po.status} />
+                    <StatusBadge meta={PO_PAYMENT_META} value={po.paymentStatus} />
+                  </div>
                 </Link>
-              ))
-            )}
+              )}
+            />
           </CardContent>
         </Card>
 
@@ -216,23 +261,74 @@ export function ProjectProcurementTab({ projectId }: { projectId: string }) {
             <CardTitle>{focusVendor ? `${focusVendor.vendor.name} — payments` : "Payments"}</CardTitle>
           </CardHeader>
           <CardContent className="p-0">
-            {focusPayments.length === 0 ? (
-              <p className="px-5 py-8 text-center text-sm text-foreground-subtle">No payments recorded yet.</p>
-            ) : (
-              focusPayments.map((p) => (
-                <div key={p.id} className="flex items-center gap-3 border-b border-border px-5 py-3 text-sm last:border-0">
-                  <div className="min-w-0 flex-1">
-                    <p className="font-mono font-medium"><MoneyText paise={p.amountPaise} compact /></p>
-                    <p className="truncate text-xs text-foreground-subtle">
-                      {p.vendor.name}
-                      {p.purchaseOrder ? ` · ${p.purchaseOrder.poNumber}` : " · On account"}
-                    </p>
+            <DataTable
+              caption="Vendor payments on this project"
+              rows={focusPayments as VendorPaymentItem[]}
+              getRowKey={(p) => p.id}
+              className="rounded-none border-0"
+              empty={
+                <EmptyState
+                  icon={IndianRupee}
+                  title="No payments recorded yet"
+                  description="Payments recorded against this project's vendors appear here."
+                />
+              }
+              columns={[
+                {
+                  key: "amount",
+                  header: "Amount",
+                  numeric: true,
+                  cell: (p) => <MoneyText paise={p.amountPaise} compact />,
+                },
+                {
+                  key: "against",
+                  header: "Against",
+                  cell: (p) => (
+                    <span className="block min-w-0">
+                      <span className="block text-sm">{p.vendor.name}</span>
+                      {/* An "on account" payment is not attached to any order —
+                          say which, rather than leaving the row ambiguous. */}
+                      {p.purchaseOrder ? (
+                        <Link
+                          href={`/procurement/${p.purchaseOrder.id}`}
+                          className="rounded-sm font-mono text-xs text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        >
+                          {p.purchaseOrder.poNumber}
+                        </Link>
+                      ) : (
+                        <span className="text-xs text-foreground-subtle">On account</span>
+                      )}
+                    </span>
+                  ),
+                },
+                {
+                  key: "date",
+                  header: "Date",
+                  hideBelow: "sm",
+                  cell: (p) => (
+                    <span className="whitespace-nowrap text-xs text-foreground-muted">
+                      {formatDate(p.date)}
+                    </span>
+                  ),
+                },
+              ]}
+              renderCard={(p) => (
+                <div className="rounded-xl border border-border bg-surface p-3">
+                  <div className="flex items-baseline justify-between gap-3">
+                    <span className="font-mono font-medium tabular-nums">
+                      <MoneyText paise={p.amountPaise} compact />
+                    </span>
+                    <span className="shrink-0 text-xs text-foreground-subtle">
+                      {formatDate(p.date)}
+                    </span>
                   </div>
-                  <span className="text-xs text-foreground-subtle">{formatDate(p.date)}</span>
-                  <ChevronRight className="size-3.5 text-foreground-subtle" />
+                  <p className="mt-1 text-xs text-foreground-muted">
+                    {p.vendor.name}
+                    {p.purchaseOrder ? ` · ${p.purchaseOrder.poNumber}` : " · On account"}
+                  </p>
                 </div>
-              ))
-            )}
+              )}
+            />
           </CardContent>
         </Card>
       </div>

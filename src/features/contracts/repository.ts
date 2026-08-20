@@ -1,3 +1,5 @@
+import type { AttributionPreview } from "./attribution";
+import type { UnattributedRowDto } from "./server/attribution";
 import type {
   AgreementDetail,
   AddScopeItemInput,
@@ -19,6 +21,8 @@ import type {
   SetScopeRateInput,
   UpdateContractInput,
   UpdateMilestoneInput,
+  AttributionApplied,
+  AttributionBlocked,
 } from "./types";
 
 /**
@@ -74,6 +78,27 @@ export interface ContractsRepository {
 
   /** Audited commercial events across this contractor's agreements. */
   listHistory(contractorId: string): Promise<HistoryEvent[]>;
+
+  // Settled-attribution correction. Refusals come back as `{ blockers }` rather
+  // than thrown, so a deterministic decision survives production error masking.
+  listAttributableLabour(contractorId: string, projectId: string): Promise<UnattributedRowDto[]>;
+  previewAttribution(input: {
+    contractorId: string;
+    projectId: string;
+    contractId: string;
+    attendanceIds: string[];
+  }): Promise<AttributionPreview | { blockers: string[] }>;
+  attributeSettledLabour(input: {
+    contractorId: string;
+    projectId: string;
+    contractId: string;
+    attendanceIds: string[];
+    reason: string;
+  }): Promise<AttributionApplied | AttributionBlocked>;
+  reverseAttribution(input: {
+    correctionId: string;
+    reason: string;
+  }): Promise<AttributionApplied | AttributionBlocked>;
 
   // Reconciliation surfaces
   getContractorProfile(contractorId: string): Promise<ContractorProfile | null>;

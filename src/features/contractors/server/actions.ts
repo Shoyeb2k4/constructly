@@ -17,6 +17,7 @@ import {
   type ScopedLedgerEntry,
 } from "../calc";
 import { paiseFromBigInt, paiseFromNullableBigInt } from "@/lib/money";
+import { scopedAdvanceBlockedReason } from "@/features/contracts/agreement-actions";
 import {
   findDuplicates,
   newBusinessBlockedReason,
@@ -187,6 +188,39 @@ async function outstandingAdvanceFor(companyId: string, contractorId: string): P
 }
 
 /** Ledger rows in the shape the pure scope/allocation helpers expect. */
+/**
+ * THE ADVANCE-POOL LOCK.
+ *
+ * Every operation that decides how to spend a contractor's advance money must
+ * serialize against the same rows, or two of them can read the same available
+ * balance and both spend it. That race predates this pass: `createSettlement`
+ * locked the period's ATTENDANCE (so the same labour is never billed twice) but
+ * nothing at all guarded the advance pool, so two settlements for different
+ * periods could each draw the same ₹5,00,000.
+ *
+ * LOCK ORDER — attendance first, then the ledger. `createSettlement` already
+ * takes attendance, so it keeps that order and adds this after. A re-scope takes
+ * ONLY this lock. Nothing in the codebase takes the ledger before attendance, so
+ * the two can never deadlock against each other. Any future operation needing
+ * both must follow the same order.
+ *
+ * Locking every row for one contractor (rather than the specific advances) is
+ * deliberate: `remaining` for one advance depends on drawdowns, reversals and
+ * transfers recorded on OTHER rows, so a narrower lock would not actually
+ * protect the number being read.
+ */
+async function lockAdvancePool(
+  tx: Prisma.TransactionClient,
+  companyId: string,
+  contractorId: string,
+): Promise<void> {
+  await tx.$queryRaw`
+    SELECT id FROM contractor_ledger_entries
+    WHERE company_id = ${companyId}::uuid
+      AND contractor_id = ${contractorId}::uuid
+    FOR UPDATE`;
+}
+
 async function scopedLedgerFor(
   companyId: string,
   contractorId: string,
@@ -227,7 +261,14 @@ async function scopedLedgerFor(
  */
 async function assertAgreementScope(
   tx: Prisma.TransactionClient,
-  args: { companyId: string; contractorId: string; projectId: string; contractId: string },
+  args: {
+    companyId: string;
+    contractorId: string;
+    projectId: string;
+    contractId: string;
+    /** True when NEW money is being earmarked; false for historical bookkeeping. */
+    forNewMoney?: boolean;
+  },
 ): Promise<void> {
   const found = await tx.contractorContract.findFirst({
     where: {
@@ -237,9 +278,17 @@ async function assertAgreementScope(
       projectId: args.projectId,
       deletedAt: null,
     },
-    select: { id: true },
+    select: { id: true, status: true },
   });
   if (!found) throw new Error("INVALID_AGREEMENT_SCOPE");
+  // Earmarking money for an agreement that can never spend it would strand it —
+  // see scopedAdvanceBlockedReason. Only checked when NEW money is being
+  // attached; the settlement path leaves this off, because a drawdown recorded
+  // against an agreement that has since closed is history, not new money.
+  if (args.forNewMoney) {
+    const blocked = scopedAdvanceBlockedReason(found.status);
+    if (blocked) throw new Error(blocked);
+  }
 }
 
 /** Σ estimated labour cost for a contractor on a project across the period. */
@@ -526,6 +575,7 @@ export async function recordAdvance(input: RecordAdvanceInput): Promise<Contract
         contractorId: data.contractorId,
         projectId: data.projectId!,
         contractId: data.contractId,
+        forNewMoney: true,
       });
     }
     const balance =
@@ -773,6 +823,13 @@ export async function createSettlement(
         AND project_id = ${data.projectId}::uuid
         AND date BETWEEN ${data.periodStart}::date AND ${data.periodEnd}::date
       FOR UPDATE`;
+
+    // …then the advance pool, in that order. This is what stops two settlements
+    // for DIFFERENT periods from each drawing the same outstanding advance: the
+    // allocation below is computed from ledger state nobody else can change
+    // until this transaction commits. The allocator's ordering and arithmetic
+    // are untouched — only access to the pool is serialized.
+    await lockAdvancePool(tx, user.company.id, data.contractorId);
 
     // OVERLAP GUARD. A settlement is the canonical financial recognition of
     // labour money, so the same attendance must never be billed by two of them.

@@ -2,11 +2,12 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { HardHat, Plus, Search, ChevronRight, Download } from "lucide-react";
+import { HardHat, Plus, Search, Download } from "lucide-react";
 import { PageHeader } from "@/components/patterns/page-header";
 import { EmptyState } from "@/components/patterns/empty-state";
-import { RowsSkeleton } from "@/components/patterns/loading-state";
 import { MoneyText } from "@/components/patterns/money-text";
+import { DataTable } from "@/components/patterns/data-table";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -24,7 +25,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { cn } from "@/lib/utils";
 import { useCan } from "@/features/rbac/permission-context";
 import {
   useContractors,
@@ -48,6 +48,11 @@ export function ContractorsView() {
   const { data: outstanding = [] } = useOutstandingAdvances();
   const { data: costSummary = [] } = useContractorCostSummary();
   const { data: settlements = [] } = useSettlements();
+
+  // Already fetched for the Reports menu — reused here rather than adding a
+  // query. Scan fields must help a user decide what to OPEN; nothing is shown
+  // merely because the data happens to be in hand.
+  const costById = new Map(costSummary.map((r) => [r.contractorId, r]));
 
   const reportsEmpty = outstanding.length === 0 && costSummary.length === 0 && settlements.length === 0;
 
@@ -106,7 +111,7 @@ export function ContractorsView() {
           />
         </div>
         <Select value={status} onValueChange={(v) => setStatus(v as ContractorStatus | "ALL")}>
-          <SelectTrigger className="w-36"><SelectValue /></SelectTrigger>
+          <SelectTrigger className="w-36" aria-label="Filter by contractor status"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="ALL">All statuses</SelectItem>
             <SelectItem value="ACTIVE">Active</SelectItem>
@@ -116,64 +121,113 @@ export function ContractorsView() {
         </Select>
       </div>
 
-      {isLoading ? (
-        <RowsSkeleton rows={6} />
-      ) : contractors.length === 0 ? (
-        <EmptyState
-          icon={HardHat}
-          title={search || status !== "ALL" ? "No contractors match" : "No contractors yet"}
-          description={
-            search || status !== "ALL"
-              ? "Try a different search or status."
-              : "Add a labour contractor to record advances and weekly settlements."
+      {/* Loading and empty are the TABLE's own states, so the skeleton is
+          built from the same column definitions and the page does not jump when
+          the rows land. */}
+      <DataTable
+          isLoading={isLoading}
+          loadingRows={6}
+          empty={
+            <EmptyState
+              icon={HardHat}
+              title={search || status !== "ALL" ? "No contractors match" : "No contractors yet"}
+              description={
+                search || status !== "ALL"
+                  ? "Try a different search or status."
+                  : "Add a labour contractor to record advances and weekly settlements."
+              }
+              action={
+                canCreate && !(search || status !== "ALL") ? (
+                  <Button variant="primary" size="sm" onClick={() => setAddOpen(true)}>
+                    <Plus />
+                    Add contractor
+                  </Button>
+                ) : undefined
+              }
+            />
           }
-          action={
-            canCreate && !(search || status !== "ALL") ? (
-              <Button variant="primary" size="sm" onClick={() => setAddOpen(true)}>
-                <Plus />
-                Add contractor
-              </Button>
-            ) : undefined
-          }
-        />
-      ) : (
-        <div className="overflow-hidden rounded-xl border border-border bg-surface">
-          <div className="grid grid-cols-[1fr_auto] items-center border-b border-border bg-surface-muted/50 px-4 py-2.5 text-xs font-medium text-foreground-subtle">
-            <span>Contractor</span>
-            <span className="text-right">Advance balance</span>
-          </div>
-          {contractors.map((c) => (
-            <Link
-              key={c.id}
-              href={`/labor/contractors/${c.id}`}
-              className="grid grid-cols-[1fr_auto] items-center border-b border-border px-4 py-3 transition-colors last:border-0 hover:bg-surface-muted/50"
-            >
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="truncate text-sm font-medium">{c.name}</span>
-                  {c.status === "INACTIVE" && (
-                    <span className="rounded-full bg-surface-muted px-2 py-0.5 text-xs text-foreground-subtle">
-                      Archived
-                    </span>
-                  )}
+          caption="Contractors"
+          rows={contractors}
+          getRowKey={(c) => c.id}
+          rowHref={(c) => `/labor/contractors/${c.id}`}
+          columns={[
+            {
+              key: "name",
+              header: "Contractor",
+              cell: (c) => (
+                <div className="min-w-0">
+                  <span className="block truncate font-medium">{c.name}</span>
+                  <span className="text-xs text-foreground-subtle">{c.phone || "No mobile"}</span>
                 </div>
-                <span className="text-xs text-foreground-subtle">{c.phone || "—"}</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span
-                  className={cn(
-                    "font-mono text-sm",
-                    c.advanceBalancePaise > 0 ? "text-warning-foreground" : "text-foreground-muted",
-                  )}
-                >
+              ),
+            },
+            {
+              key: "status",
+              header: "Status",
+              hideBelow: "sm",
+              cell: (c) => (
+                <Badge variant={c.status === "INACTIVE" ? "neutral" : "success"}>
+                  {c.status === "INACTIVE" ? "Archived" : "Active"}
+                </Badge>
+              ),
+            },
+            {
+              key: "settled",
+              header: "Settled labour",
+              numeric: true,
+              hideBelow: "lg",
+              cell: (c) => (
+                <span className="text-foreground-muted">
+                  <MoneyText paise={costById.get(c.id)?.totalBillPaise ?? 0} />
+                </span>
+              ),
+            },
+            {
+              key: "settlements",
+              header: "Settlements",
+              numeric: true,
+              hideBelow: "xl",
+              cell: (c) => (
+                <span className="text-foreground-muted">
+                  {costById.get(c.id)?.settlementCount ?? 0}
+                </span>
+              ),
+            },
+            {
+              key: "advance",
+              header: "Advance balance",
+              numeric: true,
+              // NOT amber. An outstanding advance is an ordinary position, not a
+              // warning — colouring every rupee amber taught the eye to ignore
+              // the colour that should mean "look at this".
+              cell: (c) => <MoneyText paise={c.advanceBalancePaise} />,
+            },
+          ]}
+          renderCard={(c) => (
+            <Link
+              href={`/labor/contractors/${c.id}`}
+              className="block rounded-xl border border-border bg-surface p-3 transition-colors hover:bg-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <div className="flex items-baseline justify-between gap-3">
+                <span className="min-w-0 truncate font-medium">{c.name}</span>
+                <span className="shrink-0 font-mono tabular-nums text-sm">
                   <MoneyText paise={c.advanceBalancePaise} />
                 </span>
-                <ChevronRight className="size-4 text-foreground-subtle" />
               </div>
+              <div className="mt-1 flex items-center justify-between gap-3">
+                <span className="truncate text-xs text-foreground-subtle">
+                  {c.phone || "No mobile"}
+                </span>
+                <span className="shrink-0 text-xs text-foreground-subtle">Advance balance</span>
+              </div>
+              {c.status === "INACTIVE" && (
+                <Badge variant="neutral" className="mt-2">
+                  Archived
+                </Badge>
+              )}
             </Link>
-          ))}
-        </div>
-      )}
+          )}
+        />
 
       <AddContractorSheet open={addOpen} onOpenChange={setAddOpen} />
     </div>
