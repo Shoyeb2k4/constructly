@@ -18,6 +18,7 @@ import {
   FileText,
   Tags,
   X,
+  MoreHorizontal,
 } from "lucide-react";
 import {
   Select,
@@ -27,12 +28,26 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/patterns/empty-state";
 import { RowsSkeleton } from "@/components/patterns/loading-state";
 import { MoneyText } from "@/components/patterns/money-text";
+import { Toolbar, ToolbarGroup, ToolbarSpacer } from "@/components/patterns/toolbar";
+import { Callout } from "@/components/patterns/callout";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { DateNavigator } from "./date-navigator";
+import { CopyPreviousDayDialog } from "./copy-previous-day-dialog";
 import { cn } from "@/lib/utils";
 import { useProjects } from "@/features/projects/hooks";
+import { useIsHydrated } from "@/lib/use-is-hydrated";
 import { useAttendanceSheet, useSetQuantity, useCopyPreviousDay } from "../../hooks";
 import { useCan } from "@/features/rbac/permission-context";
 import { getLastProject, setLastProject, todayISO } from "../../last-project";
@@ -44,6 +59,44 @@ import type { SheetGroup, SheetRow } from "../../types";
 import { SyncChip } from "./sync-chip";
 import { AttendanceCalendar } from "./attendance-calendar";
 import { AddLabourTypeDialog } from "./add-labour-type-dialog";
+
+/**
+ * Loading geometry that matches the loaded screen: a control bar, then grouped
+ * rows. A skeleton shaped differently from its result is a layout shift with
+ * extra steps.
+ */
+function AttendanceSkeleton() {
+  return (
+    <div className="space-y-4" aria-busy="true">
+      <div className="flex flex-wrap items-center gap-2">
+        <Skeleton className="h-9 min-w-48 flex-1" />
+        <Skeleton className="h-9 w-56" />
+      </div>
+      <div className="overflow-hidden rounded-xl border border-border bg-surface">
+        {[0, 1].map((g) => (
+          <div key={g} className="border-b border-border last:border-0">
+            <div className="flex items-center gap-3 px-3 py-3">
+              <Skeleton className="size-4 rounded" />
+              <Skeleton className="h-4 w-44" />
+            </div>
+            {[0, 1].map((r) => (
+              <div
+                key={r}
+                className="flex items-center justify-between gap-3 border-t border-border py-2 pl-3 pr-3 sm:pl-8"
+              >
+                <div className="space-y-1.5">
+                  <Skeleton className="h-4 w-32" />
+                  <Skeleton className="h-3 w-20" />
+                </div>
+                <Skeleton className="h-11 w-[9.5rem] rounded-lg" />
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 /** One labour-type row: name, read-only rate, and the headcount stepper. */
 function SubcategoryRow({
@@ -89,17 +142,43 @@ function SubcategoryRow({
   }
 
   return (
-    <div className="border-b border-border py-2 pl-8 pr-3 last:border-0">
-      <div className="flex items-center gap-3">
+    <div className="border-b border-border py-2 pl-3 pr-3 last:border-0 sm:pl-8">
+      {/* The stepper is a fixed 152px and the name is the thing being counted,
+          so on a phone they get their OWN rows rather than competing: the name
+          was truncating to 78px against a 104-116px need, which left the
+          operator stepping a quantity they could not identify. */}
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium">{row.name}</p>
-          {row.dailyRatePaise != null && (
-            <p className="text-xs text-foreground-subtle">
-              <MoneyText paise={row.dailyRatePaise} whole />/day
-            </p>
-          )}
+          <p className="text-sm font-medium sm:truncate">{row.name}</p>
+          <div className="flex flex-wrap items-baseline gap-x-2 text-xs text-foreground-muted">
+            {row.dailyRatePaise != null ? (
+              <span>
+                <MoneyText paise={row.dailyRatePaise} whole />/day
+              </span>
+            ) : (
+              <span className="text-foreground-subtle">No rate set</span>
+            )}
+            {/* Attendance VALUE — this quantity at the rate snapshotted for this
+                date. Not "due" and not "payable": it becomes agreement credit
+                only when a settlement recognises it. */}
+            {row.dailyRatePaise != null && row.quantity > 0 && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span className="font-medium text-foreground">
+                  <MoneyText paise={Math.round(row.dailyRatePaise * row.quantity)} whole />
+                </span>
+              </>
+            )}
+            {row.agreementTitle && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span className="truncate">{row.agreementTitle}</span>
+              </>
+            )}
+          </div>
         </div>
 
+        <div className="flex items-center gap-3 self-end sm:self-auto">
         <button
           onClick={() => setShowNote((v) => !v)}
           aria-label={`Note for ${row.name}`}
@@ -116,7 +195,9 @@ function SubcategoryRow({
             onClick={() => step(-0.5)}
             disabled={!canMark || row.quantity === 0}
             aria-label={`Half day fewer ${row.name}`}
-            className="flex h-11 w-11 items-center justify-center text-foreground-muted transition-colors hover:bg-surface-muted disabled:opacity-30"
+            // Recessed rather than faded: `opacity` composites text toward the
+            // background and was measured breaking contrast elsewhere.
+            className="flex h-11 w-11 items-center justify-center text-foreground-muted transition-colors hover:bg-surface-muted disabled:text-foreground-subtle"
           >
             <Minus className="size-4" />
           </button>
@@ -139,10 +220,11 @@ function SubcategoryRow({
             onClick={() => step(0.5)}
             disabled={!canMark}
             aria-label={`Half day more ${row.name}`}
-            className="flex h-11 w-11 items-center justify-center text-foreground-muted transition-colors hover:bg-surface-muted disabled:opacity-30"
+            className="flex h-11 w-11 items-center justify-center text-foreground-muted transition-colors hover:bg-surface-muted disabled:text-foreground-subtle"
           >
             <Plus className="size-4" />
           </button>
+        </div>
         </div>
       </div>
 
@@ -268,22 +350,41 @@ function ContractorGroup({
         />
         <HardHat className="size-4 shrink-0 text-foreground-subtle" />
         <span className="min-w-0 flex-1 truncate text-sm font-semibold">{group.contractorName}</span>
+        {/* A historical group is not invalid — it is labour recorded against a
+            contractor/type this project no longer lists. "Not configured" says
+            that; a red or faded treatment would say "broken". */}
         {!group.configured && (
-          <span className="rounded-full bg-warning/15 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-warning-foreground">
+          <Badge variant="neutral" className="shrink-0">
             Not configured
-          </span>
+          </Badge>
         )}
         {group.archived && (
-          <span className="rounded-full bg-surface-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-foreground-subtle">
+          <Badge variant="neutral" className="shrink-0">
             Archived
-          </span>
+          </Badge>
         )}
         {group.totalPresent > 0 && (
-          <span className="rounded-full bg-surface-muted px-2 py-0.5 font-mono text-xs font-medium tabular-nums">
-            {group.totalPresent}
+          <span className="flex shrink-0 items-baseline gap-2">
+            <span className="font-mono text-xs font-medium tabular-nums text-foreground-muted">
+              {group.totalPresent} present
+            </span>
+            <span className="hidden font-mono text-sm font-semibold tabular-nums sm:inline">
+              <MoneyText paise={group.estimatedCostPaise} whole />
+            </span>
           </span>
         )}
       </button>
+
+      {/* Why new entry is refused, said once at the group — not inferred from a
+          missing stepper. Existing rows stay fully readable and correctable. */}
+      {!collapsed && group.archived && (
+        <div className="px-3 pb-2 pl-8">
+          <Callout tone="neutral" title="This contractor is archived">
+            No new attendance can be recorded for them. What is already here stays, remains
+            correctable, and can still be settled.
+          </Callout>
+        </div>
+      )}
 
       {!collapsed && group.agreements.length > 0 && (
         <div className="px-3 pb-2 pl-8">
@@ -298,7 +399,7 @@ function ContractorGroup({
                   className={cn(
                     "rounded-full border px-2.5 py-1 text-xs transition-colors",
                     chosen === a.contractId
-                      ? "border-primary bg-primary/10 font-medium text-primary"
+                      ? "border-primary bg-primary-subtle font-medium text-primary-emphasis"
                       : "border-border text-foreground-muted hover:bg-surface-muted",
                   )}
                 >
@@ -321,12 +422,6 @@ function ContractorGroup({
           This contractor holds {group.agreements.length}{" "}
           agreements here. Choose which one today&rsquo;s labour belongs to — it can&rsquo;t be
           assumed.
-        </p>
-      )}
-      {!collapsed && group.archived && (
-        <p className="px-3 pb-2 pl-8 text-xs text-foreground-subtle">
-          Archived — no new attendance can be recorded for them. Anything already
-          recorded stays here, stays correctable, and can still be settled.
         </p>
       )}
       {!collapsed && visible.length === 0 && !(many && chosen == null) && !group.archived && (
@@ -386,7 +481,8 @@ export function AttendanceView() {
   const canExport = can("attendance.export");
   // Adding a labour type to the sheet edits agreement scope or project config.
   const canConfigure = can("contracts.edit") || can("projects.edit");
-  const { data: projects = [] } = useProjects({});
+  const hydrated = useIsHydrated();
+  const { data: projects = [], isPending: projectsPending } = useProjects({});
   const active = React.useMemo(
     () => projects.filter((p) => !p.archivedAt && p.stage !== "CLOSED"),
     [projects],
@@ -404,6 +500,7 @@ export function AttendanceView() {
   const [date, setDate] = React.useState(() => todayISO());
   const [collapsed, setCollapsed] = React.useState<Set<string>>(new Set());
   const [showCalendar, setShowCalendar] = React.useState(false);
+  const [copyOpen, setCopyOpen] = React.useState(false);
 
   // Selection priority: a valid `?project=` in the URL (deep links, the "Record
   // attendance" link from the project page, back/forward) wins; otherwise the
@@ -445,6 +542,20 @@ export function AttendanceView() {
     });
   }
 
+  // DEFECT FIX (pre-existing). Two separate bugs met here.
+  //
+  // 1. The empty state was reached whenever `projects` was empty — which is
+  //    ALWAYS true on the server, because React Query has no data there. "We
+  //    have not asked yet" and "there are none" are different states.
+  // 2. Everything this screen shows comes from the browser, so even a correct
+  //    pending check disagrees across the hydration boundary once the query
+  //    resolves mid-flight. React then discards the server tree and re-renders
+  //    the branch, logging a hydration mismatch on every single load.
+  //
+  // Gating on hydration makes the server render and the hydration render agree
+  // by construction; the pending check then does its ordinary job.
+  if (!hydrated || projectsPending) return <AttendanceSkeleton />;
+
   if (active.length === 0) {
     return (
       <EmptyState
@@ -463,36 +574,84 @@ export function AttendanceView() {
   return (
     <div className="space-y-4 pb-24">
       <div className="space-y-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <Select value={projectId ?? undefined} onValueChange={selectProject}>
-            <SelectTrigger className="min-w-48 flex-1">
-              <SelectValue placeholder="Select project" />
-            </SelectTrigger>
-            <SelectContent>
-              {active.map((p) => (
-                <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Input
-            type="date"
-            value={date}
-            max={todayISO()}
-            onChange={(e) => setDate(e.target.value)}
-            className="w-40"
-          />
-          <Button
-            variant={showCalendar ? "secondary" : "ghost"}
-            size="icon"
-            onClick={() => setShowCalendar((v) => !v)}
-            aria-pressed={showCalendar}
-            aria-label="Toggle attendance calendar"
-            title="Calendar — days with attendance are highlighted"
-          >
-            <CalendarDays className="size-4" />
-          </Button>
-          <SyncChip />
-        </div>
+        {/* WHAT you are looking at, first and always visible: project, then
+            date. Acting on it — calendar, copy, exports — collapses into the
+            menu, because a reporting export is not an operator's first concern
+            and must never outrank the entry field on a phone. */}
+        <Toolbar aria-label="Attendance controls">
+          <ToolbarGroup grow>
+            <Select value={projectId ?? undefined} onValueChange={selectProject}>
+              <SelectTrigger className="w-full" aria-label="Project">
+                <SelectValue placeholder="Select project" />
+              </SelectTrigger>
+              <SelectContent>
+                {active.map((p) => (
+                  <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </ToolbarGroup>
+
+          <ToolbarGroup>
+            <DateNavigator value={date} onChange={setDate} today={todayISO()} />
+          </ToolbarGroup>
+
+          <ToolbarSpacer />
+
+          <ToolbarGroup>
+            <SyncChip />
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon" aria-label="More attendance actions">
+                  <MoreHorizontal className="size-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem
+                  onSelect={(e) => {
+                    e.preventDefault();
+                    setShowCalendar((v) => !v);
+                  }}
+                >
+                  <CalendarDays />
+                  {showCalendar ? "Hide calendar" : "Show calendar"}
+                </DropdownMenuItem>
+                {canMark && (
+                  <DropdownMenuItem
+                    disabled={copyPrev.isPending || !projectId}
+                    onSelect={() => setCopyOpen(true)}
+                  >
+                    <CopyPlus />
+                    Copy yesterday…
+                  </DropdownMenuItem>
+                )}
+                {canExport && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      disabled={!sheet || sheet.totalPresent === 0}
+                      onSelect={async () => {
+                        if (sheet) (await import("../../exports")).exportSheetPdf(sheet, projectName);
+                      }}
+                    >
+                      <FileText />
+                      Export PDF
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      disabled={!sheet || sheet.totalPresent === 0}
+                      onSelect={async () => {
+                        if (sheet) (await import("../../exports")).exportSheetExcel(sheet, projectName);
+                      }}
+                    >
+                      <FileSpreadsheet />
+                      Export Excel
+                    </DropdownMenuItem>
+                  </>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </ToolbarGroup>
+        </Toolbar>
 
         {showCalendar && projectId && (
           <AttendanceCalendar
@@ -502,40 +661,16 @@ export function AttendanceView() {
           />
         )}
 
-        <div className="flex flex-wrap items-center gap-2">
-          {canMark && (
-            <Button variant="secondary" onClick={() => copyPrev.mutate()} disabled={copyPrev.isPending || !projectId}>
-              <CopyPlus />
-              Copy yesterday
-            </Button>
-          )}
-          {canExport && (
-            <div className="ml-auto flex items-center gap-2">
-              <Button variant="ghost" size="sm" disabled={!sheet || sheet.totalPresent === 0}
-                onClick={async () => { if (sheet) (await import("../../exports")).exportSheetPdf(sheet, projectName); }}>
-                <FileText />
-                PDF
-              </Button>
-              <Button variant="ghost" size="sm" disabled={!sheet || sheet.totalPresent === 0}
-                onClick={async () => { if (sheet) (await import("../../exports")).exportSheetExcel(sheet, projectName); }}>
-                <FileSpreadsheet />
-                Excel
-              </Button>
-            </div>
-          )}
-        </div>
-
         {sheet && !hasConfigured && (
-          <p className="rounded-lg border border-dashed border-border bg-surface-muted/40 px-3 py-2 text-xs text-foreground-muted">
-            No contractors are configured for this project.{" "}
+          <Callout tone="info" title="No contractors are configured for this project">
             <Link
               href={`/projects/${pid}?section=contractors&edit=1`}
-              className="text-primary hover:underline"
+              className="rounded-sm font-medium underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               Add contractors
             </Link>{" "}
-            and the labour types they supply to record attendance.
-          </p>
+            and the labour types they supply, and attendance can be recorded here.
+          </Callout>
         )}
       </div>
 
@@ -582,17 +717,34 @@ export function AttendanceView() {
         </div>
       )}
 
+      <CopyPreviousDayDialog
+        open={copyOpen}
+        onOpenChange={setCopyOpen}
+        sheet={sheet}
+        isPending={copyPrev.isPending}
+        onConfirm={() => copyPrev.mutate(undefined, { onSuccess: () => setCopyOpen(false) })}
+      />
+
       {sheet && (
         <div className="sticky bottom-0 z-10 -mx-4 border-t border-border bg-background/90 px-4 py-3 backdrop-blur-md sm:-mx-6 sm:px-6">
-          <div className="mx-auto flex max-w-[1200px] items-center justify-between">
-            <div>
-              <p className="text-[11px] text-foreground-subtle">Total present</p>
-              <p className="text-lg font-semibold leading-none">{sheet.totalPresent}</p>
+          {/* "Attendance value", never "Due" or "Payable". This is what today's
+              quantity is worth at the rate snapshotted for this date; it becomes
+              agreement credit only once a settlement recognises it, and the
+              contractor's Due is a different figure computed from agreements. */}
+          <div className="mx-auto flex max-w-[1200px] items-center justify-between gap-4">
+            <div className="min-w-0">
+              <p className="text-[11px] text-foreground-muted">Total present</p>
+              <p className="text-lg font-semibold leading-none tabular-nums">
+                {sheet.totalPresent}
+              </p>
             </div>
-            <div className="text-right">
-              <p className="text-[11px] text-foreground-subtle">Est. labour cost</p>
+            <div className="min-w-0 text-right">
+              <p className="text-[11px] text-foreground-muted">Attendance value</p>
               <p className="text-lg font-semibold leading-none">
                 <MoneyText paise={sheet.estimatedCostPaise} whole />
+              </p>
+              <p className="text-[11px] text-foreground-subtle">
+                Unsettled until a settlement runs
               </p>
             </div>
           </div>

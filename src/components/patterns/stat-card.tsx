@@ -12,20 +12,28 @@ export function StatCard({
   tone = "default",
   className,
 }: {
-  label: string;
+  label: React.ReactNode;
   value: React.ReactNode;
   icon?: LucideIcon;
   trend?: { direction: "up" | "down"; value: string; good?: boolean };
-  hint?: string;
-  tone?: "default" | "warning" | "danger";
+  hint?: React.ReactNode;
+  /**
+   * MEANING, never category. `attention` says "a decision may be needed here";
+   * it does not say "this figure is money". Six identical tiles where two were
+   * amber for opposite reasons — Currently due and Paid ahead — is what this
+   * scale replaces.
+   */
+  tone?: "default" | "neutral" | "attention" | "warning" | "danger" | "success";
   className?: string;
 }) {
   const toneRing =
-    tone === "warning"
+    tone === "warning" || tone === "attention"
       ? "border-warning/40"
       : tone === "danger"
         ? "border-danger/40"
-        : "border-border";
+        : tone === "success"
+          ? "border-success/40"
+          : "border-border";
   return (
     <div
       className={cn(

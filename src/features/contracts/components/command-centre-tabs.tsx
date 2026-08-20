@@ -12,7 +12,17 @@ import * as React from "react";
 import { FileText, Layers, PencilLine, Plus } from "lucide-react";
 import { EmptyState } from "@/components/patterns/empty-state";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { MoneyText } from "@/components/patterns/money-text";
+import { DataTable } from "@/components/patterns/data-table";
 import { cn } from "@/lib/utils";
 import { formatDate } from "@/features/projects/format";
 import { rateBands, rateRevisionBlockedReason } from "../rates";
@@ -30,6 +40,7 @@ import {
   useRateRevisions,
   useAgreementHistory,
   useReorderMilestones,
+  useReverseAttribution,
 } from "../hooks";
 import { CreateAgreementButton } from "./command-centre";
 import { ManageScopeSheet } from "./manage-scope-sheet";
@@ -306,9 +317,11 @@ export function ScopeItemRates({
           </span>
         </span>
         <span className="flex items-center gap-2">
-          <span className="font-mono text-sm">
+          <span className="font-mono text-sm font-semibold tabular-nums">
             <MoneyText paise={item.currentRatePaise} />
-            <span className="ml-1 text-xs text-foreground-subtle">/{item.rateUnit} today</span>
+            <span className="ml-1 text-xs font-normal text-foreground-muted">
+              /{item.rateUnit} today
+            </span>
           </span>
           {canRevise && (
             <Button variant="ghost" size="sm" onClick={() => setReviseOpen(true)}>
@@ -327,13 +340,13 @@ export function ScopeItemRates({
             .map((b) => (
               <div
                 key={b.revisionId}
-                className="flex flex-wrap items-baseline justify-between gap-2 text-xs text-primary"
+                className="flex items-baseline justify-between gap-3 text-xs text-primary"
               >
-                <span>
+                <span className="min-w-0 break-words">
                   {formatDate(b.fromDate)} → scheduled
-                  {b.reason && <span className="ml-1.5 text-foreground-subtle">· {b.reason}</span>}
+                  {b.reason && <span className="ml-1.5 text-foreground-muted">· {b.reason}</span>}
                 </span>
-                <MoneyText paise={b.ratePaise} className="font-mono" />
+                <MoneyText paise={b.ratePaise} className="shrink-0 font-mono tabular-nums" />
               </div>
             ))}
         </div>
@@ -347,9 +360,9 @@ export function ScopeItemRates({
             .map((b) => (
               <div
                 key={b.revisionId}
-                className="flex flex-wrap items-baseline justify-between gap-2 text-xs text-foreground-subtle"
+                className="flex items-baseline justify-between gap-3 text-xs text-foreground-muted"
               >
-                <span>
+                <span className="min-w-0 break-words">
                   {formatDate(b.fromDate)} → {b.toDate ? formatDate(b.toDate) : "current"}
                   {b.reason && <span className="ml-1.5">· {b.reason}</span>}
                 </span>
@@ -909,46 +922,199 @@ export function HistoryTab({ contractorId }: { contractorId: string }) {
 
   return (
     <div className="space-y-2">
-      <p className="text-xs text-foreground-subtle">
-        Audited commercial events, newest first. Reversed and rejected entries stay listed — history
-        records what happened, not only what still stands.
+      <p className="text-xs text-foreground-muted">
+        Audited commercial events, newest first. Reversed and rejected entries stay listed —
+        history records what happened, not only what still stands.
       </p>
-      <div className="overflow-hidden rounded-xl border border-border bg-surface">
-        <div className="divide-y divide-border">
-          {events.map((e) => (
-            <HistoryRow key={e.id} event={e} />
-          ))}
-        </div>
-      </div>
+      {/* A ledger, not a timeline. Ornamental rails and connector dots cost a
+          column of width and buy nothing: the six questions a reader brings here
+          — what, when, who, where, how much, and was it undone — are answered
+          faster side by side than stacked. */}
+      <DataTable
+        caption="Contractor history"
+        rows={events}
+        getRowKey={(e) => e.id}
+        columns={[
+          {
+            key: "at",
+            header: "When",
+            cell: (e) => (
+              <span className="whitespace-nowrap text-foreground-muted">
+                {formatDate(e.at.slice(0, 10))}
+              </span>
+            ),
+          },
+          {
+            key: "what",
+            header: "What happened",
+            cell: (e) => (
+              <div className="min-w-56">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span
+                    className={cn(
+                      "whitespace-nowrap rounded-full px-2 py-0.5 text-[11px]",
+                      ACTION_TONE[e.action] ?? "bg-surface-muted text-foreground-muted",
+                    )}
+                  >
+                    {actionLabel(e.action)}
+                  </span>
+                  {/* Whether it still stands is part of "what happened". */}
+                  {e.attributionReversedAt && (
+                    <span className="whitespace-nowrap rounded-full bg-surface-muted px-2 py-0.5 text-[11px] text-foreground-muted">
+                      Reversed
+                    </span>
+                  )}
+                </div>
+                <p className="mt-1 text-[13px] text-foreground">{e.summary}</p>
+              </div>
+            ),
+          },
+          {
+            key: "where",
+            header: "Project & agreement",
+            hideBelow: "lg",
+            cell: (e) => (
+              <span className="text-xs text-foreground-muted">
+                {[e.projectName, e.contractTitle].filter(Boolean).join(" · ") || "—"}
+              </span>
+            ),
+          },
+          {
+            key: "who",
+            header: "Who",
+            hideBelow: "xl",
+            cell: (e) => (
+              <span className="whitespace-nowrap text-xs text-foreground-muted">
+                {e.actorName ?? "—"}
+              </span>
+            ),
+          },
+          {
+            key: "amount",
+            header: "Amount",
+            numeric: true,
+            cell: (e) =>
+              e.amountPaise != null ? (
+                <span className="text-foreground-muted">
+                  <MoneyText paise={e.amountPaise} />
+                </span>
+              ) : (
+                <span className="text-foreground-subtle">—</span>
+              ),
+          },
+          {
+            key: "actions",
+            header: "Actions",
+            headerHidden: true,
+            numeric: true,
+            cell: (e) => <AttributionReversal event={e} />,
+          },
+        ]}
+        renderCard={(e) => (
+          <div className="rounded-xl border border-border bg-surface p-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <span
+                className={cn(
+                  "rounded-full px-2 py-0.5 text-[11px]",
+                  ACTION_TONE[e.action] ?? "bg-surface-muted text-foreground-muted",
+                )}
+              >
+                {actionLabel(e.action)}
+              </span>
+              {e.attributionReversedAt && (
+                <span className="rounded-full bg-surface-muted px-2 py-0.5 text-[11px] text-foreground-muted">
+                  Reversed
+                </span>
+              )}
+              {e.amountPaise != null && (
+                <span className="ml-auto shrink-0 font-mono tabular-nums text-sm text-foreground-muted">
+                  <MoneyText paise={e.amountPaise} />
+                </span>
+              )}
+            </div>
+            <p className="mt-1.5 text-[13px]">{e.summary}</p>
+            <p className="mt-1 text-xs text-foreground-subtle">
+              {formatDate(e.at.slice(0, 10))}
+              {e.actorName && ` · ${e.actorName}`}
+              {[e.projectName, e.contractTitle].filter(Boolean).length > 0 &&
+                ` · ${[e.projectName, e.contractTitle].filter(Boolean).join(" · ")}`}
+            </p>
+            <div className="mt-2 flex justify-end">
+              <AttributionReversal event={e} />
+            </div>
+          </div>
+        )}
+      />
     </div>
   );
 }
 
-function HistoryRow({ event: e }: { event: HistoryEvent }) {
+function AttributionReversal({ event: e }: { event: HistoryEvent }) {
+  const can = useCan();
+  const reverse = useReverseAttribution();
+  const [open, setOpen] = React.useState(false);
+  const [reason, setReason] = React.useState("");
+
+  if (e.action !== "contractor.attendance_attributed") return null;
+  if (!can("contractors.attribute_history")) return null;
+  if (e.attributionReversedAt) {
+    return <span className="text-[11px] uppercase tracking-wide text-foreground-subtle">Reversed</span>;
+  }
+
   return (
-    <div className="flex flex-wrap items-baseline justify-between gap-2 px-4 py-2.5 text-sm">
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-2">
-          <span
-            className={cn(
-              "rounded-full px-2 py-0.5 text-[11px]",
-              ACTION_TONE[e.action] ?? "bg-surface-muted text-foreground-muted",
-            )}
-          >
-            {actionLabel(e.action)}
-          </span>
-          <span className="truncate">{e.summary}</span>
-        </div>
-        <p className="mt-0.5 text-xs text-foreground-subtle">
-          {formatDate(e.at.slice(0, 10))}
-          {e.actorName && ` · ${e.actorName}`}
-          {e.contractTitle && ` · ${e.contractTitle}`}
-          {e.projectName && ` · ${e.projectName}`}
-        </p>
-      </div>
-      {e.amountPaise != null && (
-        <MoneyText paise={e.amountPaise} className="font-mono text-foreground-muted" />
+    <>
+      <Button variant="ghost" size="sm" onClick={() => setOpen(true)}>
+        Reverse
+      </Button>
+      {open && (
+        <Dialog open onOpenChange={(o) => !o && setOpen(false)}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Reverse this attribution?</DialogTitle>
+              <DialogDescription>{e.summary}</DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3 text-sm">
+              <p className="text-foreground-muted">
+                The labour returns to <strong className="font-medium">unattributed settled
+                labour</strong>, and {e.contractTitle ?? "the agreement"} loses that attendance
+                credit. The settlement, the cash paid and every advance drawdown stay exactly as
+                they are — this reverses a label, not a payment.
+              </p>
+              <div className="space-y-1.5">
+                <Label htmlFor="attribution-reversal-reason">Reason</Label>
+                <Input
+                  id="attribution-reversal-reason"
+                  value={reason}
+                  onChange={(ev) => setReason(ev.target.value)}
+                  placeholder="e.g. Attributed to the wrong agreement"
+                  autoFocus
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => setOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                variant="danger"
+                disabled={!reason.trim() || reverse.isPending}
+                onClick={() =>
+                  reverse.mutate(
+                    { correctionId: e.id, reason: reason.trim() },
+                    {
+                      onSuccess: (res) => {
+                        if (!("blockers" in res)) setOpen(false);
+                      },
+                    },
+                  )
+                }
+              >
+                {reverse.isPending ? "Reversing…" : "Reverse attribution"}
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
       )}
-    </div>
+    </>
   );
 }

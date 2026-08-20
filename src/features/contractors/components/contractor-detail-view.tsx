@@ -13,8 +13,13 @@ import {
   Receipt,
   Download,
   FileSignature,
+  MoreHorizontal,
 } from "lucide-react";
 import { EmptyState } from "@/components/patterns/empty-state";
+import { PageHeader } from "@/components/patterns/page-header";
+import { StatCard } from "@/components/patterns/stat-card";
+import { Callout } from "@/components/patterns/callout";
+import { Badge } from "@/components/ui/badge";
 import { RowsSkeleton } from "@/components/patterns/loading-state";
 import { MoneyText } from "@/components/patterns/money-text";
 import { Button } from "@/components/ui/button";
@@ -29,11 +34,13 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
+import { RecordNav, type RecordNavGroup } from "@/components/patterns/record-nav";
 import { cn } from "@/lib/utils";
 import { formatDate } from "@/features/projects/format";
 import { useCan } from "@/features/rbac/permission-context";
@@ -60,6 +67,7 @@ import {
 } from "../hooks";
 import type {
   ContractorLedger as ContractorLedgerDto,
+  ContractorLedgerEntry as ContractorLedgerEntryDto,
   ContractorLedgerType,
   ContractorSettlement,
 } from "../types";
@@ -69,6 +77,10 @@ import { ReverseContractPaymentDialog } from "@/features/contracts/components/pa
 import type { ContractPaymentHistoryRow } from "@/features/contracts/types";
 import { AddContractorSheet } from "./add-contractor-sheet";
 import { RecordAdvanceSheet } from "./record-advance-sheet";
+import { DataTable } from "@/components/patterns/data-table";
+import { RescopeAdvanceSheet } from "./rescope-advance-sheet";
+import { ReverseRescopeDialog } from "./reverse-rescope-dialog";
+import { outstandingPerAdvance } from "../calc";
 import { SettlementSheet } from "./settlement-sheet";
 
 const TYPE_LABEL: Record<ContractorLedgerType, string> = {
@@ -78,11 +90,19 @@ const TYPE_LABEL: Record<ContractorLedgerType, string> = {
   ADJUSTMENT: "Advance adjusted",
   PAYMENT: "Payment made",
   SETTLEMENT_REVERSAL: "Settlement reversed",
+  // Rendered as ONE logical row by the ledger (see AdvanceLedgerTab): showing
+  // "Advance adjusted −₹2L" beside "Advance paid +₹2L" would read as cash
+  // leaving and arriving, which is exactly what a re-scope is not.
+  SCOPE_TRANSFER_OUT: "Advance re-scoped",
+  SCOPE_TRANSFER_IN: "Advance re-scoped",
 };
 const TYPE_SIGN: Record<ContractorLedgerType, string> = {
   OPENING_ADVANCE: "+",
   ADVANCE: "+",
   ADJUSTMENT: "−",
+  // A transfer moves no money in or out — it is shown without a sign.
+  SCOPE_TRANSFER_OUT: "",
+  SCOPE_TRANSFER_IN: "",
   LABOUR_BILL: "",
   PAYMENT: "",
   SETTLEMENT_REVERSAL: "+",
@@ -94,11 +114,14 @@ const TYPE_TONE: Record<ContractorLedgerType, string> = {
   LABOUR_BILL: "text-foreground-muted",
   PAYMENT: "text-success-foreground",
   SETTLEMENT_REVERSAL: "text-warning-foreground",
+  SCOPE_TRANSFER_OUT: "text-foreground-muted",
+  SCOPE_TRANSFER_IN: "text-foreground-muted",
 };
 
 export function ContractorDetailView({ contractorId }: { contractorId: string }) {
   const can = useCan();
   const { data, isLoading } = useContractorLedger(contractorId);
+  const { data: headerProfile } = useContractorProfile(contractorId);
   const [editOpen, setEditOpen] = React.useState(false);
   const [advanceOpen, setAdvanceOpen] = React.useState(false);
   const [settleOpen, setSettleOpen] = React.useState(false);
@@ -139,113 +162,83 @@ export function ContractorDetailView({ contractorId }: { contractorId: string })
   const hasActions =
     canCreateAgreement || canAdvance || canSettle || canEdit || canArchive || canRestore;
 
+  const projectCount = headerProfile?.projects.length ?? 0;
+  // Same query the command centre reads, so React Query serves it from cache
+  // rather than issuing a second request.
+  const unsettledPaise = headerProfile?.lifetime.totalUnsettledAttendancePaise ?? 0;
+
   return (
     <div className="space-y-5">
-      <BackLink />
+      <PageHeader
+        title={
+          <>
+            <span className="truncate">{contractor.name}</span>
+            <Badge variant={archived ? "neutral" : "success"}>{archived ? "Archived" : "Active"}</Badge>
+          </>
+        }
+        meta={
+          <>
+            <span>{contractor.phone || "No mobile on file"}</span>
+            {projectCount > 0 && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span>
+                  {projectCount} {projectCount === 1 ? "project" : "projects"}
+                </span>
+              </>
+            )}
+          </>
+        }
+        actions={
+          hasActions ? (
+            <ContractorActions
+              archived={archived}
+              canCreateAgreement={canCreateAgreement}
+              canAdvance={canAdvance}
+              canSettle={canSettle}
+              canEdit={canEdit}
+              canArchive={canArchive}
+              canRestore={canRestore}
+              onCreateAgreement={() => setAgreementOpen(true)}
+              onAdvance={() => setAdvanceOpen(true)}
+              onSettle={() => setSettleOpen(true)}
+              onEdit={() => setEditOpen(true)}
+              onArchive={() => setArchiveOpen(true)}
+            />
+          ) : undefined
+        }
+      />
 
-      <div className="flex flex-wrap items-start justify-between gap-4 rounded-xl border border-border bg-surface p-5">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <h1 className="truncate text-xl font-semibold">{contractor.name}</h1>
-            {contractor.status === "INACTIVE" && (
-              <span className="rounded-full bg-surface-muted px-2 py-0.5 text-xs text-foreground-subtle">Archived</span>
-            )}
-          </div>
-          <p className="text-sm text-foreground-muted">{contractor.phone || "No mobile"}</p>
-        </div>
-        <div className="text-right">
-          {/* NEVER "Advance balance" for a project-scoped fold: that figure is a
-              real number about a subset, not this contractor's position. */}
-          <p className="text-xs text-foreground-subtle">
-            {data.scope === "COMPANY" ? "Advance balance" : "Visible project advance balance"}
-          </p>
-          <p
-            className={cn(
-              "font-mono text-2xl font-semibold",
-              contractor.advanceBalancePaise > 0 ? "text-warning-foreground" : "text-foreground",
-            )}
-          >
-            <MoneyText paise={contractor.advanceBalancePaise} />
-          </p>
-          {data.scope === "PROJECT" && (
-            <p className="mt-0.5 max-w-[16rem] text-[11px] text-foreground-subtle">
-              Across your projects only. This contractor&rsquo;s company-wide position needs the
-              view-all-projects permission.
-            </p>
-          )}
-        </div>
+      {/* The headline position, immediately under the name — the two figures a
+          user opens this record to see, rather than six equal tiles further
+          down the page. NEVER amber merely for being money: the advance balance
+          is a neutral fact, so it is toned like one. */}
+      <div className="grid gap-3 sm:grid-cols-2">
+        <StatCard
+          label={data.scope === "COMPANY" ? "Advance balance" : "Visible project advance balance"}
+          value={<MoneyText paise={contractor.advanceBalancePaise} />}
+          hint={
+            data.scope === "PROJECT"
+              ? "Across your projects only — the company-wide position needs the view-all-projects permission."
+              : "Cash pre-paying future labour. It becomes agreement credit only when that labour is settled."
+          }
+        />
+        <StatCard
+          label="Unsettled labour"
+          value={<MoneyText paise={unsettledPaise} />}
+          hint="Attendance recorded but not yet settled. Informational — it is not credit yet."
+          tone={unsettledPaise > 0 ? "attention" : "neutral"}
+        />
       </div>
 
-      {/* Three different instruments, and the difference matters: an advance is
-          cash moving early, a settlement is labour being recognised, and an
-          agreement is the commercial arrangement itself. Labelling them as one
-          undifferentiated row of buttons is how the same money gets recorded
-          twice — so each says what it does. */}
-      {hasActions && (
-        <div className="space-y-2">
-          <div className="flex flex-wrap gap-2">
-            {canCreateAgreement && !archived && (
-              <Button variant="primary" onClick={() => setAgreementOpen(true)}>
-                <FileSignature />
-                Create agreement
-              </Button>
-            )}
-            {canAdvance && !archived && (
-              <Button variant="secondary" onClick={() => setAdvanceOpen(true)}>
-                <Wallet />
-                Record labour advance
-              </Button>
-            )}
-            {/* Offered even while ARCHIVED. A settlement recognises attendance
-                already recorded, so withholding it here would strand a real
-                liability — the crew that worked before they were archived could
-                never be paid. The server agrees; see contractors/lifecycle.ts. */}
-            {canSettle && (
-              <Button variant="secondary" onClick={() => setSettleOpen(true)}>
-                <Receipt />
-                New settlement
-              </Button>
-            )}
-            {canEdit && (
-              <Button variant="ghost" onClick={() => setEditOpen(true)}>
-                <Pencil />
-                Edit
-              </Button>
-            )}
-            {canArchive && (
-              <Button variant="ghost" onClick={() => setArchiveOpen(true)}>
-                <Archive />
-                Archive
-              </Button>
-            )}
-            {canRestore && (
-              <Button variant="secondary" onClick={() => setArchiveOpen(true)}>
-                <ArchiveRestore />
-                Restore
-              </Button>
-            )}
-          </div>
-          {archived ? (
-            <p className="text-xs text-foreground-subtle">
-              This contractor is <strong className="font-medium text-foreground-muted">archived</strong>.
-              Everything already recorded stays exactly as it is and remains fully readable —
-              they simply can&rsquo;t take on new agreements, advances, attendance or projects
-              until restored. Closing out what they already did stays available: work recorded
-              before archiving can still be settled, and settlements, payments and agreements
-              can still be reversed, amended or corrected.
-            </p>
-          ) : (
-            <p className="text-xs text-foreground-subtle">
-              <strong className="font-medium text-foreground-muted">Create agreement</strong> sets up
-              the commercial arrangement on a project (value, scope, rates, milestones) —{" "}
-              <strong className="font-medium text-foreground-muted">Record labour advance</strong> is
-              cash pre-paying future attendance —{" "}
-              <strong className="font-medium text-foreground-muted">New settlement</strong> recognises
-              attendance already worked. An agreement is optional: attendance-only contractors need
-              only the last two.
-            </p>
-          )}
-        </div>
+      {archived && (
+        <Callout tone="neutral" title="This contractor is archived">
+          Everything already recorded stays exactly as it is and remains fully readable — they
+          simply can&rsquo;t take on new agreements, advances, attendance or projects until
+          restored. Closing out what they already did stays available: work recorded before
+          archiving can still be settled, and settlements, payments and agreements can still be
+          reversed, amended or corrected.
+        </Callout>
       )}
 
       <CommandCentre
@@ -301,6 +294,21 @@ export function ContractorDetailView({ contractorId }: { contractorId: string })
  * immediately), and blurring them is exactly how the same money gets recorded
  * twice.
  */
+/** Every section the record exposes — the allow-list a `?section=` deep link is
+ *  checked against, so a bad or stale value can never blank the panel. */
+const SECTION_VALUES = [
+  "overview",
+  "agreements",
+  "scope",
+  "rates",
+  "milestones",
+  "amendments",
+  "payments",
+  "reconciliation",
+  "ledger",
+  "history",
+] as const;
+
 function CommandCentre({
   contractorId,
   ledger,
@@ -315,7 +323,22 @@ function CommandCentre({
   agreementCreatedAt: number;
 }) {
   const can = useCan();
-  const [tab, setTab] = React.useState("overview");
+  const canSeeAgreements = can("contracts.view");
+  // Without `contracts.view` the record is just the advance ledger, so that has
+  // to be the landing section — defaulting to a section with no nav entry left
+  // the panel blank.
+  // A deep link may name the section, so "Open source" from the Payments Centre
+  // lands on the money rather than on Overview. Read once, at mount: after that
+  // the tab strip owns the value, and a stale query string must not fight it.
+  const [tab, setTab] = React.useState(() => {
+    const wanted =
+      typeof window !== "undefined"
+        ? new URLSearchParams(window.location.search).get("section")
+        : null;
+    const allowed = canSeeAgreements ? SECTION_VALUES : (["ledger"] as const);
+    if (wanted && (allowed as readonly string[]).includes(wanted)) return wanted;
+    return canSeeAgreements ? "overview" : "ledger";
+  });
   const { data: profile } = useContractorProfile(contractorId);
 
   const [seenCreatedAt, setSeenCreatedAt] = React.useState(agreementCreatedAt);
@@ -328,7 +351,6 @@ function CommandCentre({
   const [reversingPayment, setReversingPayment] =
     React.useState<ContractPaymentHistoryRow | null>(null);
 
-  const canSeeAgreements = can("contracts.view");
   const contracts = profile?.projects.flatMap((g) => g.contracts) ?? [];
 
   // Affordance gates only — every server action re-checks the same permission.
@@ -349,25 +371,50 @@ function CommandCentre({
     0,
   );
 
+  // Grouped by the QUESTION each section answers, which is what stops ten peers
+  // reading as an undifferentiated row: what is the commercial arrangement,
+  // where is the money, and what happened.
+  const navGroups: RecordNavGroup[] = canSeeAgreements
+    ? [
+        { label: "Summary", items: [{ value: "overview", label: "Overview" }] },
+        {
+          label: "Commercial",
+          items: [
+            { value: "agreements", label: "Agreements" },
+            { value: "scope", label: "Scope & Labour" },
+            { value: "rates", label: "Rates" },
+            { value: "milestones", label: "Milestones" },
+            { value: "amendments", label: "Amendments" },
+          ],
+        },
+        {
+          label: "Money",
+          items: [
+            { value: "payments", label: "Payments" },
+            { value: "reconciliation", label: "Reconciliation" },
+            { value: "ledger", label: "Advance ledger" },
+          ],
+        },
+        { label: "Audit", items: [{ value: "history", label: "History" }] },
+      ]
+    : [{ label: "Money", items: [{ value: "ledger", label: "Advance ledger" }] }];
+
   return (
     <>
-      <Tabs value={tab} onValueChange={setTab}>
-        <TabsList className="w-full justify-start overflow-x-auto">
-          {canSeeAgreements && (
-            <>
-              <TabsTrigger value="overview">Overview</TabsTrigger>
-              <TabsTrigger value="agreements">Agreements</TabsTrigger>
-              <TabsTrigger value="scope">Scope &amp; Labour</TabsTrigger>
-              <TabsTrigger value="rates">Rates</TabsTrigger>
-              <TabsTrigger value="milestones">Milestones</TabsTrigger>
-              <TabsTrigger value="amendments">Amendments</TabsTrigger>
-              <TabsTrigger value="payments">Payments</TabsTrigger>
-              <TabsTrigger value="reconciliation">Reconciliation</TabsTrigger>
-              <TabsTrigger value="history">History</TabsTrigger>
-            </>
-          )}
-          <TabsTrigger value="ledger">Advance ledger</TabsTrigger>
-        </TabsList>
+      <Tabs
+        value={tab}
+        onValueChange={setTab}
+        orientation="vertical"
+        className="lg:flex lg:items-start lg:gap-8"
+      >
+        <RecordNav
+          groups={navGroups}
+          value={tab}
+          onValueChange={setTab}
+          label="Contractor sections"
+          className="lg:sticky lg:top-20"
+        />
+        <div className="min-w-0 flex-1">
 
         {canSeeAgreements && profile && (
           <>
@@ -377,7 +424,6 @@ function CommandCentre({
             <TabsContent value="agreements" className="pt-4">
               <AgreementsTab
                 profile={profile}
-                unattributedPaise={0}
                 onCreateAgreement={onCreateAgreement}
                 renderActions={
                   canActOnAgreements
@@ -420,11 +466,7 @@ function CommandCentre({
               />
             </TabsContent>
             <TabsContent value="reconciliation" className="pt-4">
-              <ReconciliationTab
-                profile={profile}
-                unattributedPaise={0}
-                onCreateAgreement={onCreateAgreement}
-              />
+              <ReconciliationTab profile={profile} onCreateAgreement={onCreateAgreement} />
             </TabsContent>
             <TabsContent value="history" className="pt-4">
               <HistoryTab contractorId={contractorId} />
@@ -435,6 +477,7 @@ function CommandCentre({
         <TabsContent value="ledger" className="pt-4">
           <AdvanceLedgerTab ledger={ledger} />
         </TabsContent>
+        </div>
       </Tabs>
 
       <ReverseSettlementDialog
@@ -544,8 +587,154 @@ function ReverseSettlementForm({
  * written — a reversal appends later entries and deliberately does not rewrite
  * it. The CURRENT balance is always the fold, shown in the header above.
  */
+/** The visible rows, as the DTO carries them. */
+const entriesOf = (l: ContractorLedgerDto) => l.entries;
+
+/**
+ * How a row's scope reads. An agreement names BOTH project and agreement,
+ * because "Structure" alone is ambiguous across projects and the scope is what
+ * decides which labour may draw on the money.
+ */
+function scopeLabelOf(e: ContractorLedgerEntryDto): string {
+  if (e.contractTitle) return e.projectName ? `${e.projectName} · ${e.contractTitle}` : e.contractTitle;
+  return e.projectName ?? "General contractor advance";
+}
+
+/**
+ * How a ledger row's scope reads. A re-scope is a MOVE, so it names both ends —
+ * showing it as a scope of its own would hide the very thing that changed.
+ */
+function ScopeCell({
+  entry,
+  inByOut,
+}: {
+  entry: ContractorLedgerEntryDto;
+  inByOut: Map<string, ContractorLedgerEntryDto>;
+}) {
+  if (entry.type !== "SCOPE_TRANSFER_OUT") return <>{scopeLabelOf(entry)}</>;
+  const target = inByOut.get(entry.id);
+  return (
+    <>
+      {scopeLabelOf(entry)} <span className="text-foreground-subtle">&rarr;</span>{" "}
+      {target ? scopeLabelOf(target) : "—"}
+    </>
+  );
+}
+
+/** Re-scope, and its undo — both gated on `contractors.advance_rescope`. */
+function LedgerRowActions({
+  entry,
+  canRescope,
+  rescopable,
+  reversible,
+  onRescope,
+  onReverse,
+}: {
+  entry: ContractorLedgerEntryDto;
+  canRescope: boolean;
+  /** Rows that still hold movable money, by the allocator's own rule. */
+  rescopable: Set<string>;
+  /** Transfers the server would still accept a reversal for. */
+  reversible: Set<string>;
+  onRescope: (e: ContractorLedgerEntryDto) => void;
+  onReverse: (e: ContractorLedgerEntryDto) => void;
+}) {
+  if (!canRescope) return null;
+  return (
+    <span className="flex items-center justify-end gap-2 font-sans text-xs">
+      {rescopable.has(entry.id) && (
+        <button
+          type="button"
+          onClick={() => onRescope(entry)}
+          className="rounded-sm text-primary transition-colors hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          Re-scope
+        </button>
+      )}
+      {/* Undo, on the transfer row itself — where a reader who has just
+          understood the move is standing. The server refuses if the moved money
+          has since been spent. */}
+      {reversible.has(entry.id) && (
+        <button
+          type="button"
+          onClick={() => onReverse(entry)}
+          className="rounded-sm text-foreground-muted transition-colors hover:text-danger-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          Reverse
+        </button>
+      )}
+    </span>
+  );
+}
+
 function AdvanceLedgerTab({ ledger }: { ledger: ContractorLedgerDto }) {
-  const { entries } = ledger;
+  const can = useCan();
+  // Re-scoping can BROADEN the reach of money already handed over, so it has its
+  // own danger permission. Everyone else still sees the ledger and the scopes.
+  const canRescope = can("contractors.advance_rescope");
+  const [rescoping, setRescoping] = React.useState<ContractorLedgerEntryDto | null>(null);
+  const [reversingTransfer, setReversingTransfer] =
+    React.useState<ContractorLedgerEntryDto | null>(null);
+
+  // A transfer is written as an OUT/IN PAIR so the balance nets to zero. Shown
+  // as ONE row: "Advance adjusted −₹2L" beside "Advance paid +₹2L" would read as
+  // cash leaving and arriving, which is exactly what a re-scope is not. The
+  // underlying rows are untouched — this is presentation only, and every
+  // calculation still folds both.
+  const inByOut = new Map(
+    entriesOf(ledger)
+      .filter((e) => e.type === "SCOPE_TRANSFER_IN" && e.drawsFromEntryId)
+      .map((e) => [e.drawsFromEntryId!, e]),
+  );
+  const entries = entriesOf(ledger).filter((e) => e.type !== "SCOPE_TRANSFER_IN");
+
+  // Which transfers can still be undone. Mirrors the server's two refusals
+  // exactly — this decides only whether the ACTION is offered; the server
+  // re-checks and is the authority.
+  //
+  //   1. A transfer whose OUT draws from another transfer's IN *is* a reversal.
+  //      Offering "Reverse" on it would read as undoing an undo, when it would
+  //      really re-apply the original move.
+  //   2. A transfer already reversed cannot be reversed twice
+  //      (TRANSFER_ALREADY_REVERSED).
+  const byId = new Map(entriesOf(ledger).map((e) => [e.id, e]));
+  const reversedOutIds = new Set(
+    entriesOf(ledger)
+      .filter((e) => e.type === "SCOPE_TRANSFER_OUT" && e.drawsFromEntryId)
+      .map((e) => byId.get(e.drawsFromEntryId!))
+      .filter((src) => src?.type === "SCOPE_TRANSFER_IN")
+      .map((inRow) => inRow!.drawsFromEntryId!)
+      .filter(Boolean),
+  );
+  const reversible = new Set(
+    entriesOf(ledger)
+      .filter(
+        (e) =>
+          e.type === "SCOPE_TRANSFER_OUT" &&
+          byId.get(e.drawsFromEntryId ?? "")?.type !== "SCOPE_TRANSFER_IN" &&
+          !reversedOutIds.has(e.id),
+      )
+      .map((e) => e.id),
+  );
+
+  // Rows that still hold movable money. Computed from the same rule the server
+  // and the allocator use, so the action never appears on money that cannot move.
+  const rescopable = new Set(
+    outstandingPerAdvance(
+      entriesOf(ledger).map((e) => ({
+        id: e.id,
+        type: e.type,
+        amountPaise: e.amountPaise,
+        projectId: e.projectId,
+        contractId: e.contractId,
+        drawsFromEntryId: e.drawsFromEntryId,
+        reversesEntryId: e.reversesEntryId,
+        date: e.date,
+      })),
+    )
+      .filter((a) => a.remainingPaise > 0)
+      .map((a) => a.entryId),
+  );
   if (entries.length === 0) {
     return (
       <div className="space-y-3">
@@ -588,43 +777,140 @@ function AdvanceLedgerTab({ ledger }: { ledger: ContractorLedgerDto }) {
         </DropdownMenu>
       </div>
 
-      <div className="overflow-x-auto rounded-xl border border-border bg-surface">
-        <div className="min-w-[680px]">
-          <div className="grid grid-cols-[100px_1fr_140px_120px_130px] items-center border-b border-border bg-surface-muted/50 px-4 py-2.5 text-xs font-medium text-foreground-subtle">
-            <span>Date</span>
-            <span>Entry</span>
-            <span>Scope</span>
-            <span className="text-right">Amount</span>
-            <span className="text-right">Balance after</span>
-          </div>
-          {entries.map((e) => (
-            <div
-              key={e.id}
-              className="grid grid-cols-[100px_1fr_140px_120px_130px] items-center border-b border-border px-4 py-2.5 text-sm last:border-0"
-            >
-              <span className="text-foreground-muted">{formatDate(e.date)}</span>
-              <span className="min-w-0">
-                <span className={cn("font-medium", TYPE_TONE[e.type])}>{TYPE_LABEL[e.type]}</span>
+      {rescoping && (
+        <RescopeAdvanceSheet
+          open
+          onOpenChange={(o: boolean) => !o && setRescoping(null)}
+          contractorId={ledger.contractor.id}
+          contractorName={ledger.contractor.name}
+          advance={rescoping}
+        />
+      )}
+      <ReverseRescopeDialog
+        transfer={reversingTransfer}
+        fromLabel={reversingTransfer ? scopeLabelOf(reversingTransfer) : ""}
+        toLabel={
+          reversingTransfer && inByOut.get(reversingTransfer.id)
+            ? scopeLabelOf(inByOut.get(reversingTransfer.id)!)
+            : "its new scope"
+        }
+        onOpenChange={(o) => !o && setReversingTransfer(null)}
+      />
+      <DataTable
+        caption="Advance ledger entries"
+        rows={entries}
+        getRowKey={(e) => e.id}
+        columns={[
+          {
+            key: "date",
+            header: "Date",
+            cell: (e) => (
+              <span className="whitespace-nowrap text-foreground-muted">{formatDate(e.date)}</span>
+            ),
+          },
+          {
+            key: "entry",
+            header: "Entry",
+            cell: (e) => (
+              <div className="min-w-40">
+                <span className={cn("whitespace-nowrap font-medium", TYPE_TONE[e.type])}>
+                  {TYPE_LABEL[e.type]}
+                </span>
                 {(e.notes || e.projectName) && (
-                  <span className="ml-1 truncate text-xs text-foreground-subtle">
+                  <span className="ml-1 text-xs text-foreground-subtle">
                     · {e.notes || e.projectName}
                   </span>
                 )}
-              </span>
-              <span className="truncate text-xs text-foreground-subtle">
-                {e.contractTitle ?? (e.projectName ?? "Company-wide")}
-              </span>
-              <span className={cn("text-right font-mono", TYPE_TONE[e.type])}>
+              </div>
+            ),
+          },
+          {
+            key: "scope",
+            header: "Scope",
+            // The rail costs ~224px, so the scope column only earns its place
+            // once the viewport is genuinely wide.
+            hideBelow: "xl",
+            cell: (e) => <ScopeCell entry={e} inByOut={inByOut} />,
+          },
+          {
+            key: "amount",
+            header: "Amount",
+            numeric: true,
+            cell: (e) => (
+              <span className={TYPE_TONE[e.type]}>
                 {TYPE_SIGN[e.type]}
                 <MoneyText paise={e.amountPaise} />
               </span>
-              <span className="text-right font-mono text-foreground-subtle">
-                <MoneyText paise={e.advanceBalanceAfterPaise} />
+            ),
+          },
+          {
+            key: "balance",
+            header: "Balance after",
+            numeric: true,
+            hideBelow: "lg",
+            cell: (e) =>
+              e.type === "SCOPE_TRANSFER_OUT" ? (
+                <span className="font-sans text-xs text-foreground-subtle">No cash moved</span>
+              ) : (
+                <span className="text-foreground-muted">
+                  <MoneyText paise={e.advanceBalanceAfterPaise} />
+                </span>
+              ),
+          },
+          {
+            key: "actions",
+            header: "Actions",
+            headerHidden: true,
+            numeric: true,
+            cell: (e) => (
+              <LedgerRowActions
+                entry={e}
+                canRescope={canRescope}
+                rescopable={rescopable}
+                reversible={reversible}
+                onRescope={setRescoping}
+                onReverse={setReversingTransfer}
+              />
+            ),
+          },
+        ]}
+        renderCard={(e) => (
+          <div className="rounded-xl border border-border bg-surface p-3">
+            <div className="flex items-baseline justify-between gap-3">
+              <span className={cn("min-w-0 font-medium", TYPE_TONE[e.type])}>
+                {TYPE_LABEL[e.type]}
+              </span>
+              <span className={cn("shrink-0 font-mono tabular-nums", TYPE_TONE[e.type])}>
+                {TYPE_SIGN[e.type]}
+                <MoneyText paise={e.amountPaise} />
               </span>
             </div>
-          ))}
-        </div>
-      </div>
+            <p className="mt-1 text-xs text-foreground-muted">{formatDate(e.date)}</p>
+            <p className="mt-1 text-xs text-foreground-subtle">
+              <ScopeCell entry={e} inByOut={inByOut} />
+            </p>
+            <div className="mt-2 flex items-center justify-between gap-3">
+              <span className="text-xs text-foreground-subtle">
+                {e.type === "SCOPE_TRANSFER_OUT" ? (
+                  "No cash moved"
+                ) : (
+                  <>
+                    Balance after <MoneyText paise={e.advanceBalanceAfterPaise} />
+                  </>
+                )}
+              </span>
+              <LedgerRowActions
+                entry={e}
+                canRescope={canRescope}
+                rescopable={rescopable}
+                reversible={reversible}
+                onRescope={setRescoping}
+                onReverse={setReversingTransfer}
+              />
+            </div>
+          </div>
+        )}
+      />
     </div>
   );
 }
@@ -744,6 +1030,125 @@ function ArchiveContractorDialog({
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * The contractor's action set, in priority order.
+ *
+ * Five buttons of equal weight is not a hierarchy — and at 375px they wrapped
+ * into a ragged block where "Record labour advance" and "New settlement"
+ * physically overlapped. So:
+ *
+ *   primary    settling recognises work already done and is the recurring act
+ *   secondary  advance and agreement set up future work
+ *   overflow   Edit, and the lifecycle actions
+ *
+ * Archive is destructive and rare, so it never sits inline beside routine
+ * actions. Below `sm` everything except the primary collapses into the menu,
+ * which is what removes the collision rather than papering over it.
+ *
+ * Each affordance is gated on the SAME permission its server action demands, so
+ * an unavailable action is absent rather than present-and-refusing — and the
+ * row closes up around it instead of leaving a gap.
+ */
+function ContractorActions({
+  archived,
+  canCreateAgreement,
+  canAdvance,
+  canSettle,
+  canEdit,
+  canArchive,
+  canRestore,
+  onCreateAgreement,
+  onAdvance,
+  onSettle,
+  onEdit,
+  onArchive,
+}: {
+  archived: boolean;
+  canCreateAgreement: boolean;
+  canAdvance: boolean;
+  canSettle: boolean;
+  canEdit: boolean;
+  canArchive: boolean;
+  canRestore: boolean;
+  onCreateAgreement: () => void;
+  onAdvance: () => void;
+  onSettle: () => void;
+  onEdit: () => void;
+  onArchive: () => void;
+}) {
+  // Settlement stays available while ARCHIVED on purpose: it recognises
+  // attendance already recorded, so withholding it would strand a real
+  // liability. The server agrees — see contractors/lifecycle.ts.
+  const showAdvance = canAdvance && !archived;
+  const showAgreement = canCreateAgreement && !archived;
+  const hasOverflow = canEdit || canArchive || canRestore || showAdvance || showAgreement;
+
+  return (
+    <>
+      {canSettle && (
+        <Button variant="primary" onClick={onSettle}>
+          <Receipt />
+          New settlement
+        </Button>
+      )}
+      {showAdvance && (
+        <Button variant="secondary" className="hidden sm:inline-flex" onClick={onAdvance}>
+          <Wallet />
+          Record advance
+        </Button>
+      )}
+      {showAgreement && (
+        <Button variant="secondary" className="hidden md:inline-flex" onClick={onCreateAgreement}>
+          <FileSignature />
+          Create agreement
+        </Button>
+      )}
+      {hasOverflow && (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon" aria-label="More contractor actions">
+              <MoreHorizontal className="size-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            {showAdvance && (
+              <DropdownMenuItem className="sm:hidden" onSelect={onAdvance}>
+                <Wallet />
+                Record advance
+              </DropdownMenuItem>
+            )}
+            {showAgreement && (
+              <DropdownMenuItem className="md:hidden" onSelect={onCreateAgreement}>
+                <FileSignature />
+                Create agreement
+              </DropdownMenuItem>
+            )}
+            {canEdit && (
+              <DropdownMenuItem onSelect={onEdit}>
+                <Pencil />
+                Edit details
+              </DropdownMenuItem>
+            )}
+            {(canArchive || canRestore) && canEdit && <DropdownMenuSeparator />}
+            {canArchive && (
+              <DropdownMenuItem onSelect={onArchive} className="text-danger-foreground">
+                <Archive />
+                Archive contractor
+              </DropdownMenuItem>
+            )}
+            {canRestore && (
+              <DropdownMenuItem onSelect={onArchive}>
+                <ArchiveRestore />
+                Restore contractor
+              </DropdownMenuItem>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
+    </>
   );
 }
 

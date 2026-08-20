@@ -129,6 +129,16 @@ export const PERMISSION_CATALOG = [
       // Assigns already-settled attendance to an agreement without touching any
       // monetary value. Owner/Admin only.
       { key: "contractors.attribute_history", label: "Attribute settled history", danger: true },
+      // Moves UNUSED advance money between scopes — general, a project, or one
+      // agreement. No cash moves and no settlement changes, but it can BROADEN
+      // the scope of money already handed over, which is a different decision
+      // from paying an advance in the first place. Hence its own key rather
+      // than `contractors.advance`. Owner/Admin only.
+      {
+        key: "contractors.advance_rescope",
+        label: "Re-scope advance funds",
+        danger: true,
+      },
       // Lifecycle, mirroring vendors: a contractor is long-lived master data, so
       // the end state is ARCHIVE (deactivate), never delete. An archived
       // contractor keeps every agreement, settlement, payment and attendance row

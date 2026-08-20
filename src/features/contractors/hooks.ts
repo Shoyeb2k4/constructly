@@ -3,7 +3,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { contractorsApi, contractorKeys } from "./data";
+import { contractKeys } from "@/features/contracts/data";
 import { describeContractorError } from "./lifecycle";
+import { describeRescopeBlocker } from "./advance-rescope";
 import type {
   ContractorFilters,
   CreateContractorInput,
@@ -58,7 +60,15 @@ export function useContractorCostSummary() {
 
 function useInvalidateAll() {
   const qc = useQueryClient();
-  return () => qc.invalidateQueries({ queryKey: contractorKeys.all });
+  return () => {
+    qc.invalidateQueries({ queryKey: contractorKeys.all });
+    // A settlement decides which attendance is SETTLED, and settled attendance
+    // is what the agreement Command Centre reads for agreement credit and for
+    // the unattributed-labour position. That surface lives under the contracts
+    // key, so invalidating only the contractor key leaves it stale until the
+    // user reloads — showing a figure the settlement has already changed.
+    qc.invalidateQueries({ queryKey: contractKeys.all });
+  };
 }
 
 /**
@@ -127,6 +137,75 @@ export function useUpdateContractor() {
   });
 }
 
+/* ── Advance re-scope ───────────────────────────────────────────────────── */
+
+export function useAdvanceRescopePreview(input: {
+  contractorId: string;
+  advanceId: string | null;
+  target: { projectId: string | null; contractId: string | null };
+  transferPaise: number;
+}) {
+  return useQuery({
+    queryKey: [
+      ...contractorKeys.all,
+      "rescope-preview",
+      input.advanceId,
+      input.target.projectId,
+      input.target.contractId,
+      input.transferPaise,
+    ],
+    queryFn: () =>
+      contractorsApi.previewAdvanceRescope({
+        contractorId: input.contractorId,
+        advanceId: input.advanceId!,
+        target: input.target,
+        transferPaise: input.transferPaise,
+      }),
+    enabled: !!input.advanceId && input.transferPaise > 0,
+  });
+}
+
+export function useRescopeAdvance() {
+  const invalidate = useInvalidateAll();
+  return useMutation({
+    mutationFn: (input: {
+      contractorId: string;
+      advanceId: string;
+      target: { projectId: string | null; contractId: string | null };
+      transferPaise: number;
+      reason: string;
+    }) => contractorsApi.rescopeAdvance(input),
+    // A refusal is a decision, not a transient failure.
+    retry: false,
+    onSuccess: (res) => {
+      invalidate();
+      if ("blockers" in res) return; // the sheet renders the reason
+      toast.success(`Re-scoped to ${res.toLabel} — no cash moved`);
+    },
+    onError: (e: unknown) =>
+      toast.error(describeContractorError(e, "Couldn't re-scope that advance.")),
+  });
+}
+
+export function useReverseAdvanceRescope() {
+  const invalidate = useInvalidateAll();
+  return useMutation({
+    mutationFn: (input: { transferId: string; reason: string }) =>
+      contractorsApi.reverseAdvanceRescope(input),
+    retry: false,
+    onSuccess: (res) => {
+      invalidate();
+      if ("blockers" in res) {
+        toast.error(describeRescopeBlocker(res.blockers[0]));
+        return;
+      }
+      toast.success("Re-scope reversed");
+    },
+    onError: (e: unknown) =>
+      toast.error(describeContractorError(e, "Couldn't reverse that re-scope.")),
+  });
+}
+
 export function useRecordAdvance() {
   const invalidate = useInvalidateAll();
   return useMutation({
@@ -172,6 +251,9 @@ export function useReverseSettlement() {
       contractorsApi.reverseSettlement(id, reason),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: contractorKeys.all });
+      // Reversal un-settles the period, which moves labour back out of both
+      // settled buckets — the agreement's credit and the unattributed figure.
+      qc.invalidateQueries({ queryKey: contractKeys.all });
       toast.success("Settlement reversed — its attendance is editable again");
     },
     onError: (e: unknown) =>

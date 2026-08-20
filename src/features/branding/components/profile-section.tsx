@@ -214,7 +214,7 @@ export function ProfileSection() {
                   className={cn(
                     "flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-colors",
                     active
-                      ? "border-primary bg-primary/10 text-primary"
+                      ? "border-primary bg-primary-subtle text-primary-emphasis"
                       : "border-border text-foreground-muted hover:bg-surface-muted",
                   )}
                 >

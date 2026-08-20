@@ -14,7 +14,9 @@
 import { reconcileAgreement, reconciliationTimeline, rollUpReconciliations, validateCreditCeiling } from "../reconcile";
 import { validateRevisedValue } from "../amendments";
 import { effectiveRateOn, rateBands, rateRevisionBlockedReason, validateRateRevision } from "../rates";
+import { buildAttributionPreview, findCollisions, type AttributionRow } from "../attribution";
 import { newBusinessBlockedReason } from "@/features/contractors/lifecycle";
+import { bucketAttendance, sumPositions } from "../attendance-position";
 import type { ContractorStatus } from "@/features/contractors/types";
 import {
   canSettleAgreement,
@@ -46,6 +48,8 @@ import type {
   ProjectContractorSummaryRow,
   RateRevision,
   ScopeItem,
+  ContractorProjectAttendance,
+  PaymentMode,
 } from "../types";
 
 /* ── Storage ────────────────────────────────────────────────────────────── */
@@ -57,6 +61,17 @@ const K = {
   scopeRates: "constructly.demo.contractScopeRates.v1",
   milestones: "constructly.demo.contractMilestones.v1",
   amendments: "constructly.demo.contractAmendments.v1",
+  /**
+   * APPEND-ONLY demo audit events.
+   *
+   * Demo History is otherwise DERIVED from current state — it walks agreements,
+   * milestones and payments and reconstructs what must have happened. An
+   * attribution correction leaves no trace in current state (the row simply has
+   * a different contractId), so it would be invisible and un-reversible in demo
+   * without somewhere to record it. Deliberately narrow: only these corrections
+   * are written here, and nothing existing was migrated into it.
+   */
+  events: "constructly.demo.activityLog.v1",
 };
 /** v1 keys, read once during migration then removed. */
 const LEGACY = {
@@ -749,6 +764,50 @@ function liveAttendanceRows(): {
   }
 }
 
+/** Attendance rows with the fields the position buckets need. */
+function attendanceForPosition(): {
+  contractorId?: string | null;
+  projectId: string;
+  estimatedCostPaise: number;
+  settlementId?: string | null;
+  contractId?: string | null;
+}[] {
+  if (typeof window === "undefined") return [];
+  try {
+    return JSON.parse(window.localStorage.getItem(LABOUR_ATTENDANCE) ?? "[]");
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Where a contractor's labour sits, per project — demo parity for
+ * `contractorAttendanceByProject`. Covers projects the contractor has NO
+ * agreement on, whose settled labour is unattributed by definition.
+ */
+function attendanceByProjectDemo(contractorId: string): ContractorProjectAttendance[] {
+  const rows = attendanceForPosition().filter((a) => (a.contractorId ?? null) === contractorId);
+  const byProject = new Map<string, typeof rows>();
+  for (const r of rows) {
+    const list = byProject.get(r.projectId) ?? [];
+    list.push(r);
+    byProject.set(r.projectId, list);
+  }
+  return [...byProject.entries()]
+    .map(([projectId, list]) => ({
+      projectId,
+      projectName: projectName(projectId),
+      ...bucketAttendance(
+        list.map((r) => ({
+          estimatedCostPaise: r.estimatedCostPaise,
+          settlementId: r.settlementId ?? null,
+          contractId: r.contractId ?? null,
+        })),
+      ),
+    }))
+    .sort((a, b) => a.projectName.localeCompare(b.projectName));
+}
+
 /**
  * Live attendance attributed to one agreement, split settled vs not.
  *
@@ -957,6 +1016,148 @@ function assertMilestoneChangeAllowed(rec: ContractRec, opts: { affectsEarnedVal
   if (rec.status === "SETTLED" && opts.affectsEarnedValue) throw new Error("AGREEMENT_SETTLED");
 }
 
+/** Attendance rows in storage shape, mutable — the attribution correction is
+ *  the only thing in this module that writes them. */
+interface RawAttendance {
+  id: string;
+  date: string;
+  projectId: string;
+  labourSubcategoryId: string;
+  contractorId?: string | null;
+  contractId?: string | null;
+  settlementId?: string | null;
+  quantityPresent: number;
+  dailyRatePaiseSnapshot: number | null;
+  estimatedCostPaise: number;
+}
+
+function loadAttendanceRaw(): RawAttendance[] {
+  if (typeof window === "undefined") return [];
+  try {
+    return JSON.parse(window.localStorage.getItem(LABOUR_ATTENDANCE) ?? "[]");
+  } catch {
+    return [];
+  }
+}
+
+function writeAttendanceRaw(rows: RawAttendance[]): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(LABOUR_ATTENDANCE, JSON.stringify(rows));
+  } catch {
+    /* quota */
+  }
+}
+
+/**
+ * Everything the preview and the write both need, validated once.
+ *
+ * Shared so the demo cannot be more permissive than the server: the same
+ * eligibility, the same collision detection, the same canonical preview.
+ */
+function buildAttributionInputsDemo(input: {
+  contractorId: string;
+  projectId: string;
+  contractId: string;
+  attendanceIds: string[];
+}):
+  | {
+      snapshot: ReturnType<typeof snapshotFor>;
+      target: { contractId: string; title: string; projectId: string; projectName: string; status: string };
+      selected: AttributionRow[];
+      unattributedBeforePaise: number;
+      collisions: ReturnType<typeof findCollisions>;
+    }
+  | { blockers: string[] } {
+  const rec = loadContracts().find((c) => c.id === input.contractId && !c.deletedAt);
+  if (!rec || rec.contractorId !== input.contractorId || rec.projectId !== input.projectId) {
+    return { blockers: ["INVALID_TARGET"] };
+  }
+
+  const all = loadAttendanceRaw();
+  const settlements = loadSettlementsForHistory();
+  const reversed = new Set(settlements.filter((x) => x.reversedAt).map((x) => x.id));
+
+  const selectedRaw = all.filter(
+    (a) =>
+      input.attendanceIds.includes(a.id) &&
+      (a.contractorId ?? null) === input.contractorId &&
+      a.projectId === input.projectId,
+  );
+  if (selectedRaw.length !== input.attendanceIds.length) return { blockers: ["STALE_SELECTION"] };
+
+  const selected: AttributionRow[] = selectedRaw.map((a) => ({
+    id: a.id,
+    date: a.date,
+    labourSubcategoryId: a.labourSubcategoryId,
+    labourTypeName: labourTypeInfo(a.labourSubcategoryId).subcategoryName,
+    quantityPresent: a.quantityPresent,
+    dailyRatePaiseSnapshot: a.dailyRatePaiseSnapshot,
+    estimatedCostPaise: a.estimatedCostPaise,
+    contractId: a.contractId ?? null,
+    settlementId: a.settlementId ?? null,
+    settlementReversed: a.settlementId ? reversed.has(a.settlementId) : false,
+  }));
+
+  const identities = all
+    .filter((a) => (a.contractId ?? null) === input.contractId)
+    .map((a) => ({ date: a.date, labourSubcategoryId: a.labourSubcategoryId }));
+
+  const unattributedBeforePaise = all
+    .filter(
+      (a) =>
+        (a.contractorId ?? null) === input.contractorId &&
+        a.projectId === input.projectId &&
+        (a.contractId ?? null) === null &&
+        a.settlementId != null &&
+        !reversed.has(a.settlementId),
+    )
+    .reduce((t, a) => t + a.estimatedCostPaise, 0);
+
+  return {
+    snapshot: snapshotFor(rec),
+    target: {
+      contractId: rec.id,
+      title: rec.title,
+      projectId: rec.projectId,
+      projectName: projectName(rec.projectId),
+      status: rec.status,
+    },
+    selected,
+    unattributedBeforePaise,
+    collisions: findCollisions(selected, identities),
+  };
+}
+
+/* ── Demo audit events (append-only) ────────────────────────────────────── */
+
+export interface DemoEventRec {
+  id: string;
+  action: string;
+  contractorId: string;
+  summary: string;
+  at: string;
+  actorName: string;
+  amountPaise: number | null;
+  contractId: string | null;
+  contractTitle: string | null;
+  projectName: string | null;
+  meta: Record<string, unknown>;
+}
+
+function loadEvents(): DemoEventRec[] {
+  if (typeof window === "undefined") return [];
+  try {
+    return JSON.parse(window.localStorage.getItem(K.events) ?? "[]");
+  } catch {
+    return [];
+  }
+}
+
+function appendEvent(e: DemoEventRec): void {
+  write(K.events, [...loadEvents(), e]);
+}
+
 function liveContract(id: string): ContractRec {
   const rec = loadContracts().find((c) => c.id === id && !c.deletedAt);
   if (!rec) throw new Error("NOT_FOUND");
@@ -1018,6 +1219,49 @@ function detailFor(rec: ContractRec): AgreementDetail {
 }
 
 /* ── Repository ─────────────────────────────────────────────────────────── */
+
+/**
+ * The agreement-payment rows the global Payments Centre reads.
+ *
+ * Uses this repository's own loaders so the v1→v2 migration and the first-read
+ * seeding both apply — a raw key read would miss both and quietly report zero
+ * agreement payments on a fresh session.
+ */
+export function demoAgreementCashSources(): {
+  payments: {
+    id: string;
+    contractId: string;
+    contractorId: string;
+    projectId: string;
+    amountPaise: number;
+    type: string;
+    paymentMode: PaymentMode;
+    referenceNumber: string | null;
+    date: string;
+    notes: string | null;
+    deletedAt: string | null;
+    reversalReason: string | null;
+  }[];
+  contracts: { id: string; title: string }[];
+} {
+  return {
+    payments: loadPayments().map((p) => ({
+      id: p.id,
+      contractId: p.contractId,
+      contractorId: p.contractorId,
+      projectId: p.projectId,
+      amountPaise: p.amountPaise,
+      type: p.type,
+      paymentMode: p.paymentMode,
+      referenceNumber: p.referenceNumber,
+      date: p.date,
+      notes: p.notes,
+      deletedAt: p.deletedAt,
+      reversalReason: p.reversalReason,
+    })),
+    contracts: loadContracts().map((c) => ({ id: c.id, title: c.title })),
+  };
+}
 
 export const demoContractsRepository: ContractsRepository = {
   async listContracts(filters: ContractFilters = {}) {
@@ -1572,16 +1816,181 @@ export const demoContractsRepository: ContractsRepository = {
     write(K.payments, rows);
   },
 
+  /* ── Settled-attribution correction ───────────────────────────────────── */
+
+  async listAttributableLabour(contractorId, projectId) {
+    const settlements = loadSettlementsForHistory();
+    const reversed = new Set(settlements.filter((x) => x.reversedAt).map((x) => x.id));
+    const byId = new Map(settlements.map((x) => [x.id, x]));
+    return loadAttendanceRaw()
+      .filter(
+        (a) =>
+          (a.contractorId ?? null) === contractorId &&
+          a.projectId === projectId &&
+          (a.contractId ?? null) === null &&
+          a.settlementId != null &&
+          !reversed.has(a.settlementId),
+      )
+      .sort((a, b) => (a.date < b.date ? -1 : 1))
+      .map((a) => {
+        const s2 = byId.get(a.settlementId!);
+        return {
+          id: a.id,
+          date: a.date,
+          labourTypeName: labourTypeInfo(a.labourSubcategoryId).subcategoryName,
+          quantityPresent: a.quantityPresent,
+          dailyRatePaiseSnapshot: a.dailyRatePaiseSnapshot,
+          estimatedCostPaise: a.estimatedCostPaise,
+          settlementId: a.settlementId!,
+          settlementPeriod: s2 ? `${s2.periodStart} – ${s2.periodEnd}` : "",
+        };
+      });
+  },
+
+  async previewAttribution(input) {
+    const built = buildAttributionInputsDemo(input);
+    if ("blockers" in built) return built;
+    return buildAttributionPreview(built);
+  },
+
+  async attributeSettledLabour(input) {
+    if (!input.reason.trim()) return { blockers: ["REASON_REQUIRED"] };
+    if (input.attendanceIds.length === 0) return { blockers: ["NOTHING_SELECTED"] };
+    const built = buildAttributionInputsDemo(input);
+    if ("blockers" in built) return built;
+
+    const preview = buildAttributionPreview(built);
+    // All or nothing — parity with the server's transaction.
+    if (preview.blockers.length > 0) {
+      return { blockers: preview.blockers, collisions: built.collisions };
+    }
+
+    const rows = loadAttendanceRaw();
+    for (const r of rows) {
+      if (input.attendanceIds.includes(r.id)) r.contractId = input.contractId;
+    }
+    writeAttendanceRaw(rows);
+
+    const id = uid();
+    appendEvent({
+      id,
+      action: "contractor.attendance_attributed",
+      contractorId: input.contractorId,
+      summary: `Attributed ${preview.rowCount} settled attendance record${preview.rowCount === 1 ? "" : "s"} to "${built.target.title}"`,
+      at: nowISO(),
+      actorName: "Aarav Mehta",
+      amountPaise: preview.totalPaise,
+      contractId: input.contractId,
+      contractTitle: built.target.title,
+      projectName: built.target.projectName,
+      meta: {
+        projectId: input.projectId,
+        contractorId: input.contractorId,
+        attendanceIds: input.attendanceIds,
+        settlementIds: preview.settlementIds,
+        fromContractId: null,
+        toContractId: input.contractId,
+        toContractTitle: built.target.title,
+        rowCount: preview.rowCount,
+        totalPaise: preview.totalPaise,
+        reason: input.reason.trim(),
+      },
+    });
+
+    return {
+      correctionId: id,
+      rowCount: preview.rowCount,
+      totalPaise: preview.totalPaise,
+      contractId: input.contractId,
+      contractTitle: built.target.title,
+    };
+  },
+
+  async reverseAttribution(input) {
+    if (!input.reason.trim()) return { blockers: ["REASON_REQUIRED"] };
+    const events = loadEvents();
+    const original = events.find(
+      (e) => e.id === input.correctionId && e.action === "contractor.attendance_attributed",
+    );
+    if (!original) return { blockers: ["NOT_FOUND"] };
+    if (events.some((e) => e.meta?.correctionId === input.correctionId)) {
+      return { blockers: ["ALREADY_REVERSED"] };
+    }
+
+    const ids = (original.meta.attendanceIds as string[]) ?? [];
+    const target = original.meta.toContractId as string;
+    const rows = loadAttendanceRaw();
+    const affected = rows.filter((r) => ids.includes(r.id));
+    const settlements = loadSettlementsForHistory();
+    const reversed = new Set(settlements.filter((x) => x.reversedAt).map((x) => x.id));
+
+    // Refuse rather than guess: restoring only the rows that still match would
+    // leave a state nobody asked for and an audit entry describing something else.
+    if (
+      affected.length !== ids.length ||
+      affected.some(
+        (r) =>
+          (r.contractId ?? null) !== target ||
+          r.settlementId == null ||
+          reversed.has(r.settlementId),
+      )
+    ) {
+      return { blockers: ["STALE_SELECTION"] };
+    }
+
+    const totalPaise = affected.reduce((t, r) => t + r.estimatedCostPaise, 0);
+    for (const r of rows) if (ids.includes(r.id)) r.contractId = null;
+    writeAttendanceRaw(rows);
+
+    const id = uid();
+    appendEvent({
+      id,
+      action: "contractor.attendance_attribution_reversed",
+      contractorId: original.contractorId,
+      summary: `Reversed the attribution of ${affected.length} settled attendance record${affected.length === 1 ? "" : "s"} from "${original.contractTitle}"`,
+      at: nowISO(),
+      actorName: "Aarav Mehta",
+      amountPaise: totalPaise,
+      contractId: null,
+      contractTitle: original.contractTitle,
+      projectName: original.projectName,
+      meta: {
+        correctionId: input.correctionId,
+        projectId: original.meta.projectId,
+        attendanceIds: ids,
+        fromContractId: target,
+        fromContractTitle: original.contractTitle,
+        toContractId: null,
+        rowCount: affected.length,
+        totalPaise,
+        reason: input.reason.trim(),
+      },
+    });
+
+    return {
+      correctionId: id,
+      rowCount: affected.length,
+      totalPaise,
+      contractId: null,
+      contractTitle: original.contractTitle,
+    };
+  },
+
   /* ── Reconciliation surfaces ──────────────────────────────────────────── */
 
   async getContractorProfile(contractorId) {
     const rows = loadContracts().filter((c) => c.contractorId === contractorId && !c.deletedAt);
     if (rows.length === 0) {
+      // No agreements does NOT mean no labour: an attendance-only contractor's
+      // settled work is unattributed by definition and must still be reported.
+      const attendanceOnly = attendanceByProjectDemo(contractorId);
       return {
         contractor: { id: contractorId, name: contractorName(contractorId), phone: null, status: "ACTIVE" },
         projects: [],
         lifetime: rollUpReconciliations([]),
         payments: [],
+        attendance: attendanceOnly,
+        attendanceTotals: sumPositions(attendanceOnly),
       };
     }
 
@@ -1600,6 +2009,7 @@ export const demoContractsRepository: ContractsRepository = {
       rollup: rollUpReconciliations(list.map((c) => c.reconciliation)),
     }));
 
+    const attendance = attendanceByProjectDemo(contractorId);
     const titleById = new Map(rows.map((r) => [r.id, r.title]));
     const nameById = new Map(rows.map((r) => [r.id, projectName(r.projectId)]));
     const payments: ContractPaymentHistoryRow[] = loadPayments()
@@ -1622,6 +2032,8 @@ export const demoContractsRepository: ContractsRepository = {
       // Sums each agreement's due and ahead — never nets them against each other.
       lifetime: rollUpReconciliations(contracts.map((c) => c.reconciliation)),
       payments,
+      attendance,
+      attendanceTotals: sumPositions(attendance),
     };
   },
 
@@ -1726,6 +2138,33 @@ export const demoContractsRepository: ContractsRepository = {
         contractId: null,
         contractTitle: null,
         projectName: s.projectName,
+      });
+    }
+
+    // Derived events, PLUS the explicit correction events — an attribution
+    // leaves no trace in current state, so it cannot be reconstructed like the
+    // rest. `attributionReversedAt` lets History offer (or withhold) the
+    // reversal action without a second round trip.
+    const stored = loadEvents().filter((e) => e.contractorId === contractorId);
+    const reversedBy = new Map(
+      stored
+        .filter((e) => e.action === "contractor.attendance_attribution_reversed")
+        .map((e) => [e.meta.correctionId as string, e.at]),
+    );
+    for (const e of stored) {
+      events.push({
+        id: e.id,
+        action: e.action,
+        summary: e.summary,
+        at: e.at,
+        actorName: e.actorName,
+        amountPaise: e.amountPaise,
+        contractId: e.contractId,
+        contractTitle: e.contractTitle,
+        projectName: e.projectName,
+        ...(e.action === "contractor.attendance_attributed"
+          ? { attributionReversedAt: reversedBy.get(e.id) ?? null }
+          : {}),
       });
     }
 

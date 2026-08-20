@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 
 /**
@@ -6,38 +6,154 @@ import AxeBuilder from "@axe-core/playwright";
  * WCAG 2.1/2.2 A + AA rules. Runs in demo mode (no backend). This catches the
  * machine-checkable ~40% of WCAG; manual keyboard/SR checks are documented in
  * docs/testing.md.
+ *
+ * BOTH THEMES, on purpose. This suite used to scan light only, and dark mode
+ * carried undetected debt for exactly that reason: `--foreground-subtle` failed
+ * AA in dark at 3.42:1 while the light scan was the only thing anyone watched.
+ * Colour tokens are additionally held by src/app/token-contrast.test.ts, which
+ * fails in milliseconds; this is the check that catches what COMPOSITION does to
+ * them — an `opacity-70` on a card once dropped compliant token text to 2.78:1,
+ * and no token test can see that.
+ *
+ * Rules are never disabled. A finding is either fixed or reported.
  */
 
 const PAGES: { name: string; path: string; ready: RegExp }[] = [
   { name: "dashboard", path: "/dashboard", ready: /Good (morning|afternoon|evening)/ },
-  { name: "projects", path: "/projects", ready: /projects/i },
-  { name: "procurement", path: "/procurement", ready: /procurement|purchase/i },
+  { name: "projects", path: "/projects", ready: /Every site, from estimation to handover/ },
+  {
+    name: "project-detail",
+    path: "/projects/10000000-0000-0000-0000-000000000001",
+    ready: /Skyline Residency/,
+  },
+  { name: "procurement", path: "/procurement", ready: /Ordered value/ },
+  {
+    name: "po-detail",
+    path: "/procurement/50000000-0000-0000-0000-000000000233",
+    ready: /Line items/,
+  },
   { name: "vendors", path: "/vendors", ready: /vendor/i },
-  { name: "labor", path: "/labor", ready: /attendance|labour|labor/i },
+  { name: "labor", path: "/labor", ready: /Total present|No active projects|Nothing to record/i },
+  { name: "labor-summary", path: "/labor/summary", ready: /Total man-days|No labour recorded/i },
+  { name: "labor-types", path: "/labor/categories", ready: /labour types/i },
+  { name: "contractors", path: "/labor/contractors", ready: /contractor/i },
+  // The redesign's reference surface: dense financial information, tabs,
+  // tables, badges and a nav rail in one place.
+  { name: "contractor-detail", path: "/labor/contractors/c-pappu", ready: /Pappu Contractor/ },
+  // A cross-module money index: four instruments, a period control, filters,
+  // a table with a card fallback and a detail sheet.
+  { name: "payments", path: "/payments", ready: /Every payment recorded across Constructly/ },
   { name: "reports", path: "/reports", ready: /report/i },
   { name: "settings", path: "/settings", ready: /settings/i },
 ];
 
-for (const p of PAGES) {
-  test(`a11y: ${p.name} has no serious/critical violations`, async ({ page }) => {
-    await page.goto(p.path);
-    await expect(page.getByText(p.ready).first()).toBeVisible();
+async function scan(page: Page, path: string, ready: RegExp) {
+  await page.goto(path);
+  await expect(page.getByText(ready).first()).toBeVisible();
+  await page
+    .waitForFunction(() => document.documentElement.dataset.constructlyHydrated === "1", undefined, {
+      timeout: 15_000,
+    })
+    .catch(() => {});
 
-    const results = await new AxeBuilder({ page })
-      .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"])
-      .analyze();
+  // Wait for the design tokens to be LIVE before measuring colour. Under a
+  // parallel run the stylesheet can still be arriving, and axe then samples
+  // browser default colours and reports contrast failures that no user ever
+  // sees — an intermittent red that teaches people to re-run instead of look.
+  await page
+    .waitForFunction(
+      () =>
+        getComputedStyle(document.documentElement)
+          .getPropertyValue("--foreground-subtle")
+          .trim().length > 0,
+      undefined,
+      { timeout: 15_000 },
+    )
+    .catch(() => {});
 
-    const seriousOrWorse = results.violations.filter(
-      (v) => v.impact === "serious" || v.impact === "critical",
-    );
-    // Attach details to the report on failure.
-    if (seriousOrWorse.length) {
-      console.error(
-        `${p.name} violations:\n` +
-          seriousOrWorse.map((v) => `- [${v.impact}] ${v.id}: ${v.help}`).join("\n"),
-      );
+  // Let in-flight data settle too. Axe measures a FRAME; sampling one mid
+  // transition reports colours that were never painted for a user.
+  await page.waitForLoadState("networkidle").catch(() => {});
+  await page.waitForTimeout(400);
+
+  const results = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"])
+    .analyze();
+
+  return results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+}
+
+function report(name: string, theme: string, violations: Awaited<ReturnType<typeof scan>>) {
+  if (!violations.length) return;
+  console.error(
+    `${name} [${theme}] violations:\n` +
+      violations
+        .map((v) => `- [${v.impact}] ${v.id} ×${v.nodes.length}: ${v.help}`)
+        .join("\n"),
+  );
+}
+
+for (const theme of ["light", "dark"] as const) {
+  test.describe(`${theme} theme`, () => {
+    // next-themes runs on `system` by default, so emulating the media query is
+    // what a real user's OS setting does — no test-only theme switch involved.
+    test.use({ colorScheme: theme });
+
+    for (const p of PAGES) {
+      test(`a11y: ${p.name} has no serious/critical violations`, async ({ page }) => {
+        const violations = await scan(page, p.path, p.ready);
+        report(p.name, theme, violations);
+        expect(violations).toEqual([]);
+      });
     }
-    expect(seriousOrWorse).toEqual([]);
+
+    test(`a11y: contractor detail at 375px has no serious/critical violations`, async ({ page }) => {
+      await page.setViewportSize({ width: 375, height: 812 });
+      const violations = await scan(page, "/labor/contractors/c-pappu", /Pappu Contractor/);
+      report("contractor-detail@375", theme, violations);
+      expect(violations).toEqual([]);
+    });
+
+    test(`a11y: dashboard at 375px has no serious/critical violations`, async ({ page }) => {
+      await page.setViewportSize({ width: 375, height: 812 });
+      const violations = await scan(page, "/dashboard", /Good (morning|afternoon|evening)/);
+      report("dashboard@375", theme, violations);
+      expect(violations).toEqual([]);
+    });
+
+    test(`a11y: procurement at 375px has no serious/critical violations`, async ({ page }) => {
+      await page.setViewportSize({ width: 375, height: 812 });
+      const violations = await scan(page, "/procurement", /Ordered value/);
+      report("procurement@375", theme, violations);
+      expect(violations).toEqual([]);
+    });
+
+    test(`a11y: project list at 375px has no serious/critical violations`, async ({ page }) => {
+      await page.setViewportSize({ width: 375, height: 812 });
+      const violations = await scan(page, "/projects", /Every site, from estimation to handover/);
+      report("projects@375", theme, violations);
+      expect(violations).toEqual([]);
+    });
+
+    test(`a11y: payments at 375px has no serious/critical violations`, async ({ page }) => {
+      await page.setViewportSize({ width: 375, height: 812 });
+      const violations = await scan(
+        page,
+        "/payments",
+        /Every payment recorded across Constructly/,
+      );
+      report("payments@375", theme, violations);
+      expect(violations).toEqual([]);
+    });
+
+    // Attendance is entered on a phone on site — the mobile layout is the real
+    // one for this screen, not a fallback.
+    test(`a11y: attendance at 375px has no serious/critical violations`, async ({ page }) => {
+      await page.setViewportSize({ width: 375, height: 812 });
+      const violations = await scan(page, "/labor", /Total present|No active projects|Nothing to record/i);
+      report("attendance@375", theme, violations);
+      expect(violations).toEqual([]);
+    });
   });
 }
 

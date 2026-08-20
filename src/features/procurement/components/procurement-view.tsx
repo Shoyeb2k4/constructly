@@ -1,14 +1,12 @@
 "use client";
 
 import * as React from "react";
-import { useRouter } from "next/navigation";
 import {
   ShoppingCart,
   Plus,
   Search,
   Inbox,
   SlidersHorizontal,
-  ArrowUpDown,
   X,
   Download,
   ChevronLeft,
@@ -20,6 +18,9 @@ import { RowsSkeleton } from "@/components/patterns/loading-state";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Toolbar, ToolbarGroup, ToolbarSpacer } from "@/components/patterns/toolbar";
+import { StatCard } from "@/components/patterns/stat-card";
+import { MoneyText } from "@/components/patterns/money-text";
 import {
   Select,
   SelectContent,
@@ -60,7 +61,6 @@ import { PoTable, PoColumnsMenu, usePoColumns } from "./po-table";
 const PAGE_SIZE = 25;
 
 export function ProcurementView() {
-  const router = useRouter();
   const can = useCan();
   const canCreate = can("purchase_orders.create");
   const canApprove = can("purchase_orders.approve");
@@ -76,6 +76,7 @@ export function ProcurementView() {
   const [createOpen, setCreateOpen] = React.useState(false);
 
   const columns = usePoColumns();
+
 
   // Persist filters + page to the URL bar without a navigation.
   React.useEffect(() => {
@@ -117,6 +118,14 @@ export function ProcurementView() {
   const { data: pending = 0 } = usePendingApprovalCount();
 
   const activeCount = countActiveFilters(filters);
+
+  // Sums of the ROWS ON SCREEN — the same records the table lists, so the
+  // headline always agrees with what is beneath it. Deliberately not a new
+  // rollup: the domain's own budget arithmetic (`poCounted`) lives in calc.ts
+  // and is project-scoped; inventing a second global figure here would create
+  // two numbers that must agree and eventually would not.
+  const orderedPaise = pos.reduce((sum, po) => sum + po.totalPaise, 0);
+  const paidPaise = pos.reduce((sum, po) => sum + po.paidPaise, 0);
 
   // Client-side pagination over the server-filtered + server-sorted results.
   const total = pos.length;
@@ -179,6 +188,33 @@ export function ProcurementView() {
         }
       />
 
+      {/* OPERATIONAL ATTENTION first, then the money. Deliberately NOT one
+          ambiguous "Procurement cost": the domain tracks what was ORDERED and
+          what has been PAID separately, and they mean different things — an
+          approved order is a commitment, a payment is cash that has left. */}
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <StatCard
+          label="Awaiting approval"
+          value={pending}
+          tone={pending > 0 ? "attention" : "default"}
+          hint={
+            pending > 0
+              ? "Not counted toward budget until approved."
+              : "Nothing is waiting on you."
+          }
+        />
+        <StatCard
+          label="Ordered value"
+          value={<MoneyText paise={orderedPaise} compact />}
+          hint="Grand total of the orders matching these filters."
+        />
+        <StatCard
+          label="Paid against orders"
+          value={<MoneyText paise={paidPaise} compact />}
+          hint="Payments recorded against those orders — not the same as delivered."
+        />
+      </div>
+
       {canApprove && pending > 0 && (
         <button
           onClick={() => patch({ status: "SUBMITTED" })}
@@ -194,50 +230,55 @@ export function ProcurementView() {
         </button>
       )}
 
-      {/* Toolbar */}
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="relative min-w-44 flex-1">
-          <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-foreground-subtle" />
-          <Input
-            value={searchInput}
-            onChange={(e) => setSearchInput(e.target.value)}
-            placeholder="Search PO # or vendor…"
-            className="pl-9"
-          />
-        </div>
+      <Toolbar aria-label="Purchase order filters">
+        <ToolbarGroup grow>
+          <div className="relative w-full">
+            <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-foreground-subtle" />
+            <Input
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              placeholder="Search PO # or vendor…"
+              aria-label="Search purchase orders"
+              className="pl-9"
+            />
+          </div>
+        </ToolbarGroup>
 
-        <Button variant="secondary" size="sm" onClick={() => setFilterOpen(true)}>
-          <SlidersHorizontal className="size-4" />
-          Filters
-          {activeCount > 0 && <Badge variant="primary" className="ml-1">{activeCount}</Badge>}
-        </Button>
-
-        <div className="flex items-center gap-1.5">
-          <ArrowUpDown className="size-4 text-foreground-subtle" />
+        <ToolbarGroup>
           <Select value={filters.sort ?? "NEWEST"} onValueChange={(v) => patch({ sort: v as POSort })}>
-            <SelectTrigger className="w-44" aria-label="Sort"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="w-44" aria-label="Sort purchase orders">
+              <SelectValue />
+            </SelectTrigger>
             <SelectContent>
               {PO_SORTS.map((s) => <SelectItem key={s} value={s}>{PO_SORT_LABEL[s]}</SelectItem>)}
             </SelectContent>
           </Select>
-        </div>
+          <Button variant={activeCount > 0 ? "secondary" : "ghost"} size="sm" onClick={() => setFilterOpen(true)}>
+            <SlidersHorizontal className="size-4" />
+            Filters
+            {activeCount > 0 && <Badge variant="primary" className="ml-1">{activeCount}</Badge>}
+          </Button>
+        </ToolbarGroup>
 
-        <PoColumnsMenu state={columns.state} toggle={columns.toggle} reset={columns.reset} />
+        <ToolbarSpacer />
 
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="secondary" size="sm" disabled={total === 0}>
-              <Download className="size-4" />
-              Export
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem onSelect={() => runExport("csv")}>CSV</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => runExport("excel")}>Excel</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => runExport("pdf")}>PDF</DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
+        <ToolbarGroup>
+          <PoColumnsMenu state={columns.state} toggle={columns.toggle} reset={columns.reset} />
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="sm" disabled={total === 0}>
+                <Download className="size-4" />
+                Export
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onSelect={() => runExport("csv")}>CSV</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => runExport("excel")}>Excel</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => runExport("pdf")}>PDF</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </ToolbarGroup>
+      </Toolbar>
 
       {/* Active filter chips */}
       {chips.length > 0 && (
@@ -287,12 +328,7 @@ export function ProcurementView() {
         />
       ) : (
         <>
-          <PoTable
-            items={pageItems}
-            colState={columns.state}
-            setWidth={columns.setWidth}
-            onRowClick={(id) => router.push(`/procurement/${id}`)}
-          />
+          <PoTable items={pageItems} colState={columns.state} />
           {/* Pagination */}
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-xs text-foreground-subtle">

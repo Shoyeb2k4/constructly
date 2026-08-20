@@ -1,28 +1,22 @@
 /**
- * Build the app in DEMO mode.
+ * Build the app in DEMO mode — production-style preview, step 1 of 2.
  *
- * Both flags matter. `CONSTRUCTLY_DEMO` is server-only — Next never inlines an
- * unprefixed variable into the client bundle — so with it alone the server
- * renders the demo company while the browser still calls real server actions.
- * `NEXT_PUBLIC_CONSTRUCTLY_DEMO` is what makes the client agree, which is why
- * demo mode previously appeared to work and then hung on real data.
+ *   npm run build:demo && npm run start:demo   → http://localhost:3100
  *
- * NEXT_PUBLIC_* values are inlined into the client bundle at BUILD time, not
- * read at startup — so a demo preview served by `next start` must be built this
- * way. Setting the flag only when starting leaves demo off in the browser and
- * the app silently calls real server actions.
- *
- * Re-run the ordinary `npm run build` before deploying: this artifact is demo.
+ * Writes to `.next-demo`, NOT `.next`: this artifact has demo mode compiled
+ * into the client bundle and must never be mistaken for a deployable build.
+ * The ordinary `npm run build` output is left untouched, so the two can coexist
+ * and neither needs deleting between runs.
  */
 import { spawn } from "node:child_process";
+import { demoEnv, nextBin, DEMO_DIST_DIR } from "./demo-env.mjs";
 
-const child = spawn(
-  process.execPath,
-  [new URL("../node_modules/next/dist/bin/next", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"), "build"],
-  {
-    stdio: "inherit",
-    env: { ...process.env, CONSTRUCTLY_DEMO: "1", NEXT_PUBLIC_CONSTRUCTLY_DEMO: "1" },
-  },
-);
+const env = demoEnv();
+console.log(`\n  Constructly DEMO build → ${env.NEXT_DIST_DIR ?? DEMO_DIST_DIR} (not deployable)\n`);
+
+const child = spawn(process.execPath, [nextBin(import.meta.url), "build"], {
+  stdio: "inherit",
+  env,
+});
 
 child.on("exit", (code) => process.exit(code ?? 0));

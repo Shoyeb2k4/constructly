@@ -9,13 +9,49 @@ export const Select = SelectPrimitive.Root;
 export const SelectValue = SelectPrimitive.Value;
 export const SelectGroup = SelectPrimitive.Group;
 
+/** Heading for a `SelectGroup`. Radix links it to the group for assistive tech. */
+export function SelectLabel({
+  className,
+  ...props
+}: React.ComponentProps<typeof SelectPrimitive.Label>) {
+  return (
+    <SelectPrimitive.Label
+      className={cn("px-2 py-1.5 text-xs font-medium text-foreground-subtle", className)}
+      {...props}
+    />
+  );
+}
+
+/**
+ * Recover the placeholder from a `<SelectValue placeholder="…">` child.
+ *
+ * A compact filter trigger renders only its placeholder or its current value,
+ * so when nothing is selected it has NO text node at all and axe reports
+ * `button-name` — 10 such violations existed across five screens. Naming each
+ * trigger by hand is a rule nobody remembers on the eleventh one, so the
+ * fallback lives here: an explicit `aria-label` always wins, and a trigger that
+ * has neither still cannot ship nameless.
+ */
+function placeholderOf(children: React.ReactNode): string | undefined {
+  let found: string | undefined;
+  React.Children.forEach(children, (child) => {
+    if (found || !React.isValidElement(child)) return;
+    const placeholder = (child.props as { placeholder?: unknown }).placeholder;
+    if (typeof placeholder === "string" && placeholder.trim()) found = placeholder;
+  });
+  return found;
+}
+
 export function SelectTrigger({
   className,
   children,
   ...props
 }: React.ComponentProps<typeof SelectPrimitive.Trigger>) {
+  const labelled = props["aria-label"] ?? props["aria-labelledby"];
+  const fallbackLabel = labelled ? undefined : placeholderOf(children);
   return (
     <SelectPrimitive.Trigger
+      aria-label={props["aria-label"] ?? fallbackLabel}
       className={cn(
         "flex h-9 items-center justify-between gap-2 rounded-[var(--radius)] border border-border-strong bg-surface px-3 text-sm outline-none transition-colors",
         "focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring/40",

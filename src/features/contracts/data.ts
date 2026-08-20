@@ -6,6 +6,7 @@ import * as scope from "./server/scope";
 import * as milestones from "./server/milestones";
 import * as amendments from "./server/amendments";
 import * as reconciliation from "./server/reconciliation";
+import * as attribution from "./server/attribution";
 import type { ContractFilters } from "./types";
 
 const serverRepository: ContractsRepository = {
@@ -38,6 +39,11 @@ const serverRepository: ContractsRepository = {
 
   recordContractPayment: agreements.recordContractPayment,
   reverseContractPayment: agreements.reverseContractPayment,
+
+  listAttributableLabour: attribution.listAttributableLabour,
+  previewAttribution: attribution.previewAttribution,
+  attributeSettledLabour: attribution.attributeSettledLabour,
+  reverseAttribution: attribution.reverseAttribution,
 
   listHistory: reconciliation.listHistory,
   getContractorProfile: reconciliation.getContractorProfile,

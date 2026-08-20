@@ -5,6 +5,7 @@ import {
   HardHat,
   Truck,
   ShoppingCart,
+  Banknote,
   BarChart3,
   Settings,
 } from "lucide-react";
@@ -26,6 +27,9 @@ export const NAV_ITEMS: NavItem[] = [
   { label: "Labor", href: "/labor", icon: HardHat, modules: ["labour", "attendance"] },
   { label: "Vendors", href: "/vendors", icon: Truck, modules: ["vendors"] },
   { label: "Procurement", href: "/procurement", icon: ShoppingCart, modules: ["purchase_orders"] },
+  // Payments sits with the operational modules that FEED it, above Reports:
+  // finding a transaction is day-to-day work, analysing them is not.
+  { label: "Payments", href: "/payments", icon: Banknote, modules: ["payments"] },
   { label: "Reports", href: "/reports", icon: BarChart3, modules: ["reports"] },
   // Settings is always shown — every user has a personal profile section there.
   { label: "Settings", href: "/settings", icon: Settings },

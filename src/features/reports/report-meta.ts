@@ -7,10 +7,22 @@ import type { Permission } from "@/features/rbac/permissions";
  * to import from server actions.
  *
  * Financial-class reports require reports.view_financial; everything else
- * requires reports.view_operational. Keep FINANCIAL_REPORT_IDS in sync with the
- * registry's `category: "Financial"` reports.
+ * requires reports.view_operational.
+ *
+ * The class is a LIST, not a category, because the catalogue is grouped by the
+ * business question a report answers ("Payments", "Contractors") while the gate
+ * is about how directly a report exposes company money. The two do not line up:
+ * Budget vs Actual sits under Projects and is financial; Deadlines sits beside
+ * it and is not.
  */
-const FINANCIAL_REPORT_IDS = new Set<string>(["budget-vs-actual"]);
+const FINANCIAL_REPORT_IDS = new Set<string>([
+  "budget-vs-actual",
+  // Cash movement and the contractor commercial position are the two reports
+  // that expose company money directly, so they carry the financial gate.
+  "payments",
+  "contractor-position",
+  "contractor-settlements",
+]);
 
 export function reportClass(reportId: string): "financial" | "operational" {
   return FINANCIAL_REPORT_IDS.has(reportId) ? "financial" : "operational";

@@ -50,11 +50,17 @@ export function ProcurementCard({ procurement }: { procurement: ProcurementWidge
           <>
             {/* Headline metrics + monthly trend */}
             <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]">
-              <div className="grid grid-cols-2 gap-x-4 gap-y-5 self-center sm:grid-cols-4 lg:grid-cols-2">
-                <Metric label="Spend"><MoneyText paise={procurement.spendPaise} /></Metric>
+              {/* One column on a phone. Two gave each metric ~134px while a
+                  full Indian amount at this size needs ~147px, and MoneyText
+                  correctly refuses to wrap — so the figure clipped. */}
+              <div className="grid grid-cols-1 gap-x-4 gap-y-5 self-center sm:grid-cols-2 lg:grid-cols-2">
+                {/* Procurement's own words, unchanged from the module: what was
+                    ORDERED, and what is STILL OWED on it. Neither says anything
+                    about delivery. */}
+                <Metric label="Ordered value"><MoneyText paise={procurement.spendPaise} /></Metric>
                 <Metric label="GST paid"><MoneyText paise={procurement.gstPaidPaise} /></Metric>
                 <Metric
-                  label={`Outstanding${procurement.pendingPaymentsCount > 0 ? ` · ${procurement.pendingPaymentsCount}` : ""}`}
+                  label={`Still owed${procurement.pendingPaymentsCount > 0 ? ` · ${procurement.pendingPaymentsCount} orders` : ""}`}
                   tone="warning"
                 >
                   <MoneyText paise={procurement.outstandingPaise} />
@@ -62,7 +68,7 @@ export function ProcurementCard({ procurement }: { procurement: ProcurementWidge
                 <Metric label="Recent POs">{procurement.recentPOs.length}</Metric>
               </div>
               <div>
-                <p className="mb-1 text-xs font-medium text-foreground-subtle">Monthly spend</p>
+                <p className="mb-1 text-xs font-medium text-foreground-subtle">Ordered, monthly</p>
                 <div className="flex h-16 items-end gap-1.5">
                   {procurement.monthlyTrend.map((m) => (
                     <div key={m.month} className="flex flex-1 flex-col items-center gap-1" title={`${MONTH_LABEL(m.month)}`}>
@@ -82,9 +88,9 @@ export function ProcurementCard({ procurement }: { procurement: ProcurementWidge
               {procurement.outstandingVendors.length > 0 && (
                 <ListSection title="Outstanding vendors">
                   {procurement.outstandingVendors.map((v) => (
-                    <Link key={v.vendorId} href={`/vendors/${v.vendorId}`} className="flex items-center justify-between text-sm hover:text-primary">
-                      <span className="truncate">{v.name}</span>
-                      <span className="font-mono text-xs text-warning-foreground"><MoneyText paise={v.amountPaise} compact /></span>
+                    <Link key={v.vendorId} href={`/vendors/${v.vendorId}`} className="flex items-center justify-between gap-2 text-sm hover:text-primary">
+                      <span className="min-w-0 truncate">{v.name}</span>
+                      <span className="shrink-0 font-mono text-xs tabular-nums text-warning-foreground"><MoneyText paise={v.amountPaise} compact /></span>
                     </Link>
                   ))}
                 </ListSection>
@@ -93,20 +99,20 @@ export function ProcurementCard({ procurement }: { procurement: ProcurementWidge
               {procurement.topVendors.length > 0 && (
                 <ListSection title="Top vendors">
                   {procurement.topVendors.map((v) => (
-                    <Link key={v.vendorId} href={`/vendors/${v.vendorId}`} className="flex items-center justify-between text-sm hover:text-primary">
-                      <span className="truncate">{v.name}</span>
-                      <span className="font-mono text-xs text-foreground-muted"><MoneyText paise={v.amountPaise} compact /></span>
+                    <Link key={v.vendorId} href={`/vendors/${v.vendorId}`} className="flex items-center justify-between gap-2 text-sm hover:text-primary">
+                      <span className="min-w-0 truncate">{v.name}</span>
+                      <span className="shrink-0 font-mono text-xs tabular-nums text-foreground-muted"><MoneyText paise={v.amountPaise} compact /></span>
                     </Link>
                   ))}
                 </ListSection>
               )}
 
               {procurement.spendByProject.length > 0 && (
-                <ListSection title="Spend by project">
+                <ListSection title="Ordered by project">
                   {procurement.spendByProject.slice(0, 5).map((p) => (
-                    <Link key={p.projectId} href={`/projects/${p.projectId}?tab=procurement`} className="flex items-center justify-between text-sm hover:text-primary">
-                      <span className="truncate">{p.name}</span>
-                      <span className="font-mono text-xs text-foreground-muted"><MoneyText paise={p.amountPaise} compact /></span>
+                    <Link key={p.projectId} href={`/projects/${p.projectId}?tab=procurement`} className="flex items-center justify-between gap-2 text-sm hover:text-primary">
+                      <span className="min-w-0 truncate">{p.name}</span>
+                      <span className="shrink-0 font-mono text-xs tabular-nums text-foreground-muted"><MoneyText paise={p.amountPaise} compact /></span>
                     </Link>
                   ))}
                 </ListSection>
@@ -115,9 +121,9 @@ export function ProcurementCard({ procurement }: { procurement: ProcurementWidge
               {procurement.topMaterials.length > 0 && (
                 <ListSection title="Top materials" icon={Package}>
                   {procurement.topMaterials.slice(0, 5).map((m) => (
-                    <div key={m.material} className="flex items-center justify-between text-sm">
-                      <span className="truncate">{m.material}</span>
-                      <span className="font-mono text-xs text-foreground-muted"><MoneyText paise={m.amountPaise} compact /></span>
+                    <div key={m.material} className="flex items-center justify-between gap-2 text-sm">
+                      <span className="min-w-0 truncate">{m.material}</span>
+                      <span className="shrink-0 font-mono text-xs tabular-nums text-foreground-muted"><MoneyText paise={m.amountPaise} compact /></span>
                     </div>
                   ))}
                 </ListSection>
@@ -144,8 +150,15 @@ export function ProcurementCard({ procurement }: { procurement: ProcurementWidge
                       <span className="font-mono">{po.poNumber}</span>
                       <span className="ml-1.5 text-xs text-foreground-subtle">{po.vendor.name}</span>
                     </span>
-                    <PaymentStatusBadge status={po.paymentStatus} />
-                    <span className="font-mono text-xs"><MoneyText paise={po.totalPaise} compact /></span>
+                    {/* `shrink-0` on both: without it the vendor name pushed
+                        into the badge and the amount, which measured as real
+                        text-on-text overlap at 1130px. */}
+                    <span className="shrink-0">
+                      <PaymentStatusBadge status={po.paymentStatus} />
+                    </span>
+                    <span className="shrink-0 font-mono text-xs tabular-nums">
+                      <MoneyText paise={po.totalPaise} compact />
+                    </span>
                   </Link>
                 ))}
               </ListSection>

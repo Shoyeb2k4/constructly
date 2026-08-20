@@ -12,7 +12,8 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Field } from "@/components/patterns/field";
+import { Callout } from "@/components/patterns/callout";
 import {
   Select,
   SelectContent,
@@ -124,8 +125,7 @@ function PaymentDialogInner({
 
         <form onSubmit={onSubmit} className="space-y-4">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div className="space-y-1.5">
-              <Label>Vendor</Label>
+            <Field label="Vendor" error={errors.vendorId?.message}>
               <Controller
                 control={control}
                 name="vendorId"
@@ -140,10 +140,8 @@ function PaymentDialogInner({
                   </Select>
                 )}
               />
-              {errors.vendorId && <p className="text-xs text-danger-foreground">{errors.vendorId.message}</p>}
-            </div>
-            <div className="space-y-1.5">
-              <Label>Project</Label>
+            </Field>
+            <Field label="Project" error={errors.projectId?.message}>
               <Controller
                 control={control}
                 name="projectId"
@@ -158,12 +156,10 @@ function PaymentDialogInner({
                   </Select>
                 )}
               />
-              {errors.projectId && <p className="text-xs text-danger-foreground">{errors.projectId.message}</p>}
-            </div>
+            </Field>
           </div>
 
-          <div className="space-y-1.5">
-            <Label>Purchase order (optional)</Label>
+          <Field label="Purchase order" hint="Leave as on-account for an advance not tied to an order.">
             <Controller
               control={control}
               name="purchaseOrderId"
@@ -181,16 +177,13 @@ function PaymentDialogInner({
                 </Select>
               )}
             />
-          </div>
+          </Field>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-            <div className="space-y-1.5">
-              <Label>Amount ₹</Label>
+            <Field label="Amount ₹" required error={errors.amountRupees?.message}>
               <Input type="number" step="0.01" min={0} placeholder="50,000" {...register("amountRupees")} />
-              {errors.amountRupees && <p className="text-xs text-danger-foreground">{errors.amountRupees.message}</p>}
-            </div>
-            <div className="space-y-1.5">
-              <Label>Mode</Label>
+            </Field>
+            <Field label="Mode">
               <Controller
                 control={control}
                 name="paymentMode"
@@ -205,29 +198,27 @@ function PaymentDialogInner({
                   </Select>
                 )}
               />
-            </div>
-            <div className="space-y-1.5">
-              <Label>Date</Label>
+            </Field>
+            <Field label="Date">
               <Input type="date" {...register("date")} />
-            </div>
+            </Field>
           </div>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div className="space-y-1.5">
-              <Label>Reference # (optional)</Label>
+            <Field label="Reference #" hint="UTR, cheque or UPI reference.">
               <Input placeholder="UTR / cheque / UPI ref" {...register("referenceNumber")} />
-            </div>
-            <div className="space-y-1.5">
-              <Label>Remarks (optional)</Label>
+            </Field>
+            <Field label="Remarks">
               <Input placeholder="Part payment for steel" {...register("remarks")} />
-            </div>
+            </Field>
           </div>
 
           {softWarn && (
-            <div className="rounded-lg border border-warning/40 bg-warning-subtle/50 px-3 py-2 text-xs text-warning-foreground">
-              ⚠ This exceeds the {selectedPO ? `outstanding on ${selectedPO.poNumber}` : "vendor's outstanding"}
-              {" "}— allowed (advances are normal), just double-check the amount.
-            </div>
+            <Callout tone="attention" title="More than the outstanding amount">
+              This exceeds the {selectedPO ? `outstanding on ${selectedPO.poNumber}` : "vendor's outstanding"}.
+              That is allowed — paying an advance is normal — so this is a prompt to double-check
+              the figure, not a refusal.
+            </Callout>
           )}
 
           <div className="flex justify-end gap-2 pt-1">

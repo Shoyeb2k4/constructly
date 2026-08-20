@@ -14,7 +14,14 @@ export type ContractorLedgerType =
   | "ADJUSTMENT"
   | "PAYMENT"
   /** Written only by a settlement reversal; increases the advance balance. */
-  | "SETTLEMENT_REVERSAL";
+  | "SETTLEMENT_REVERSAL"
+  /**
+   * A governed RE-SCOPE of unused advance money. Always a PAIR in one
+   * transaction, so the contractor's total balance is unchanged and no cash
+   * moves — only which work the money is available to.
+   */
+  | "SCOPE_TRANSFER_OUT"
+  | "SCOPE_TRANSFER_IN";
 
 export interface Contractor {
   id: string;

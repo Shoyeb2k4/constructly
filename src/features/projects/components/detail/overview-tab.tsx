@@ -11,8 +11,10 @@ import {
   CalendarDays,
   ExternalLink,
   HardHat,
+  ArrowRight,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { TagChip } from "../tag-chip";
 import { BudgetCard } from "./budget-card";
 import { SectionEditButton } from "./section-edit-sheet";
@@ -23,7 +25,6 @@ import { ContractorsEditSheet } from "./contractors-edit-sheet";
 import type { ProjectDetail } from "../../types";
 import { TYPE_LABEL } from "../../constants";
 import { formatDate, deadlineCountdown } from "../../format";
-import { formatPaiseSmart } from "@/lib/money";
 
 function Line({
   icon: Icon,
@@ -35,12 +36,15 @@ function Line({
   value: React.ReactNode;
 }) {
   return (
-    <div className="flex items-center justify-between gap-4 py-2.5">
-      <span className="flex items-center gap-2 text-sm text-foreground-muted">
-        <Icon className="size-4 text-foreground-subtle" />
-        {label}
+    // The LABEL yields, never the value: a truncated "22 Oct 2026" reading as
+    // "22 Oc…" is worse than a wrapped label, and this card sits in a column
+    // that narrows once the section rail appears.
+    <div className="flex items-baseline justify-between gap-3 py-2.5">
+      <span className="flex min-w-0 items-center gap-2 text-sm text-foreground-muted">
+        <Icon className="size-4 shrink-0 text-foreground-subtle" />
+        <span className="min-w-0 break-words">{label}</span>
       </span>
-      <span className="truncate text-sm font-medium">{value || "—"}</span>
+      <span className="shrink-0 text-right text-sm font-medium">{value || "—"}</span>
     </div>
   );
 }
@@ -50,11 +54,15 @@ type Section = "client" | "details" | "location" | "contractors";
 export function OverviewTab({
   project,
   canEdit = false,
+  onOpenSection,
 }: {
   project: ProjectDetail;
   canEdit?: boolean;
+  /** Switches the record to another section, e.g. "contractors". */
+  onOpenSection: (section: string) => void;
 }) {
   const cd = deadlineCountdown(project.expectedCompletionDate);
+  const unconfiguredCount = project.contractors.filter((c) => c.labourRates.length === 0).length;
 
   // Deep link from the Labour → Attendance "Configure contractors" CTA:
   // /projects/:id?section=contractors&edit=1 opens the contractors editor and
@@ -114,54 +122,50 @@ export function OverviewTab({
           </CardContent>
         </Card>
 
+        {/* A SUMMARY. The full relationship — labour types, rates, blockers and
+            the route into each contractor's commercial record — is the
+            Contractors section; restating it here made Overview a second,
+            drifting copy of it. */}
         <Card id="contractors-card" className="scroll-mt-20">
           <CardHeader className="flex-row items-center justify-between">
             <CardTitle>Contractors</CardTitle>
-            {canEdit && (
-              <SectionEditButton label="Edit contractors" onClick={() => setEditing("contractors")} />
-            )}
+            <Button variant="ghost" size="sm" onClick={() => onOpenSection("contractors")}>
+              View
+              <ArrowRight />
+            </Button>
           </CardHeader>
-          <CardContent className="py-0">
+          <CardContent>
             {project.contractors.length === 0 ? (
-              <p className="py-4 text-sm text-foreground-subtle">
-                No contractors on this project yet.
+              <p className="text-sm text-foreground-muted">
+                None assigned yet — attendance needs at least one.
               </p>
             ) : (
-              <div className="divide-y divide-border">
-                {project.contractors.map((pc) => (
-                  <div key={pc.id} className="space-y-1.5 py-2.5">
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="flex min-w-0 items-center gap-2 text-sm font-medium">
-                        <HardHat className="size-4 shrink-0 text-foreground-subtle" />
-                        <span className="truncate">{pc.contractorName}</span>
-                      </span>
-                      {pc.contractRatePaise != null && (
-                        <span className="shrink-0 text-xs text-foreground-muted">
-                          {formatPaiseSmart(pc.contractRatePaise)}
-                          {pc.contractRateUnit === "sqft" ? " / sq.ft" : ""}
-                        </span>
-                      )}
-                    </div>
-                    {pc.labourRates.length === 0 ? (
-                      <p className="pl-6 text-xs text-foreground-subtle">No labour types configured.</p>
-                    ) : (
-                      <div className="flex flex-wrap gap-1.5 pl-6">
-                        {pc.labourRates.map((r) => (
-                          <span
-                            key={r.id}
-                            className="inline-flex items-center gap-1 rounded-md bg-surface-muted px-1.5 py-0.5 text-[11px] text-foreground-muted"
-                          >
-                            {r.subcategoryName}
-                            <span className="font-medium text-foreground">
-                              {formatPaiseSmart(r.ratePaise)}/day
-                            </span>
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
+              <>
+                <p className="text-sm text-foreground-muted">
+                  {project.contractors.length}{" "}
+                  {project.contractors.length === 1 ? "contractor" : "contractors"} engaged
+                  {unconfiguredCount > 0
+                    ? `, ${unconfiguredCount} without labour types`
+                    : ""}
+                  .
+                </p>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {project.contractors.slice(0, 6).map((pc) => (
+                    <span
+                      key={pc.id}
+                      className="inline-flex items-center gap-1.5 rounded-md bg-surface-muted px-2 py-1 text-xs text-foreground-muted"
+                    >
+                      <HardHat className="size-3.5 shrink-0" />
+                      {pc.contractorName}
+                    </span>
+                  ))}
+                  {project.contractors.length > 6 && (
+                    <span className="inline-flex items-center rounded-md px-2 py-1 text-xs text-foreground-subtle">
+                      +{project.contractors.length - 6} more
+                    </span>
+                  )}
+                </div>
+              </>
             )}
           </CardContent>
         </Card>

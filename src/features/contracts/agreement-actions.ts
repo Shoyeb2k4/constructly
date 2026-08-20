@@ -97,6 +97,33 @@ export function availableStatusActions(contract: Contract): AgreementStatusActio
 }
 
 /** Cancelling preserves everything; it is refused only when already cancelled. */
+/**
+ * Whether an agreement may still receive NEW money earmarked for it — today,
+ * an agreement-scoped labour advance.
+ *
+ * CANCELLED and SETTLED are refused, and the reason is specifically about money
+ * getting STRANDED rather than about tidiness. An agreement-scoped advance is
+ * only ever consumed by a settlement whose composition contains that agreement
+ * (see allocateAdvanceDrawdown, pass A), and neither status can take further
+ * attendance — `eligibleAgreements` excludes both. So money scoped to one would
+ * be unusable from the moment it is recorded, and there is no re-scope or
+ * transfer workflow to rescue it. Refusing at the door is the only point at
+ * which this is still cheap to fix.
+ *
+ * NOT_STARTED, IN_PROGRESS, ON_HOLD and COMPLETED all stay open: each can still
+ * take attendance, so each can still spend the money. Pre-funding an agreement
+ * before work starts is ordinary, and a hold is temporary by definition.
+ *
+ * The same line `rateRevisionBlockedReason` draws for rates, for the same
+ * underlying reason — an agreement that can take no labour can use neither a
+ * rate nor an earmarked rupee.
+ */
+export function scopedAdvanceBlockedReason(agreementStatus: string): string | null {
+  if (agreementStatus === "CANCELLED") return "AGREEMENT_CANCELLED";
+  if (agreementStatus === "SETTLED") return "AGREEMENT_SETTLED";
+  return null;
+}
+
 export function canCancelAgreement(contract: Contract): boolean {
   return contract.status !== "CANCELLED";
 }

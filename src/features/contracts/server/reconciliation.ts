@@ -11,9 +11,15 @@
 
 import { prisma } from "@/lib/db/prisma";
 import { requirePermission } from "@/lib/auth/permissions";
+import type { SessionUser } from "@/lib/auth/types";
 import { reconcileAgreement, rollUpReconciliations } from "../reconcile";
 import { advanceBalancePaise } from "@/features/contractors/calc";
 import { paiseFromBigInt } from "@/lib/money";
+import {
+  bucketAttendance,
+  sumPositions,
+  type AttendancePosition,
+} from "../attendance-position";
 import type {
   AgreementReconciliation,
   Contract,
@@ -23,6 +29,7 @@ import type {
   PortfolioReconciliation,
   ProjectAgreementsGroup,
   ProjectContractorSummaryRow,
+  ContractorProjectAttendance,
 } from "../types";
 import {
   agreementInclude,
@@ -103,6 +110,8 @@ export async function getContractorProfile(
     }),
   );
 
+  const attendance = await contractorAttendanceByProject(user, contractorId);
+
   const payments: ContractPaymentHistoryRow[] = rows
     .flatMap((row) =>
       toPayments(row).map((p) => ({
@@ -119,7 +128,62 @@ export async function getContractorProfile(
     // Lifetime sums each agreement's due and ahead — never nets them.
     lifetime: rollUpReconciliations(contracts.map((c) => c.reconciliation)),
     payments,
+    attendance,
+    attendanceTotals: sumPositions(attendance),
   };
+}
+
+/**
+ * Where this contractor's labour sits, per project, for every project they have
+ * attendance on that the caller may see.
+ *
+ * Deliberately NOT derived from `profile.projects`, which is built from
+ * agreements: a contractor can have attendance on a project they hold no
+ * agreement on at all, and that project's settled labour is unattributed by
+ * definition. Keying off agreements would hide exactly the case this exists to
+ * surface.
+ *
+ * ONE query, grouped in memory — not one round trip per project.
+ *
+ * RBAC: `projectScope(user)` is the same filter `getContractorProfile` applies
+ * to agreements, so a project-scoped caller never receives another project's
+ * figure, and the total they see is a total of what they may see. Nothing is
+ * fetched and then hidden in the UI.
+ */
+async function contractorAttendanceByProject(
+  user: SessionUser,
+  contractorId: string,
+): Promise<ContractorProjectAttendance[]> {
+  const rows = await prisma.labourAttendance.findMany({
+    where: {
+      companyId: user.company.id,
+      contractorId,
+      // Literally the same filter the agreement query uses.
+      ...projectScope(user),
+    },
+    select: {
+      estimatedCostPaise: true,
+      settlementId: true,
+      contractId: true,
+      projectId: true,
+      project: { select: { name: true } },
+    },
+  });
+
+  const byProject = new Map<string, { name: string; rows: typeof rows }>();
+  for (const r of rows) {
+    const g = byProject.get(r.projectId) ?? { name: r.project.name, rows: [] };
+    g.rows.push(r);
+    byProject.set(r.projectId, g);
+  }
+
+  return [...byProject.entries()]
+    .map(([projectId, g]) => ({
+      projectId,
+      projectName: g.name,
+      ...bucketAttendance(g.rows),
+    }))
+    .sort((a, b) => a.projectName.localeCompare(b.projectName));
 }
 
 /** One row per contractor with agreements on this project. */
@@ -205,11 +269,7 @@ export async function getAgreementAdvancePosition(
 export async function getContractorProjectAttendancePosition(
   contractorId: string,
   projectId: string,
-): Promise<{
-  settledAttributedPaise: number;
-  settledUnattributedPaise: number;
-  unsettledPaise: number;
-}> {
+): Promise<AttendancePosition> {
   const user = await requirePermission("contracts.view");
   await assertProjectAccess(user, projectId);
 
@@ -218,16 +278,8 @@ export async function getContractorProjectAttendancePosition(
     select: { estimatedCostPaise: true, settlementId: true, contractId: true },
   });
 
-  let settledAttributedPaise = 0;
-  let settledUnattributedPaise = 0;
-  let unsettledPaise = 0;
-  for (const r of rows) {
-    if (r.settlementId == null) unsettledPaise += r.estimatedCostPaise;
-    else if (r.contractId) settledAttributedPaise += r.estimatedCostPaise;
-    else settledUnattributedPaise += r.estimatedCostPaise;
-  }
-
-  return { settledAttributedPaise, settledUnattributedPaise, unsettledPaise };
+  // The SAME bucketing the profile uses — one rule, not two that can drift.
+  return bucketAttendance(rows);
 }
 
 /**
@@ -268,11 +320,27 @@ export async function listHistory(contractorId: string): Promise<HistoryEvent[]>
     include: { actor: { select: { fullName: true } } },
   });
 
+  // Which attribution corrections have already been undone. Read once so
+  // History can offer the reversal action only where it would actually work.
+  const reversedCorrections = new Map<string, string>();
+  for (const r of rows) {
+    if (r.action !== "contractor.attendance_attribution_reversed") continue;
+    const id = (r.meta as Record<string, unknown> | null)?.correctionId;
+    if (typeof id === "string") reversedCorrections.set(id, r.createdAt.toISOString());
+  }
+
   return rows.map((r) => {
+    const meta0 = (r.meta ?? {}) as Record<string, unknown>;
+    // An attribution correction is logged against the CONTRACTOR (attendance
+    // spans settlements), so its agreement has to come from the entry's own meta.
     const contractId =
       r.entityType === "contractor_contract"
         ? r.entityId
-        : (paymentToContract.get(r.entityId) ?? null);
+        : typeof meta0.toContractId === "string"
+          ? meta0.toContractId
+          : typeof meta0.fromContractId === "string"
+            ? meta0.fromContractId
+            : (paymentToContract.get(r.entityId) ?? null);
     const agreement = contractId ? byId.get(contractId) : undefined;
     const meta = (r.meta ?? {}) as Record<string, unknown>;
     const amount = [
@@ -291,8 +359,11 @@ export async function listHistory(contractorId: string): Promise<HistoryEvent[]>
       actorName: r.actor?.fullName ?? null,
       amountPaise: typeof amount === "number" ? amount : null,
       contractId: contractId ?? null,
-      contractTitle: agreement?.title ?? null,
-      projectName: agreement?.project.name ?? null,
+      contractTitle: agreement?.title ?? (typeof meta.toContractTitle === "string" ? meta.toContractTitle : null),
+      projectName: agreement?.project.name ?? (typeof meta.projectName === "string" ? meta.projectName : null),
+      ...(r.action === "contractor.attendance_attributed"
+        ? { attributionReversedAt: reversedCorrections.get(r.id) ?? null }
+        : {}),
     };
   });
 }

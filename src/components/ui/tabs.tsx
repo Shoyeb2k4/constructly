@@ -8,12 +8,20 @@ export const Tabs = TabsPrimitive.Root;
 
 export function TabsList({
   className,
+  vertical,
   ...props
-}: React.ComponentProps<typeof TabsPrimitive.List>) {
+}: React.ComponentProps<typeof TabsPrimitive.List> & {
+  /** Styling only — Radix takes the real `orientation` on the Tabs root. */
+  vertical?: boolean;
+}) {
   return (
     <TabsPrimitive.List
       className={cn(
-        "inline-flex h-9 items-center gap-1 rounded-lg bg-surface-muted p-1 text-foreground-muted",
+        "gap-1 rounded-lg bg-surface-muted p-1 text-foreground-muted",
+        // A vertical list is a RAIL: it grows with its items instead of being
+        // pinned to one row height, which is what forced ten tabs into a
+        // horizontally scrolling strip where the last three were unreachable.
+        vertical ? "flex flex-col items-stretch" : "inline-flex h-9 items-center",
         className,
       )}
       {...props}

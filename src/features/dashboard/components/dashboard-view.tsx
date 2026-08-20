@@ -1,22 +1,14 @@
 "use client";
 
-import {
-  FolderKanban,
-  CalendarClock,
-  AlertTriangle,
-  HardHat,
-  Wallet,
-  Inbox,
-} from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatGridSkeleton } from "@/components/patterns/loading-state";
 import { ErrorState } from "@/components/patterns/error-state";
 import { MoneyText } from "@/components/patterns/money-text";
-import { formatPaiseSmart } from "@/lib/money";
 import { useDashboard } from "../hooks";
 import type { DashboardSnapshot } from "../types";
-import { KpiCard } from "./kpi-card";
+import Link from "next/link";
+import { StatCard } from "@/components/patterns/stat-card";
 import { SpendTrendChart } from "./charts/spend-trend-chart";
 import { CostSplitDonut } from "./charts/cost-split-donut";
 import { BudgetHealthCard } from "./budget-health-card";
@@ -78,7 +70,6 @@ export function DashboardView({
   if (data.isEmpty) return <OnboardingDashboard firstName={firstName} />;
 
   const k = data.kpis;
-  const budgetPct = k.budgetTotalPaise > 0 ? Math.round((k.budgetUsedPaise / k.budgetTotalPaise) * 100) : 0;
 
   return (
     <div className="space-y-8">
@@ -106,52 +97,112 @@ export function DashboardView({
         <QuickActions />
       </div>
 
-      {/* KPI row — every card drills down */}
-      {/* KPI cards stay ≥248px wide at every breakpoint inside the max-w-[1200px]
-          shell, so the full ₹ value never wraps or clips: 1-up on phones, 2-up on
-          small screens, 3-up (2 rows) on desktop. A denser 6-up or 2-up-mobile row
-          forces ~124–136px cards where large amounts overflow. */}
+      {/* LEVEL 1 — ATTENTION, first and full width. It was previously the
+          bottom-left card of the last row: the one section that answers "what
+          needs me now" sat below three charts. */}
+      <AttentionCenter attention={data.attention} isOwner={isOwner} />
+
+      {/* LEVEL 2 — OPERATIONAL PULSE. Three primary cards, not six equal ones.
+          Every figure states its PERIOD, because a lifetime total and a today
+          total in the same row is how ₹ figures get misread. */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <KpiCard label="Active projects" value={k.activeProjects} icon={FolderKanban} href="/projects" />
-        <KpiCard label="Upcoming deadlines" value={k.upcomingDeadlines} icon={CalendarClock} href="/projects" tone={k.upcomingDeadlines > 0 ? "warning" : "default"} />
-        <KpiCard label="Overdue" value={k.overdue} icon={AlertTriangle} href="/projects" tone={k.overdue > 0 ? "danger" : "default"} />
-        <KpiCard label="Today's labor" value={k.todaysLaborCount} hint={k.todaysWagesPaise > 0 ? `${formatPaiseSmart(k.todaysWagesPaise)} wages` : "Not recorded yet"} icon={HardHat} href="/labor" />
-        <KpiCard label="Budget used" value={<MoneyText paise={k.budgetUsedPaise} />} sub={`${budgetPct}% of budget`} hint={<>of <MoneyText paise={k.budgetTotalPaise} className="text-foreground-subtle" /></>} icon={Wallet} href="/projects" />
-        <KpiCard label="Pending approvals" value={k.pendingApprovals} icon={Inbox} href="/procurement" tone={k.pendingApprovals > 0 ? "warning" : "default"} />
+        {/* Each headline still drills into its source module — that affordance
+            was the one good thing about the old six-card row. */}
+        <Link href="/projects" className="rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+        <StatCard
+          label="Active projects"
+          value={k.activeProjects}
+          hint={
+            k.overdue > 0
+              ? `${k.overdue} overdue · ${k.upcomingDeadlines} deadline${k.upcomingDeadlines === 1 ? "" : "s"} soon`
+              : `${k.upcomingDeadlines} deadline${k.upcomingDeadlines === 1 ? "" : "s"} coming up`
+          }
+          tone={k.overdue > 0 ? "attention" : "default"}
+        />
+        </Link>
+        <Link href="/labor" className="rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+        <StatCard
+          label="Attendance value — today"
+          value={<MoneyText paise={k.todaysWagesPaise} />}
+          // The caveat belongs to the LABEL, not to the presence of data: the
+          // figure means the same thing at zero, and a reader meeting it for
+          // the first time on an empty day still needs to know it is not a
+          // payable.
+          hint={
+            <>
+              {k.todaysLaborCount > 0
+                ? `${k.todaysLaborCount} present today. `
+                : "No attendance recorded today yet. "}
+              Unsettled until a settlement runs.
+            </>
+          }
+        />
+        </Link>
+        <Link href="/procurement" className="rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+        <StatCard
+          label="Awaiting approval"
+          value={k.pendingApprovals}
+          hint="Purchase orders. Not counted toward budget until approved."
+          tone={k.pendingApprovals > 0 ? "attention" : "default"}
+        />
+        </Link>
       </div>
 
-      {/* Charts + budget health */}
+      {/* Where to go next. Plain links, not six more bordered boxes. */}
+      <nav aria-label="Jump to a module" className="flex flex-wrap gap-2">
+        {[
+          { href: "/projects", label: "All projects" },
+          { href: "/labor", label: "Record attendance" },
+          { href: "/labor/summary", label: "Labour summary" },
+          { href: "/labor/contractors", label: "Contractors" },
+          { href: "/procurement", label: "Purchase orders" },
+          // Routing only. The dashboard gains no payments AGGREGATE: it has no
+          // canonical cross-instrument cash figure, and inventing one here
+          // would be the very total the Payments Centre refuses to compute.
+          { href: "/payments", label: "Payments" },
+        ].map((l) => (
+          <Link
+            key={l.href}
+            href={l.href}
+            className="rounded-lg border border-border bg-surface px-3 py-1.5 text-sm text-foreground-muted transition-colors hover:border-border-strong hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            {l.label}
+          </Link>
+        ))}
+      </nav>
+
+      {/* LEVEL 3 — COMMERCIAL CONTEXT. Budget is a PROJECT concept and is
+          labelled as one; it is deliberately not netted against procurement or
+          contractor figures, which are different instruments. */}
       <div className="grid gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-1">
           <CardHeader className="flex-row items-baseline justify-between">
             <CardTitle>Spend trend</CardTitle>
-            <div className="flex items-center gap-3 text-[11px] text-foreground-subtle">
+            <div className="flex items-center gap-3 text-[11px] text-foreground-muted">
               <span className="flex items-center gap-1"><span className="size-2 rounded-full bg-primary" />Procurement</span>
-              <span className="flex items-center gap-1"><span className="size-2 rounded-full bg-warning" />Labor</span>
+              <span className="flex items-center gap-1"><span className="size-2 rounded-full bg-warning" />Labour</span>
             </div>
           </CardHeader>
           <CardContent>
             <SpendTrendChart data={data.spendTrend} />
-            <p className="mt-3 text-xs text-foreground-subtle">Weekly, last 8 weeks</p>
+            <p className="mt-3 text-xs text-foreground-muted">Weekly, last 8 weeks</p>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader><CardTitle>Cost split</CardTitle></CardHeader>
-          <CardContent className="flex items-center justify-center py-2">
+          <CardContent className="flex flex-col items-center justify-center py-2">
             <CostSplitDonut laborPaise={data.costSplit.laborPaise} procurementPaise={data.costSplit.procurementPaise} />
+            <p className="mt-3 text-xs text-foreground-muted">Attendance value vs ordered value, lifetime</p>
           </CardContent>
         </Card>
 
         <BudgetHealthCard items={data.budgetHealth} budgetUsedPaise={k.budgetUsedPaise} budgetTotalPaise={k.budgetTotalPaise} />
       </div>
 
-      {/* Procurement command center (full width) */}
       <ProcurementCard procurement={data.procurement} />
 
-      {/* Attention + labour + activity */}
-      <div className="grid gap-6 lg:grid-cols-3">
-        <AttentionCenter attention={data.attention} isOwner={isOwner} />
+      <div className="grid gap-6 lg:grid-cols-2">
         <LabourCard labour={data.labour} />
         <ActivityFeed items={data.recentActivity} />
       </div>

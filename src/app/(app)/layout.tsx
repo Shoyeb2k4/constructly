@@ -5,6 +5,7 @@ import { isDemoMode } from "@/lib/env";
 import { AppShell } from "@/components/shell/app-shell";
 import { getLayoutBranding } from "@/features/branding/server/layout-branding";
 import { PermissionProvider } from "@/features/rbac/permission-context";
+import { DemoHealthSignal } from "@/components/dev/demo-health-signal";
 
 /** Company-aware title + favicon after login (Constructly before). */
 export async function generateMetadata(): Promise<Metadata> {
@@ -54,6 +55,12 @@ export default async function AppLayout({
       )}
       {/* Provider wraps the whole shell so the sidebar (permission-aware nav)
           and the page content both read the session's permissions. */}
+      {isDemoMode && (
+        <DemoHealthSignal
+          companyName={user.company.name}
+          permissionCount={user.permissions?.length ?? 0}
+        />
+      )}
       <PermissionProvider permissions={user.permissions ?? []} isOwner={user.isOwner}>
         <AppShell user={user} branding={{ name: branding.name, logoUrl: branding.logoUrl }}>
           {children}

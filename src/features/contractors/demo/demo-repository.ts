@@ -9,6 +9,12 @@ import {
   type BillComposition,
 } from "../calc";
 import { findDuplicates, newBusinessBlockedReason } from "../lifecycle";
+import {
+  buildRescopePreview,
+  isTransferSource,
+  type AdvanceScope,
+} from "../advance-rescope";
+import { scopedAdvanceBlockedReason } from "@/features/contracts/agreement-actions";
 import type {
   ContractorsRepository,
   SettlementFilters,
@@ -274,17 +280,226 @@ function demoComposition(
 }
 
 /** Agreement id → title, so an unusable advance can name its scope. */
+/**
+ * Append-only demo audit events — the same narrow store Pass 9B introduced for
+ * attribution corrections, reused here. A re-scope leaves ledger rows behind, so
+ * it IS reconstructible, but History reads one feed and this keeps both
+ * corrections in it without rebuilding demo History.
+ */
+const DEMO_EVENTS = "constructly.demo.activityLog.v1";
+
+function appendDemoEvent(e: {
+  id: string;
+  action: string;
+  contractorId: string;
+  summary: string;
+  at: string;
+  amountPaise: number | null;
+  meta: Record<string, unknown>;
+}): void {
+  if (typeof window === "undefined") return;
+  try {
+    const rows = JSON.parse(window.localStorage.getItem(DEMO_EVENTS) ?? "[]");
+    rows.push({
+      ...e,
+      actorName: "Aarav Mehta",
+      contractId: null,
+      contractTitle: null,
+      projectName: null,
+    });
+    window.localStorage.setItem(DEMO_EVENTS, JSON.stringify(rows));
+  } catch {
+    /* quota */
+  }
+}
+
+/** A ledger record in the shape the pure engine expects. */
+function toScopedDemo(e: LedgerRec) {
+  return {
+    id: e.id,
+    type: e.type,
+    amountPaise: e.amountPaise,
+    projectId: e.projectId ?? null,
+    contractId: e.contractId ?? null,
+    drawsFromEntryId: e.drawsFromEntryId ?? null,
+    reversesEntryId: e.reversesEntryId ?? null,
+    date: e.date,
+  };
+}
+
+/**
+ * Everything the preview and the write both need, validated once — so the demo
+ * can never be more permissive than the server.
+ */
+function buildRescopeInputsDemo(input: {
+  contractorId: string;
+  advanceId: string;
+  target: AdvanceScope;
+  transferPaise: number;
+}):
+  | Parameters<typeof buildRescopePreview>[0]
+  | { blockers: string[] } {
+  const ledger = loadLedger().filter((e) => e.contractorId === input.contractorId);
+  const source = ledger.find((e) => e.id === input.advanceId);
+  if (!source) return { blockers: ["SOURCE_NOT_FOUND"] };
+  if (!isTransferSource(source.type, source.reversesEntryId ?? null)) {
+    return { blockers: ["SOURCE_NOT_TRANSFERABLE"] };
+  }
+
+  const scoped = ledger.map(toScopedDemo);
+  const remaining =
+    outstandingPerAdvance(scoped).find((a) => a.entryId === input.advanceId)?.remainingPaise ?? 0;
+
+  let consumedPaise = 0;
+  let transferredOutPaise = 0;
+  const byId = new Map(scoped.map((e) => [e.id, e]));
+  for (const e of scoped) {
+    if (e.type === "ADJUSTMENT" && e.drawsFromEntryId === input.advanceId) consumedPaise += e.amountPaise;
+    if (e.type === "SETTLEMENT_REVERSAL" && e.reversesEntryId) {
+      if (byId.get(e.reversesEntryId)?.drawsFromEntryId === input.advanceId) consumedPaise -= e.amountPaise;
+    }
+    if (e.type === "SCOPE_TRANSFER_OUT" && e.drawsFromEntryId === input.advanceId) {
+      transferredOutPaise += e.amountPaise;
+    }
+  }
+
+  const label = (sc: AdvanceScope) =>
+    sc.contractId
+      ? `${projectNames().get(sc.projectId ?? "") ?? "Project"} · ${contractTitles().get(sc.contractId) ?? "Agreement"}`
+      : sc.projectId
+        ? (projectNames().get(sc.projectId) ?? "Project")
+        : "General contractor";
+
+  const scope: AdvanceScope = {
+    projectId: source.projectId ?? null,
+    contractId: source.contractId ?? null,
+  };
+
+  // Target lifecycle — the SAME rule the server applies (Pass 8's shared fn).
+  const extraBlockers: string[] = [];
+  if (input.target.contractId) {
+    const rec = liveAgreementsDemo().find((c) => c.id === input.target.contractId);
+    if (
+      !rec ||
+      rec.contractorId !== input.contractorId ||
+      rec.projectId !== input.target.projectId
+    ) {
+      extraBlockers.push("TARGET_AGREEMENT_INVALID");
+    } else {
+      const blocked = scopedAdvanceBlockedReason(rec.status ?? "IN_PROGRESS");
+      if (blocked) {
+        extraBlockers.push(
+          blocked === "AGREEMENT_CANCELLED"
+            ? "TARGET_AGREEMENT_CANCELLED"
+            : "TARGET_AGREEMENT_SETTLED",
+        );
+      }
+    }
+  }
+
+  const targetAvailableBeforePaise = outstandingPerAdvance(scoped)
+    .filter(
+      (a) =>
+        (a.projectId ?? null) === (input.target.projectId ?? null) &&
+        (a.contractId ?? null) === (input.target.contractId ?? null),
+    )
+    .reduce((t, a) => t + a.remainingPaise, 0);
+
+  return {
+    source: {
+      advanceId: source.id,
+      type: source.type,
+      date: source.date,
+      scope,
+      scopeLabel: label(scope),
+      originalPaise: source.amountPaise,
+      consumedPaise,
+      transferredOutPaise,
+      remainingPaise: remaining,
+    },
+    target: { scope: input.target, label: label(input.target) },
+    transferPaise: input.transferPaise,
+    targetAvailableBeforePaise,
+    contractorBalancePaise: advanceBalancePaise(ledger),
+    extraBlockers,
+  };
+}
+
+/** Agreements, read from the contracts module's store. */
+function liveAgreementsDemo(): {
+  id: string;
+  contractorId?: string;
+  projectId?: string;
+  status?: string;
+  deletedAt?: string | null;
+}[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const rows = JSON.parse(
+      window.localStorage.getItem("constructly.demo.contractorContracts.v2") ?? "[]",
+    );
+    return rows.filter((c: { deletedAt?: string | null }) => !c.deletedAt);
+  } catch {
+    return [];
+  }
+}
+
 function contractTitles(): Map<string, string> {
+  return new Map(liveContractRows().map((c) => [c.id, c.title]));
+}
+
+/** The demo agreement store, with the fields advance scoping needs. */
+function liveContractRows(): {
+  id: string;
+  title: string;
+  contractorId?: string;
+  projectId?: string;
+  status?: string;
+  deletedAt?: string | null;
+}[] {
+  if (typeof window === "undefined") return [];
+  try {
+    return JSON.parse(window.localStorage.getItem(CONTRACTS) ?? "[]");
+  } catch {
+    return [];
+  }
+}
+
+/** Project id → name, for labelling a scoped advance in the ledger. */
+function projectNames(): Map<string, string> {
   if (typeof window === "undefined") return new Map();
   try {
-    const rows = JSON.parse(window.localStorage.getItem(CONTRACTS) ?? "[]") as {
-      id: string;
-      title: string;
-    }[];
-    return new Map(rows.map((c) => [c.id, c.title]));
+    const rows = JSON.parse(
+      window.localStorage.getItem("constructly.demo.projects.v1") ?? "[]",
+    ) as { id: string; name: string }[];
+    return new Map(rows.map((p) => [p.id, p.name]));
   } catch {
     return new Map();
   }
+}
+
+/**
+ * Demo parity for the server's `assertAgreementScope`: an agreement-scoped
+ * advance must name an agreement belonging to THIS contractor on THIS project,
+ * and that agreement must still be able to spend the money.
+ */
+function assertAdvanceScopeDemo(input: {
+  contractorId: string;
+  projectId?: string | null;
+  contractId?: string | null;
+}): void {
+  if (!input.contractId) return;
+  if (!input.projectId) throw new Error("INVALID_AGREEMENT_SCOPE");
+  const c = liveContractRows().find((x) => x.id === input.contractId && !x.deletedAt);
+  if (
+    !c ||
+    (c.contractorId && c.contractorId !== input.contractorId) ||
+    (c.projectId && c.projectId !== input.projectId)
+  ) {
+    throw new Error("INVALID_AGREEMENT_SCOPE");
+  }
+  const blocked = scopedAdvanceBlockedReason(c.status ?? "IN_PROGRESS");
+  if (blocked) throw new Error(blocked);
 }
 
 /**
@@ -342,6 +557,27 @@ function demoProjectName(id: string): string {
   } catch {
     return "Project";
   }
+}
+
+/**
+ * The contractor rows the global Payments Centre reads.
+ *
+ * It goes through THIS repository's own loaders rather than reaching into
+ * localStorage keys, for the reason the dashboard gatherer learned the hard
+ * way: those loaders seed on first read, so a raw key read returns nothing at
+ * all until the contractor module has been visited, and the global view then
+ * silently under-reports. Sharing the loader means the two can never disagree.
+ */
+export function demoContractorCashSources(): {
+  contractors: { id: string; name: string }[];
+  ledger: ContractorLedgerEntry[];
+  settlements: ContractorSettlement[];
+} {
+  return {
+    contractors: loadContractors().map((c) => ({ id: c.id, name: c.name })),
+    ledger: loadLedger(),
+    settlements: loadSettlements(),
+  };
 }
 
 export const demoContractorsRepository: ContractorsRepository = {
@@ -448,6 +684,7 @@ export const demoContractorsRepository: ContractorsRepository = {
     const contractor = loadContractors().find((x) => x.id === input.contractorId);
     if (!contractor) throw new Error("NOT_FOUND");
     assertAcceptsNewBusiness(contractor, "RECORD_ADVANCE");
+    assertAdvanceScopeDemo(input);
     const ledger = loadLedger();
     const balance = balanceFor(input.contractorId) + input.amountPaise;
     const entry: LedgerRec = {
@@ -464,11 +701,13 @@ export const demoContractorsRepository: ContractorsRepository = {
       // composition contains that agreement.
       projectId: input.projectId ?? null,
       contractId: input.contractId ?? null,
-      contractTitle: null,
+      // Labels are stored on the row so the ledger can SHOW the scope rather
+      // than leaving the user to infer it from later settlement behaviour.
+      contractTitle: input.contractId ? (contractTitles().get(input.contractId) ?? null) : null,
       drawsFromEntryId: null,
       reversesEntryId: null,
       fundsContractId: null,
-      projectName: null,
+      projectName: input.projectId ? (projectNames().get(input.projectId) ?? null) : null,
       createdAt: new Date().toISOString(),
     };
     write(K.ledger, [...ledger, entry]);
@@ -553,6 +792,164 @@ export const demoContractorsRepository: ContractorsRepository = {
     settlement.reversalReason = trimmed;
     write(K.settlements, settlements);
     return settlement;
+  },
+
+  /* ── Advance re-scope ─────────────────────────────────────────────────── */
+
+  async previewAdvanceRescope(input) {
+    const built = buildRescopeInputsDemo(input);
+    if ("blockers" in built) return built;
+    return buildRescopePreview(built);
+  },
+
+  async rescopeAdvance(input) {
+    if (!input.reason.trim()) return { blockers: ["REASON_REQUIRED"] };
+    const built = buildRescopeInputsDemo(input);
+    if ("blockers" in built) return built;
+    const preview = buildRescopePreview(built);
+    if (preview.blockers.length > 0) return { blockers: preview.blockers };
+
+    const ledger = loadLedger();
+    const balanceBefore = advanceBalancePaise(ledger.filter((e) => e.contractorId === input.contractorId));
+    const outId = uid();
+    const inId = uid();
+    const now = new Date().toISOString();
+    const base = {
+      contractorId: input.contractorId,
+      date: now.slice(0, 10),
+      notes: null as string | null,
+      settlementId: null,
+      reversesEntryId: null,
+      fundsContractId: null,
+      createdAt: now,
+    };
+    ledger.push({
+      ...base,
+      id: outId,
+      type: "SCOPE_TRANSFER_OUT",
+      amountPaise: input.transferPaise,
+      advanceBalanceAfterPaise: balanceBefore - input.transferPaise,
+      projectId: built.source.scope.projectId,
+      contractId: built.source.scope.contractId,
+      // The SOURCE scope's names, not nulls. The server derives these by joining
+      // project/contract on every ledger row, so leaving them null here made the
+      // demo ledger render the row it moved FROM as "General contractor advance"
+      // — the precise opposite of what a re-scope of agreement money did.
+      contractTitle: built.source.scope.contractId
+        ? (contractTitles().get(built.source.scope.contractId) ?? null)
+        : null,
+      projectName: built.source.scope.projectId
+        ? (projectNames().get(built.source.scope.projectId) ?? null)
+        : null,
+      drawsFromEntryId: input.advanceId,
+      notes: `Re-scoped to ${built.target.label}`,
+    } as LedgerRec);
+    ledger.push({
+      ...base,
+      id: inId,
+      type: "SCOPE_TRANSFER_IN",
+      amountPaise: input.transferPaise,
+      // Equal and opposite — the balance ends exactly where it started.
+      advanceBalanceAfterPaise: balanceBefore,
+      projectId: input.target.projectId,
+      contractId: input.target.contractId,
+      contractTitle: input.target.contractId ? (contractTitles().get(input.target.contractId) ?? null) : null,
+      projectName: input.target.projectId ? (projectNames().get(input.target.projectId) ?? null) : null,
+      drawsFromEntryId: outId,
+      notes: `Re-scoped from ${built.source.scopeLabel}`,
+    } as LedgerRec);
+    write(K.ledger, ledger);
+
+    appendDemoEvent({
+      id: uid(),
+      action: "contractor.advance_rescoped",
+      contractorId: input.contractorId,
+      summary: `Re-scoped advance funds from ${built.source.scopeLabel} to ${built.target.label}`,
+      at: now,
+      amountPaise: input.transferPaise,
+      meta: {
+        sourceAdvanceId: input.advanceId,
+        transferOutEntryId: outId,
+        transferInEntryId: inId,
+        reason: input.reason.trim(),
+      },
+    });
+
+    return {
+      transferId: outId,
+      amountPaise: input.transferPaise,
+      fromLabel: built.source.scopeLabel,
+      toLabel: built.target.label,
+    };
+  },
+
+  async reverseAdvanceRescope(input) {
+    if (!input.reason.trim()) return { blockers: ["REASON_REQUIRED"] };
+    const ledger = loadLedger();
+    const out = ledger.find((e) => e.id === input.transferId && e.type === "SCOPE_TRANSFER_OUT");
+    if (!out) return { blockers: ["TRANSFER_NOT_FOUND"] };
+    const inRow = ledger.find(
+      (e) => e.type === "SCOPE_TRANSFER_IN" && e.drawsFromEntryId === out.id,
+    );
+    if (!inRow) return { blockers: ["TRANSFER_NOT_FOUND"] };
+    if (ledger.some((e) => e.type === "SCOPE_TRANSFER_OUT" && e.drawsFromEntryId === inRow.id)) {
+      return { blockers: ["TRANSFER_ALREADY_REVERSED"] };
+    }
+
+    const scoped = ledger.filter((e) => e.contractorId === out.contractorId).map(toScopedDemo);
+    const remainingIn =
+      outstandingPerAdvance(scoped).find((a) => a.entryId === inRow.id)?.remainingPaise ?? 0;
+    // v1 refuses a partial unwind — see the server for why.
+    if (remainingIn !== inRow.amountPaise) return { blockers: ["TRANSFER_ALREADY_CONSUMED"] };
+
+    const balanceBefore = advanceBalancePaise(ledger.filter((e) => e.contractorId === out.contractorId));
+    const backId = uid();
+    const now = new Date().toISOString();
+    const base = {
+      contractorId: out.contractorId,
+      date: now.slice(0, 10),
+      settlementId: null,
+      reversesEntryId: null,
+      fundsContractId: null,
+      createdAt: now,
+      contractTitle: null,
+      projectName: null,
+    };
+    ledger.push({
+      ...base,
+      id: backId,
+      type: "SCOPE_TRANSFER_OUT",
+      amountPaise: inRow.amountPaise,
+      advanceBalanceAfterPaise: balanceBefore - inRow.amountPaise,
+      projectId: inRow.projectId,
+      contractId: inRow.contractId,
+      drawsFromEntryId: inRow.id,
+      notes: "Re-scope reversed",
+    } as LedgerRec);
+    ledger.push({
+      ...base,
+      id: uid(),
+      type: "SCOPE_TRANSFER_IN",
+      amountPaise: inRow.amountPaise,
+      advanceBalanceAfterPaise: balanceBefore,
+      projectId: out.projectId,
+      contractId: out.contractId,
+      drawsFromEntryId: backId,
+      notes: "Re-scope reversed",
+    } as LedgerRec);
+    write(K.ledger, ledger);
+
+    appendDemoEvent({
+      id: uid(),
+      action: "contractor.advance_rescope_reversed",
+      contractorId: out.contractorId,
+      summary: "Reversed an advance re-scope",
+      at: now,
+      amountPaise: inRow.amountPaise,
+      meta: { originalTransferId: out.id, reason: input.reason.trim() },
+    });
+
+    return { transferId: backId, amountPaise: inRow.amountPaise, fromLabel: "", toLabel: "" };
   },
 
   async getLedger(contractorId) {

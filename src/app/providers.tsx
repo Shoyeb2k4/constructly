@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
 import { ErrorReporter } from "@/components/error-reporter";
+import { isDemoMode } from "@/lib/env";
 
 export function Providers({ children }: { children: React.ReactNode }) {
   const [queryClient] = React.useState(
@@ -29,6 +30,30 @@ export function Providers({ children }: { children: React.ReactNode }) {
         },
       }),
   );
+
+  // DEV/DEMO DIAGNOSTIC. Three implementation passes were lost to the same
+  // ambiguous symptom: a page showing a skeleton, with no way to tell whether
+  // React had hydrated, whether the demo repository was in use, or whether a
+  // route segment had simply never mounted. This stamps the answer onto the
+  // document so the next person can read it in one line instead of bisecting.
+  //
+  // Read `document.documentElement.dataset` and the stuck layer names itself:
+  //   no `constructlyHydrated`  → React never hydrated (bundle/boot problem)
+  //   no `constructlyDemo`      → NEXT_PUBLIC_CONSTRUCTLY_DEMO missing from the
+  //                               CLIENT bundle; the browser is calling real
+  //                               server actions (see scripts/demo-env.mjs)
+  //   no `constructlyQuery`     → QueryClientProvider never mounted
+  //   no `constructlyRafShim`   → the head script did not run; a stuck route
+  //                               skeleton may be the hidden-tab reveal bug
+  //   no `constructlyAuth`      → session/company never resolved ((app) layout)
+  // Never set in a real production build — `isDemoMode` is false there.
+  React.useEffect(() => {
+    if (!isDemoMode) return;
+    const flags = document.documentElement.dataset;
+    flags.constructlyHydrated = "1";
+    flags.constructlyDemo = "1";
+    flags.constructlyQuery = queryClient ? "1" : "0";
+  }, [queryClient]);
 
   return (
     <ThemeProvider

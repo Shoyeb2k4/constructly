@@ -488,6 +488,14 @@ enum ContractorLedgerType {
   /// the advance it came from, and turning already-paid net cash back into an
   /// unapplied advance. Both INCREASE the balance.
   SETTLEMENT_REVERSAL
+  /// A governed RE-SCOPE moves UNUSED advance money between scopes. Always
+  /// written as a pair in one transaction, so the contractor's total advance
+  /// balance is unchanged and NO cash moves: OUT decreases, IN increases.
+  /// OUT.drawsFromEntryId = the advance being drained; IN.drawsFromEntryId =
+  /// the OUT, which is the whole lineage. Never carries a settlementId — a
+  /// transfer pays no labour.
+  SCOPE_TRANSFER_OUT
+  SCOPE_TRANSFER_IN
 }
 
 /// Append-only, immutable contractor ledger.
@@ -523,7 +531,8 @@ model ContractorLedgerEntry {
   projectId                String?              @map("project_id") @db.Uuid
   contractId               String?              @map("contract_id") @db.Uuid
   /// EXPLICIT provenance — one meaning per field, never polymorphic.
-  /// ADJUSTMENT → the advance entry it consumes.
+  /// ADJUSTMENT → the advance entry it consumes. SCOPE_TRANSFER_OUT → the
+  /// advance it drains; SCOPE_TRANSFER_IN → the OUT that created it.
   drawsFromEntryId         String?              @map("draws_from_entry_id") @db.Uuid
   /// SETTLEMENT_REVERSAL → the ADJUSTMENT it restores. NULL on the
   /// unapplied-cash entry, which is traced through settlementId instead.

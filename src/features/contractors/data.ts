@@ -2,6 +2,7 @@ import { isDemoMode } from "@/lib/env";
 import type { ContractorsRepository } from "./repository";
 import { demoContractorsRepository } from "./demo/demo-repository";
 import * as server from "./server/actions";
+import * as rescope from "./server/advance-rescope";
 import type { ContractorFilters } from "./types";
 import type { SettlementFilters } from "./repository";
 
@@ -14,6 +15,10 @@ const serverRepository: ContractorsRepository = {
   restoreContractor: server.restoreContractor,
   updateContractor: server.updateContractor,
   recordAdvance: server.recordAdvance,
+  previewAdvanceRescope: rescope.previewAdvanceRescope,
+  rescopeAdvance: rescope.rescopeAdvance,
+  reverseAdvanceRescope: rescope.reverseAdvanceRescope,
+
   getLedger: server.getLedger,
   previewSettlement: server.previewSettlement,
   createSettlement: server.createSettlement,

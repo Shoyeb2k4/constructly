@@ -56,8 +56,13 @@ export function AttentionCenter({
 
   return (
     <Card>
-      <CardHeader>
+      <CardHeader className="flex-row items-baseline justify-between">
         <CardTitle>Needs attention</CardTitle>
+        {rows.length > 0 && (
+          <span className="text-xs text-foreground-muted">
+            {rows.length} item{rows.length === 1 ? "" : "s"}
+          </span>
+        )}
       </CardHeader>
       <CardContent className="p-0">
         {rows.length === 0 ? (
@@ -67,7 +72,10 @@ export function AttentionCenter({
             <p className="text-xs text-foreground-subtle">Nothing needs your attention right now.</p>
           </div>
         ) : (
-          rows.slice(0, 7).map((r) => {
+          // Wide screens show these two-up: this is the lead section now, and a
+          // single narrow column of seven rows wastes the width it was given.
+          <div className="sm:grid sm:grid-cols-2">
+          {rows.slice(0, 8).map((r) => {
             const Icon = r.icon;
             return (
               <Link key={r.key} href={r.href} className="flex items-center gap-3 border-b border-border px-5 py-3 transition-colors last:border-0 hover:bg-surface-muted/40">
@@ -84,7 +92,8 @@ export function AttentionCenter({
                 <ChevronRight className="size-4 shrink-0 text-foreground-subtle" />
               </Link>
             );
-          })
+          })}
+          </div>
         )}
       </CardContent>
     </Card>

@@ -1,25 +1,35 @@
 /**
- * Serve the PRODUCTION build in DEMO mode.
+ * Serve the DEMO build — production-style preview, step 2 of 2.
  *
- * Both flags matter. `CONSTRUCTLY_DEMO` is server-only — Next never inlines an
- * unprefixed variable into the client bundle — so with it alone the server
- * renders the demo company while the browser still calls real server actions.
- * `NEXT_PUBLIC_CONSTRUCTLY_DEMO` is what makes the client agree, which is why
- * demo mode previously appeared to work and then hung on real data.
+ *   npm run build:demo && npm run start:demo   → http://localhost:3100
  *
- * Production mode is the reliable surface for a visual review: no HMR socket,
- * no Fast Refresh, so a stalled dev-server websocket cannot leave a client
- * subtree unhydrated. Run `npm run build` first. Never set these in production.
+ * Production mode is the more trustworthy surface for a visual review: no HMR
+ * socket and no Fast Refresh, so a stalled dev websocket cannot leave a subtree
+ * unhydrated. Reads `.next-demo`, so it serves the demo build and never the
+ * deployable one — and fails loudly rather than silently serving a stale or
+ * non-demo bundle if that build is missing.
  */
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { demoEnv, nextBin, DEMO_DIST_DIR, DEMO_PORT } from "./demo-env.mjs";
 
-const child = spawn(
-  process.execPath,
-  [new URL("../node_modules/next/dist/bin/next", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"), "start"],
-  {
-    stdio: "inherit",
-    env: { ...process.env, CONSTRUCTLY_DEMO: "1", NEXT_PUBLIC_CONSTRUCTLY_DEMO: "1" },
-  },
+const env = demoEnv();
+const distDir = env.NEXT_DIST_DIR ?? DEMO_DIST_DIR;
+
+if (!existsSync(new URL(`../${distDir}/BUILD_ID`, import.meta.url))) {
+  console.error(
+    `\n  No demo build in ${distDir}/.\n  Run:  npm run build:demo\n`,
+  );
+  process.exit(1);
+}
+
+console.log(
+  `\n  Constructly DEMO (production) → http://localhost:${env.PORT ?? DEMO_PORT}  [distDir ${distDir}]\n`,
 );
+
+const child = spawn(process.execPath, [nextBin(import.meta.url), "start"], {
+  stdio: "inherit",
+  env,
+});
 
 child.on("exit", (code) => process.exit(code ?? 0));

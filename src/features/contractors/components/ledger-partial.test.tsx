@@ -22,6 +22,10 @@ vi.mock("../hooks", () => ({
   useContractorLedger: () => ({ data: h.ledger, isLoading: false }),
   useSettlements: () => ({ data: [] }),
   useReverseSettlement: () => ({ mutate: vi.fn(), isPending: false }),
+  // The ledger now offers an undo on a re-scope row; the detail view mounts its
+  // dialog unconditionally, so the hook has to exist even when no transfer is
+  // selected.
+  useReverseAdvanceRescope: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 vi.mock("@/features/contracts/hooks", () => ({
   useContractorProfile: () => ({ data: null }),
@@ -94,7 +98,9 @@ describe("a scoped user with a partial ledger", () => {
       contractor: { ...ledger().contractor, advanceBalancePaise: L(2) },
     });
     render1();
-    expect(screen.getByText("₹2,00,000")).toBeTruthy();
+    // The ledger renders a table AND a stacked card list, one hidden by CSS at
+    // a time; jsdom applies no CSS, so both are in the tree here.
+    expect(screen.getAllByText("₹2,00,000").length).toBeGreaterThan(0);
   });
 
   it("labels the figure as project-scoped, never as THE advance balance", () => {

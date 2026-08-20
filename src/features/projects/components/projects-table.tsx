@@ -1,15 +1,27 @@
 "use client";
 
-import * as React from "react";
-import { useRouter } from "next/navigation";
-import { useVirtualizer } from "@tanstack/react-virtual";
+/**
+ * The project list.
+ *
+ * This was a hand-built virtualised grid whose rows carried `role="row"` inside
+ * a parent with no table role — ten axe violations, and worse for a screen
+ * reader than plain markup. Phase 1 stripped the fake ARIA; this completes the
+ * job by moving onto the shared `DataTable`, which now windows rows WITHOUT
+ * giving up `<table>` semantics (spacer rows + `aria-rowcount`/`aria-rowindex`).
+ *
+ * Virtualisation was kept on evidence, not habit: `list()` is unbounded — there
+ * is no server pagination — and at 501 projects the window rendered 18 rows and
+ * 831 DOM nodes. Keeping it now costs nothing semantically, so it is worth
+ * covering the tail; below 40 rows it is skipped, because an extra scroll
+ * viewport for a short list is pure cost.
+ */
+
 import { Star } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Badge } from "@/components/ui/badge";
 import { MoneyText } from "@/components/patterns/money-text";
-import {
-  StatusBadge,
-  PROJECT_STAGE_META,
-} from "@/components/patterns/status-badge";
+import { DataTable } from "@/components/patterns/data-table";
+import { StatusBadge, PROJECT_STAGE_META } from "@/components/patterns/status-badge";
 import { cn } from "@/lib/utils";
 import type { ProjectListItem } from "../types";
 import { deadlineCountdown, formatDate } from "../format";
@@ -18,175 +30,193 @@ import { BudgetMeter } from "./budget-meter";
 import { TagChip } from "./tag-chip";
 import { ProjectActionsMenu } from "./project-actions-menu";
 
-const GRID =
-  "grid grid-cols-[1.8fr_130px_44px] md:grid-cols-[1.8fr_150px_1.2fr_110px_44px_40px] items-center gap-3 px-4";
-
 function initials(name: string) {
   return name.split(" ").map((w) => w[0]).slice(0, 2).join("").toUpperCase();
 }
 
-function Row({
-  project,
-  onOpen,
-}: {
-  project: ProjectListItem;
-  onOpen: (id: string) => void;
-}) {
+/** Pin/unpin. Sits outside the row link so it never navigates. */
+function FavoriteButton({ project }: { project: ProjectListItem }) {
   const favorite = useToggleFavorite();
-  const cd = deadlineCountdown(project.expectedCompletionDate);
-
   return (
-    <div
-      role="row"
-      tabIndex={0}
-      onClick={() => onOpen(project.id)}
-      onKeyDown={(e) => e.key === "Enter" && onOpen(project.id)}
+    <button
+      onClick={(e) => {
+        e.stopPropagation();
+        favorite.mutate(project.id);
+      }}
+      aria-label={project.isFavorite ? `Unpin ${project.name}` : `Pin ${project.name}`}
+      aria-pressed={project.isFavorite}
+      className="shrink-0 rounded-sm text-foreground-subtle transition-colors hover:text-warning focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      <Star className={cn("size-4", project.isFavorite && "fill-warning text-warning")} />
+    </button>
+  );
+}
+
+/** Name, code and lifecycle marker — the identity of the record. */
+function ProjectIdentity({ project }: { project: ProjectListItem }) {
+  return (
+    <span className="block min-w-0">
+      <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        {/* Never truncated to a stub: at 375px every name in this list clipped
+            to 86px against a 106-177px need, so the list could not be scanned
+            at all. It wraps instead. */}
+        <span className="font-medium">{project.name}</span>
+        {project.deletedAt && (
+          <Badge variant="danger" className="shrink-0">
+            Deleted
+          </Badge>
+        )}
+        {project.archivedAt && !project.deletedAt && (
+          <Badge variant="neutral" className="shrink-0">
+            Archived
+          </Badge>
+        )}
+      </span>
+      <span className="font-mono text-xs text-foreground-subtle">{project.code}</span>
+    </span>
+  );
+}
+
+function DeadlineCell({ project }: { project: ProjectListItem }) {
+  const cd = deadlineCountdown(project.expectedCompletionDate);
+  return (
+    <span
       className={cn(
-        GRID,
-        "h-14 cursor-pointer border-b border-border outline-none transition-colors last:border-0 hover:bg-surface-muted/50 focus-visible:bg-surface-muted/50",
+        "whitespace-nowrap text-xs",
+        cd.tone === "danger"
+          ? "text-danger-foreground"
+          : cd.tone === "warning"
+            ? "text-warning-foreground"
+            : "text-foreground-muted",
       )}
     >
-      <div className="flex min-w-0 items-center gap-2.5">
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            favorite.mutate(project.id);
-          }}
-          aria-label={project.isFavorite ? "Unpin" : "Pin"}
-          className="shrink-0 text-foreground-subtle transition-colors hover:text-warning"
-        >
-          <Star
-            className={cn(
-              "size-4",
-              project.isFavorite && "fill-warning text-warning",
-            )}
-          />
-        </button>
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="truncate text-sm font-medium">{project.name}</span>
-            {project.deletedAt && (
-              <span
-                title={
-                  project.purgeEligibleAt
-                    ? `Eligible for admin cleanup on ${formatDate(project.purgeEligibleAt)}`
-                    : "Recoverable indefinitely"
-                }
-                className="shrink-0 rounded-full bg-danger-subtle px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-danger-foreground"
-              >
-                Deleted
-              </span>
-            )}
-            {project.tags.slice(0, 1).map((t) => (
-              <TagChip key={t} label={t} className="hidden lg:inline-flex" />
-            ))}
-          </div>
-          <span className="font-mono text-xs text-foreground-subtle">
-            {project.code}
-          </span>
-        </div>
-      </div>
+      {cd.label}
+    </span>
+  );
+}
 
-      <div>
-        <StatusBadge meta={PROJECT_STAGE_META} value={project.stage} />
-      </div>
-
-      <div className="hidden md:block">
-        <BudgetMeter usedPaise={project.usedPaise} budgetPaise={project.budgetPaise} />
-        <div className="mt-1.5 font-mono text-xs text-foreground-muted">
-          <MoneyText paise={project.usedPaise} compact /> /{" "}
-          <MoneyText paise={project.budgetPaise} compact />
-        </div>
-      </div>
-
-      <div className="hidden md:block">
-        <span
-          className={cn(
-            "text-xs",
-            cd.tone === "danger"
-              ? "text-danger-foreground"
-              : cd.tone === "warning"
-                ? "text-warning-foreground"
-                : "text-foreground-muted",
-          )}
-        >
-          {cd.label}
-        </span>
-      </div>
-
-      <div className="hidden md:flex md:justify-center">
-        {project.pm ? (
-          <Avatar className="size-7" title={project.pm.fullName}>
-            <AvatarFallback className="text-[10px]">
-              {initials(project.pm.fullName)}
-            </AvatarFallback>
-          </Avatar>
-        ) : (
-          <span className="text-xs text-foreground-subtle">—</span>
-        )}
-      </div>
-
-      <div className="flex justify-end">
-        <ProjectActionsMenu project={project} />
-      </div>
-    </div>
+function ManagerCell({ project }: { project: ProjectListItem }) {
+  if (!project.pm) return <span className="text-xs text-foreground-subtle">Unassigned</span>;
+  return (
+    <span className="flex items-center gap-2">
+      <Avatar className="size-6 shrink-0">
+        <AvatarFallback className="text-[10px]">{initials(project.pm.fullName)}</AvatarFallback>
+      </Avatar>
+      <span className="truncate text-xs text-foreground-muted">{project.pm.fullName}</span>
+    </span>
   );
 }
 
 export function ProjectsTable({ projects }: { projects: ProjectListItem[] }) {
-  const router = useRouter();
-  const parentRef = React.useRef<HTMLDivElement>(null);
-  const onOpen = (id: string) => router.push(`/projects/${id}`);
-
-  // TanStack Virtual returns non-memoizable functions; React Compiler skips it
-  // safely here (the virtualizer manages its own state).
-  // eslint-disable-next-line react-hooks/incompatible-library
-  const virtualizer = useVirtualizer({
-    count: projects.length,
-    getScrollElement: () => parentRef.current,
-    estimateSize: () => 56,
-    overscan: 8,
-  });
-
   return (
-    <div className="overflow-hidden rounded-xl border border-border bg-surface">
-      <div
-        className={cn(
-          GRID,
-          "h-10 border-b border-border bg-surface-muted/40 text-xs font-medium text-foreground-subtle",
-        )}
-      >
-        <span>Project</span>
-        <span>Stage</span>
-        <span className="hidden md:block">Budget used</span>
-        <span className="hidden md:block">Deadline</span>
-        <span className="hidden md:block text-center">PM</span>
-        <span className="hidden md:block" />
-      </div>
-
-      <div
-        ref={parentRef}
-        className="max-h-[calc(100vh-320px)] min-h-0 overflow-y-auto"
-      >
-        <div
-          style={{ height: virtualizer.getTotalSize(), position: "relative" }}
-        >
-          {virtualizer.getVirtualItems().map((v) => (
-            <div
-              key={projects[v.index].id}
-              style={{
-                position: "absolute",
-                top: 0,
-                left: 0,
-                width: "100%",
-                transform: `translateY(${v.start}px)`,
-              }}
+    <DataTable
+      caption="Projects"
+      rows={projects}
+      getRowKey={(p) => p.id}
+      rowHref={(p) => `/projects/${p.id}`}
+      virtualize={
+        projects.length > 40
+          ? { estimateRowHeight: 60, maxHeight: "calc(100vh - 22rem)" }
+          : undefined
+      }
+      columns={[
+        {
+          key: "project",
+          header: "Project",
+          cell: (p) => <ProjectIdentity project={p} />,
+        },
+        {
+          key: "pin",
+          header: "Pin",
+          headerHidden: true,
+          cell: (p) => <FavoriteButton project={p} />,
+        },
+        {
+          key: "stage",
+          header: "Stage",
+          cell: (p) => <StatusBadge meta={PROJECT_STAGE_META} value={p.stage} />,
+        },
+        {
+          key: "tags",
+          header: "Tags",
+          hideBelow: "xl",
+          cell: (p) =>
+            p.tags.length > 0 ? (
+              <span className="flex flex-wrap gap-1">
+                {p.tags.slice(0, 2).map((t) => (
+                  <TagChip key={t} label={t} />
+                ))}
+              </span>
+            ) : (
+              <span className="text-xs text-foreground-subtle">—</span>
+            ),
+        },
+        {
+          key: "budget",
+          header: "Budget used",
+          hideBelow: "lg",
+          cell: (p) => (
+            <span className="block w-36">
+              <BudgetMeter usedPaise={p.usedPaise} budgetPaise={p.budgetPaise} />
+              <span className="mt-1.5 block whitespace-nowrap font-mono text-xs text-foreground-muted">
+                <MoneyText paise={p.usedPaise} compact /> /{" "}
+                <MoneyText paise={p.budgetPaise} compact />
+              </span>
+            </span>
+          ),
+        },
+        {
+          key: "deadline",
+          header: "Deadline",
+          hideBelow: "md",
+          cell: (p) => <DeadlineCell project={p} />,
+        },
+        {
+          key: "pm",
+          header: "Manager",
+          hideBelow: "lg",
+          cell: (p) => <ManagerCell project={p} />,
+        },
+        {
+          key: "actions",
+          header: "Actions",
+          headerHidden: true,
+          numeric: true,
+          cell: (p) => <ProjectActionsMenu project={p} />,
+        },
+      ]}
+      // A phone gets a purpose-built row, not the desktop grid with four columns
+      // hidden: name and status first, then the signals that drive action.
+      renderCard={(p) => (
+        <div className="rounded-xl border border-border bg-surface p-3">
+          <div className="flex items-start justify-between gap-2">
+            <a
+              href={`/projects/${p.id}`}
+              className="min-w-0 rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
-              <Row project={projects[v.index]} onOpen={onOpen} />
-            </div>
-          ))}
+              <ProjectIdentity project={p} />
+            </a>
+            <span className="flex shrink-0 items-center gap-1">
+              <FavoriteButton project={p} />
+              <ProjectActionsMenu project={p} />
+            </span>
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+            <StatusBadge meta={PROJECT_STAGE_META} value={p.stage} />
+            <DeadlineCell project={p} />
+            {p.pm && (
+              <span className="truncate text-xs text-foreground-muted">{p.pm.fullName}</span>
+            )}
+          </div>
+          <div className="mt-2 whitespace-nowrap font-mono text-xs text-foreground-muted">
+            <MoneyText paise={p.usedPaise} compact /> / <MoneyText paise={p.budgetPaise} compact />{" "}
+            <span className="font-sans">used</span>
+          </div>
+          {p.startDate && (
+            <p className="mt-1 text-xs text-foreground-subtle">Started {formatDate(p.startDate)}</p>
+          )}
         </div>
-      </div>
-    </div>
+      )}
+    />
   );
 }
