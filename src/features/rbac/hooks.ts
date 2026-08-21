@@ -2,16 +2,10 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import {
-  listRoles,
-  listAssignableRoles,
-  createRole,
-  updateRole,
-  duplicateRole,
-  deleteRole,
-  assignUserRole,
-  type RoleDTO,
-} from "./server/roles-actions";
+// Through the repository, never the server actions directly: in demo mode
+// those hit Prisma and Roles renders as an empty screen.
+import { rolesApi } from "./data";
+import type { RoleDTO } from "./server/roles-actions";
 
 export const rbacKeys = {
   roles: ["rbac", "roles"] as const,
@@ -29,11 +23,11 @@ function errMsg(e: unknown): string {
 }
 
 export function useRoles() {
-  return useQuery({ queryKey: rbacKeys.roles, queryFn: () => listRoles() });
+  return useQuery({ queryKey: rbacKeys.roles, queryFn: () => rolesApi.listRoles() });
 }
 
 export function useAssignableRoles(enabled = true) {
-  return useQuery({ queryKey: rbacKeys.assignableRoles, queryFn: () => listAssignableRoles(), enabled });
+  return useQuery({ queryKey: rbacKeys.assignableRoles, queryFn: () => rolesApi.listAssignableRoles(), enabled });
 }
 
 function useRoleInvalidate() {
@@ -49,7 +43,7 @@ export function useCreateRole() {
   const invalidate = useRoleInvalidate();
   return useMutation({
     mutationFn: (input: { name: string; description?: string | null; permissions: string[] }) =>
-      createRole(input),
+      rolesApi.createRole(input),
     onSuccess: (r: RoleDTO) => {
       invalidate();
       toast.success("Role created", { description: r.name });
@@ -62,7 +56,7 @@ export function useUpdateRole() {
   const invalidate = useRoleInvalidate();
   return useMutation({
     mutationFn: (v: { id: string; patch: { name?: string; description?: string | null; permissions?: string[] } }) =>
-      updateRole(v.id, v.patch),
+      rolesApi.updateRole(v.id, v.patch),
     onSuccess: () => {
       invalidate();
       toast.success("Role saved");
@@ -74,7 +68,7 @@ export function useUpdateRole() {
 export function useDuplicateRole() {
   const invalidate = useRoleInvalidate();
   return useMutation({
-    mutationFn: (id: string) => duplicateRole(id),
+    mutationFn: (id: string) => rolesApi.duplicateRole(id),
     onSuccess: (r) => {
       invalidate();
       toast.success("Role duplicated", { description: r.name });
@@ -86,7 +80,7 @@ export function useDuplicateRole() {
 export function useDeleteRole() {
   const invalidate = useRoleInvalidate();
   return useMutation({
-    mutationFn: (id: string) => deleteRole(id),
+    mutationFn: (id: string) => rolesApi.deleteRole(id),
     onSuccess: () => {
       invalidate();
       toast.success("Role deleted");
@@ -98,7 +92,7 @@ export function useDeleteRole() {
 export function useAssignUserRole() {
   const invalidate = useRoleInvalidate();
   return useMutation({
-    mutationFn: (v: { userId: string; roleId: string }) => assignUserRole(v.userId, v.roleId),
+    mutationFn: (v: { userId: string; roleId: string }) => rolesApi.assignUserRole(v.userId, v.roleId),
     onSuccess: () => {
       invalidate();
       toast.success("Role updated");

@@ -1,7 +1,7 @@
 "use client";
 
 import type { jsPDF } from "jspdf";
-import { getPdfBrandingData } from "./server/actions";
+import { brandingApi } from "./data";
 import { CONSTRUCTLY_NAME } from "./constants";
 import type { PdfCompany } from "./types";
 
@@ -77,7 +77,7 @@ async function rasterize(url: string | null): Promise<PdfImage | null> {
 async function loadPdfBranding(): Promise<PdfBranding> {
   let data = null;
   try {
-    data = await getPdfBrandingData();
+    data = await brandingApi.getPdfBrandingData();
   } catch {
     /* fall back to Constructly */
   }

@@ -39,6 +39,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { RowsSkeleton } from "@/components/patterns/loading-state";
+import { Callout } from "@/components/patterns/callout";
 import { cn } from "@/lib/utils";
 import { useCan } from "../permission-context";
 import {
@@ -48,6 +49,7 @@ import {
   type PermissionModule,
 } from "../permissions";
 import { useRoles, useCreateRole, useUpdateRole, useDuplicateRole, useDeleteRole } from "../hooks";
+import { permissionMeta, reportsUnlockedBy, SCOPE_LABEL } from "../permission-meta";
 import type { RoleDTO } from "../server/roles-actions";
 
 /** Local editable copy of a role's grants while the admin is toggling. */
@@ -282,13 +284,12 @@ export function RolesManager() {
                   {selected.isOwner ? (
                     <>
                       <Badge variant="primary">Owner</Badge>
-                      <Badge variant="outline" title="Cannot be deleted or have mandatory permissions removed">Protected</Badge>
+                      <Badge variant="outline">Full access</Badge>
                     </>
                   ) : selected.isSystem ? (
                     <>
-                      <Badge variant="neutral" title="A built-in default template">System</Badge>
-                      <Badge variant="success">Editable</Badge>
-                      <Badge variant="outline" title="Built-in template — can be customised but not removed">Non-deletable</Badge>
+                      <Badge variant="neutral">Built-in</Badge>
+                      <Badge variant="warning">Reset by updates</Badge>
                     </>
                   ) : (
                     <Badge variant="outline">Custom</Badge>
@@ -328,7 +329,9 @@ export function RolesManager() {
                 />
               </div>
               <span className="text-xs text-foreground-subtle">
-                <span className="font-semibold text-foreground">{effectiveCount}</span> of {ALL_PERMISSIONS.length} permissions
+                <span className="font-semibold text-foreground">{effectiveCount}</span> of{" "}
+                {ALL_PERMISSIONS.length} permissions
+                {isOwnerRole && " — implicit, not a stored list"}
               </span>
             </div>
 
@@ -399,9 +402,31 @@ export function RolesManager() {
             {/* Sections */}
             <div className="min-w-0 space-y-8">
               {isOwnerRole && (
-                <p className="rounded-lg border border-info-subtle bg-info-subtle/50 px-3.5 py-2.5 text-xs text-info-foreground">
-                  The Owner role always holds every permission and can’t be edited. Duplicate it to build a custom role.
-                </p>
+                <Callout tone="info" title="Owner has full company access">
+                  <p>
+                    Owner access is implicit, not a stored list of permissions — the role
+                    holds every permission there is, including any added by a future
+                    Constructly update, and it cannot be edited or deleted.
+                  </p>
+                  <p className="mt-1">
+                    To build a role that is nearly-Owner but not quite, duplicate this one
+                    and remove what it should not have.
+                  </p>
+                </Callout>
+              )}
+
+              {isSystemRole && (
+                <Callout tone="attention" title="This is a built-in role, managed by Constructly">
+                  <p>
+                    You can tailor it, and your changes take effect immediately. But a
+                    Constructly update that revises the built-in roles will reset this one
+                    back to its template — including anything you changed here.
+                  </p>
+                  <p className="mt-1">
+                    For changes you need to keep, <strong>Duplicate</strong> this role and
+                    edit the copy. Custom roles are never touched by an update.
+                  </p>
+                </Callout>
               )}
 
               {PERMISSION_CATALOG.map((mod) => {
@@ -439,7 +464,9 @@ export function RolesManager() {
                         const on = selected.isOwner || currentPerms.has(a.key);
                         const ungrantable = !grantable.has(a.key);
                         const locked = !editable || ungrantable;
-                        const danger = "danger" in a && a.danger;
+                        const meta = permissionMeta(a.key);
+                        const high = meta.impact === "HIGH";
+                        const unlocks = reportsUnlockedBy(a.key);
                         return (
                           <button
                             key={a.key}
@@ -448,34 +475,73 @@ export function RolesManager() {
                             aria-checked={on}
                             disabled={locked}
                             onClick={() => togglePerm(a.key)}
-                            title={ungrantable && !on ? "You can't grant a permission you don't hold" : undefined}
                             className={cn(
-                              "group flex items-center gap-2.5 rounded-lg border px-3 py-2.5 text-left text-sm transition-all",
+                              "group flex flex-col items-start gap-1.5 rounded-lg border px-3 py-2.5 text-left text-sm transition-all",
                               on
                                 ? "border-primary/40 bg-primary/5"
                                 : "border-border bg-surface hover:border-border-strong hover:bg-surface-muted/40",
-                              locked && "cursor-not-allowed opacity-55 hover:border-border hover:bg-surface",
+                              locked && "cursor-not-allowed opacity-70 hover:border-border hover:bg-surface",
                             )}
                           >
-                            <span
-                              className={cn(
-                                "flex size-4 shrink-0 items-center justify-center rounded-[5px] border transition-colors",
-                                on ? "border-primary bg-primary text-white" : "border-border-strong bg-surface",
-                              )}
-                            >
-                              {on && <Check className="size-3" strokeWidth={3} />}
-                            </span>
-                            <span className={cn("min-w-0 flex-1 truncate", on ? "font-medium text-foreground" : "text-foreground-muted")}>
-                              {a.label}
-                            </span>
-                            {danger && (
+                            <span className="flex w-full min-w-0 items-center gap-2.5">
                               <span
-                                className={cn("size-1.5 shrink-0 rounded-full", on ? "bg-danger" : "bg-border-strong")}
-                                title="Sensitive permission"
-                                aria-hidden
-                              />
+                                className={cn(
+                                  "flex size-4 shrink-0 items-center justify-center rounded-[5px] border transition-colors",
+                                  on ? "border-primary bg-primary text-white" : "border-border-strong bg-surface",
+                                )}
+                              >
+                                {on && <Check className="size-3" strokeWidth={3} />}
+                              </span>
+                              <span className={cn("min-w-0 flex-1", on ? "font-medium text-foreground" : "text-foreground")}>
+                                {a.label}
+                              </span>
+                              {/* Impact is stated in WORDS. It used to be a 6px
+                                  dot carrying a title and aria-hidden: colour and
+                                  shape alone, invisible to a screen reader and
+                                  very nearly invisible to everyone else. */}
+                              {high && (
+                                <span className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-danger-foreground ring-1 ring-inset ring-danger/40">
+                                  High impact
+                                </span>
+                              )}
+                            </span>
+
+                            <span className="pl-[26px] text-xs leading-relaxed text-foreground-muted">
+                              {meta.description}
+                            </span>
+
+                            <span className="flex flex-wrap items-center gap-1.5 pl-[26px]">
+                              {/* The distinction most likely to be granted by
+                                  accident: one project, or all of them. */}
+                              <span
+                                className={cn(
+                                  "rounded px-1.5 py-0.5 text-[10px] font-medium",
+                                  meta.scope === "COMPANY"
+                                    ? "bg-warning-subtle text-warning-foreground"
+                                    : "bg-surface-muted text-foreground-subtle",
+                                )}
+                              >
+                                {SCOPE_LABEL[meta.scope]}
+                              </span>
+                              {ungrantable && !on && (
+                                <span className="flex items-center gap-1 text-[10px] text-foreground-subtle">
+                                  <Lock className="size-3" aria-hidden />
+                                  You do not hold this yourself
+                                </span>
+                              )}
+                            </span>
+
+                            {unlocks.length > 0 && (
+                              <span className="pl-[26px] text-[11px] leading-relaxed text-foreground-subtle">
+                                Unlocks: {unlocks.join(", ")}
+                              </span>
                             )}
-                            {ungrantable && !on && <Lock className="size-3 shrink-0 text-foreground-subtle" aria-hidden />}
+
+                            {high && meta.warning && (
+                              <span className="pl-[26px] text-[11px] leading-relaxed text-warning-foreground">
+                                {meta.warning}
+                              </span>
+                            )}
                           </button>
                         );
                       })}

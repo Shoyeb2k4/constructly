@@ -3,6 +3,10 @@ import type { BrandAssetKind, BrandColors } from "./types";
 /** Product default when a company has no branding of its own. */
 export const CONSTRUCTLY_NAME = "Constructly";
 
+/** Shown wherever demo mode cannot do the real thing, instead of failing opaquely. */
+export const DEMO_UPLOAD_MESSAGE =
+  "File uploads need cloud storage, which the demo doesn't have. Everything else on this page saves and persists.";
+
 /** Constructly default palette (mirrors globals.css light theme). */
 export const CONSTRUCTLY_BRAND_COLORS: Required<BrandColors> = {
   primary: "#2e5bff",

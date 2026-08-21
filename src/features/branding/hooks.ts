@@ -2,16 +2,9 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import {
-  getCompanyBranding,
-  updateCompanyProfile,
-  updateBrandColors,
-  getProfile,
-  updateProfile,
-  getBrandingAssetUrls,
-  getProfileAssetUrls,
-  removeBrandingAsset,
-} from "./server/actions";
+// Through the repository, never the server actions directly: in demo mode
+// those hit Prisma for a company id that exists in no database.
+import { brandingApi } from "./data";
 import { uploadBrandingAsset } from "./upload";
 import type { BrandAssetKind, BrandColors, CompanyProfileInput, ProfileInput } from "./types";
 
@@ -23,22 +16,22 @@ export const brandingKeys = {
 };
 
 export function useCompanyBranding() {
-  return useQuery({ queryKey: brandingKeys.company, queryFn: () => getCompanyBranding() });
+  return useQuery({ queryKey: brandingKeys.company, queryFn: () => brandingApi.getCompanyBranding() });
 }
 export function useBrandingAssetUrls() {
   return useQuery({
     queryKey: brandingKeys.assets,
-    queryFn: () => getBrandingAssetUrls(),
+    queryFn: () => brandingApi.getBrandingAssetUrls(),
     staleTime: 50 * 60_000, // under the 1h signed-URL TTL
   });
 }
 export function useProfile() {
-  return useQuery({ queryKey: brandingKeys.profile, queryFn: () => getProfile() });
+  return useQuery({ queryKey: brandingKeys.profile, queryFn: () => brandingApi.getProfile() });
 }
 export function useProfileAssetUrls() {
   return useQuery({
     queryKey: brandingKeys.profileAssets,
-    queryFn: () => getProfileAssetUrls(),
+    queryFn: () => brandingApi.getProfileAssetUrls(),
     staleTime: 50 * 60_000,
   });
 }
@@ -46,7 +39,7 @@ export function useProfileAssetUrls() {
 export function useUpdateCompanyProfile() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (input: CompanyProfileInput) => updateCompanyProfile(input),
+    mutationFn: (input: CompanyProfileInput) => brandingApi.updateCompanyProfile(input),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: brandingKeys.company });
       toast.success("Company details saved");
@@ -58,7 +51,7 @@ export function useUpdateCompanyProfile() {
 export function useUpdateBrandColors() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (colors: BrandColors) => updateBrandColors(colors),
+    mutationFn: (colors: BrandColors) => brandingApi.updateBrandColors(colors),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: brandingKeys.company });
       toast.success("Brand colors saved");
@@ -70,7 +63,7 @@ export function useUpdateBrandColors() {
 export function useUpdateProfile() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (input: ProfileInput) => updateProfile(input),
+    mutationFn: (input: ProfileInput) => brandingApi.updateProfile(input),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: brandingKeys.profile });
       toast.success("Profile saved");
@@ -98,7 +91,7 @@ export function useUploadAsset() {
 export function useRemoveAsset() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (kind: BrandAssetKind) => removeBrandingAsset(kind),
+    mutationFn: (kind: BrandAssetKind) => brandingApi.removeBrandingAsset(kind),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: brandingKeys.assets });
       qc.invalidateQueries({ queryKey: brandingKeys.profileAssets });

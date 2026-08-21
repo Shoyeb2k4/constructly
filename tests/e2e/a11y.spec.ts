@@ -53,7 +53,11 @@ const PAGES: { name: string; path: string; ready: RegExp }[] = [
     ready: /Agreement lifetime/,
   },
   { name: "report-labour", path: "/reports/labour-cost", ready: /Attendance value/ },
-  { name: "settings", path: "/settings", ready: /settings/i },
+  { name: "settings", path: "/settings", ready: /Legal and tax identity/ },
+  // The admin surfaces: dense forms, a permission editor with 97 checkboxes,
+  // and the member list.
+  { name: "settings-users", path: "/settings?section=users", ready: /Who can sign in/ },
+  { name: "settings-roles", path: "/settings?section=roles", ready: /What each role may do/ },
 ];
 
 async function scan(page: Page, path: string, ready: RegExp) {
@@ -141,6 +145,21 @@ for (const theme of ["light", "dark"] as const) {
       await page.setViewportSize({ width: 375, height: 812 });
       const violations = await scan(page, "/projects", /Every site, from estimation to handover/);
       report("projects@375", theme, violations);
+      expect(violations).toEqual([]);
+    });
+
+    test(`a11y: roles editor at 375px has no serious/critical violations`, async ({ page }) => {
+      await page.setViewportSize({ width: 375, height: 812 });
+      // The section hints are `lg:block`, so a phone needs a different signal.
+      const violations = await scan(page, "/settings?section=roles", /Roles & permissions/);
+      report("settings-roles@375", theme, violations);
+      expect(violations).toEqual([]);
+    });
+
+    test(`a11y: users at 375px has no serious/critical violations`, async ({ page }) => {
+      await page.setViewportSize({ width: 375, height: 812 });
+      const violations = await scan(page, "/settings?section=users", /Invite a member/);
+      report("settings-users@375", theme, violations);
       expect(violations).toEqual([]);
     });
 
