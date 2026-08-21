@@ -47,7 +47,18 @@ export interface ReportRow {
  */
 export interface ReportKpi {
   label: string;
+  /** Display text for non-money figures (counts, percentages). */
   value: string;
+  /**
+   * Integer paise when the figure is MONEY.
+   *
+   * Carried instead of a pre-formatted string so the shell can render it with
+   * `MoneyText`, which shows the full Indian amount and never rounds. Reports
+   * previously used the compact form here — "₹1.2Cr" beside a table whose total
+   * read ₹1,21,16,000 — which is the one thing the project's money standard
+   * exists to prevent.
+   */
+  paise?: number;
   /** One line of what the figure means, in the source module's words. */
   hint?: string;
 }

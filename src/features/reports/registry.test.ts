@@ -217,10 +217,12 @@ describe("canonical arithmetic — procurement", () => {
   it("says nothing about delivery, which the domain does not record", async () => {
     await seed();
     const result = await run("procurement", { period: "ALL_TIME" });
-    const text = [...result.columns.map((c) => c.label), result.note ?? ""].join(" ");
-    expect(/delivered|received|on time|late delivery/i.test(text.replace(/Neither.*$/s, ""))).toBe(
-      false,
-    );
+    // Column labels only — the note deliberately SAYS the word "delivery" in
+    // order to deny it, so including it here would assert against the honesty
+    // the note exists to provide.
+    const labels = result.columns.map((c) => c.label).join(" ");
+    expect(/delivered|received|on time|late/i.test(labels)).toBe(false);
+    expect(result.note).toMatch(/records no goods receipt/);
   });
 });
 

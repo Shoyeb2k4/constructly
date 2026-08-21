@@ -48,6 +48,7 @@ import { EmptyState } from "@/components/patterns/empty-state";
 import { StatCard } from "@/components/patterns/stat-card";
 import { Callout } from "@/components/patterns/callout";
 import { BarSeries } from "@/components/patterns/bar-series";
+import { MoneyText } from "@/components/patterns/money-text";
 import { Toolbar, ToolbarGroup, ToolbarSpacer } from "@/components/patterns/toolbar";
 import { useProjects } from "@/features/projects/hooks";
 import { useVendors } from "@/features/procurement/hooks";
@@ -452,7 +453,11 @@ export function ReportView({
                 <StatCard
                   key={k.label}
                   label={`${k.label} · ${result.periodLabel}`}
-                  value={k.value}
+                  // Money is shown in full — never the compact form, which
+                  // rounds. The table below states the same figure exactly, and
+                  // two different roundings of one number is how a report loses
+                  // a reader's trust.
+                  value={k.paise != null ? <MoneyText paise={k.paise} /> : k.value}
                   hint={k.hint}
                 />
               ))}

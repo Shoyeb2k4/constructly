@@ -115,12 +115,33 @@ export async function clippedText(page: Page, root = "main"): Promise<string[]> 
 }
 
 /** Elements laid out wider than the viewport itself. */
+/**
+ * Elements wider than the viewport — the ones that break the page.
+ *
+ * An element inside a horizontally SCROLLABLE ancestor is excluded, because it
+ * is contained by design: `DataTable` puts a wide table in a focusable
+ * `overflow-x-auto` region precisely so a ten-column report can be read by
+ * scrolling the table rather than the page. Flagging those reported a failure
+ * for a pattern the design system deliberately provides — and the real failure
+ * mode, the page itself scrolling sideways, is still caught by
+ * `hasPageOverflow`.
+ */
 export async function tooWideForViewport(page: Page, root = "main"): Promise<string[]> {
   return page.evaluate((rootSel) => {
     const scope = document.querySelector(rootSel) ?? document.body;
     const viewport = document.documentElement.clientWidth;
+
+    const insideScroller = (el: Element): boolean => {
+      for (let p = el.parentElement; p; p = p.parentElement) {
+        const ox = getComputedStyle(p).overflowX;
+        if (ox === "auto" || ox === "scroll") return true;
+      }
+      return false;
+    };
+
     return [...scope.querySelectorAll("*")]
       .filter((el) => el.getBoundingClientRect().width > viewport + 1)
+      .filter((el) => !insideScroller(el))
       .map(
         (el) =>
           `${Math.round(el.getBoundingClientRect().width)}px: ${(el.textContent ?? "").trim().slice(0, 40)}`,

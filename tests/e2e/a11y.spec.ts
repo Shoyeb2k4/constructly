@@ -43,7 +43,16 @@ const PAGES: { name: string; path: string; ready: RegExp }[] = [
   // A cross-module money index: four instruments, a period control, filters,
   // a table with a card fallback and a detail sheet.
   { name: "payments", path: "/payments", ready: /Every payment recorded across Constructly/ },
-  { name: "reports", path: "/reports", ready: /report/i },
+  { name: "reports", path: "/reports", ready: /Analysis over the same figures/ },
+  // The three report shapes: a wide transaction table, a ten-column financial
+  // comparison, and a grouped table with a chart.
+  { name: "report-payments", path: "/reports/payments", ready: /^Showing|Cash movement/ },
+  {
+    name: "report-contractor",
+    path: "/reports/contractor-position",
+    ready: /Agreement lifetime/,
+  },
+  { name: "report-labour", path: "/reports/labour-cost", ready: /Attendance value/ },
   { name: "settings", path: "/settings", ready: /settings/i },
 ];
 
@@ -132,6 +141,20 @@ for (const theme of ["light", "dark"] as const) {
       await page.setViewportSize({ width: 375, height: 812 });
       const violations = await scan(page, "/projects", /Every site, from estimation to handover/);
       report("projects@375", theme, violations);
+      expect(violations).toEqual([]);
+    });
+
+    test(`a11y: reports catalogue at 375px has no serious/critical violations`, async ({ page }) => {
+      await page.setViewportSize({ width: 375, height: 812 });
+      const violations = await scan(page, "/reports", /Analysis over the same figures/);
+      report("reports@375", theme, violations);
+      expect(violations).toEqual([]);
+    });
+
+    test(`a11y: payments report at 375px has no serious/critical violations`, async ({ page }) => {
+      await page.setViewportSize({ width: 375, height: 812 });
+      const violations = await scan(page, "/reports/payments", /^Showing|Cash movement/);
+      report("report-payments@375", theme, violations);
       expect(violations).toEqual([]);
     });
 

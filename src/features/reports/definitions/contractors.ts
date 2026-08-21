@@ -1,7 +1,7 @@
 import { contractorsApi } from "@/features/contractors/data";
 import { contractsApi } from "@/features/contracts/data";
 import type { ReportDef, ReportResult, ReportRow } from "../types";
-import { countKpi, echoFilters, moneyKpi, now, plural } from "./shared";
+import { echoFilters, moneyKpi, now, plural } from "./shared";
 
 /**
  * Contractor reports.

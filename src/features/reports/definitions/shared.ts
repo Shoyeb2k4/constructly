@@ -11,9 +11,15 @@ import type { ReportFilterEcho, ReportFilters, ReportKpi } from "../types";
 
 export const now = () => new Date().toISOString();
 
-/** Money KPI, formatted compactly for a headline tile. */
+/**
+ * A money KPI.
+ *
+ * Carries the PAISE so the screen can render the full Indian amount; `value`
+ * keeps a compact string for exports, where a KPI strip has to fit one line of
+ * a PDF header.
+ */
 export function moneyKpi(label: string, paise: number, hint?: string): ReportKpi {
-  return { label, value: formatPaiseCompact(paise), hint };
+  return { label, value: formatPaiseCompact(paise), paise, hint };
 }
 
 export function countKpi(label: string, n: number, hint?: string): ReportKpi {
