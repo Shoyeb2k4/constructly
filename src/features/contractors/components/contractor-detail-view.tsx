@@ -5,6 +5,7 @@ import Link from "next/link";
 import {
   Archive,
   ArchiveRestore,
+  Trash2,
   ArrowLeft,
   Info,
   Plus,
@@ -44,6 +45,7 @@ import { RecordNav, type RecordNavGroup } from "@/components/patterns/record-nav
 import { cn } from "@/lib/utils";
 import { formatDate } from "@/features/projects/format";
 import { useCan } from "@/features/rbac/permission-context";
+import { useIsOwner } from "@/features/rbac/permission-context";
 import { useContractorProfile } from "@/features/contracts/hooks";
 import {
   AgreementsTab,
@@ -120,13 +122,17 @@ const TYPE_TONE: Record<ContractorLedgerType, string> = {
 
 export function ContractorDetailView({ contractorId }: { contractorId: string }) {
   const can = useCan();
+  const isOwner = useIsOwner();
   const { data, isLoading } = useContractorLedger(contractorId);
   const { data: headerProfile } = useContractorProfile(contractorId);
   const [editOpen, setEditOpen] = React.useState(false);
   const [advanceOpen, setAdvanceOpen] = React.useState(false);
   const [settleOpen, setSettleOpen] = React.useState(false);
   const [agreementOpen, setAgreementOpen] = React.useState(false);
-  const [archiveOpen, setArchiveOpen] = React.useState(false);
+  // `false` closed, `true` opened from Archive, "asked-to-delete" opened from
+  // the Owner's Delete — the same dialog, with the extra explanation the second
+  // route owes the user.
+  const [archiveOpen, setArchiveOpen] = React.useState<boolean | "asked-to-delete">(false);
   // Bumped when an agreement is created, so the command centre can jump to it.
   const [createdAt, setCreatedAt] = React.useState(0);
 
@@ -158,6 +164,22 @@ export function ContractorDetailView({ contractorId }: { contractorId: string })
   const canEdit = can("contractors.edit");
   const archived = contractor.status === "INACTIVE";
   const canArchive = can("contractors.archive") && !archived;
+
+  /**
+   * What is attached to this contractor, counted from what the page has already
+   * loaded — no extra query, and no number the viewer is not allowed to see.
+   * This is the answer to "why can't I just delete them?", in figures.
+   */
+  const impact = [
+    { label: "Projects", value: headerProfile?.projects.length ?? 0 },
+    {
+      label: "Agreements",
+      value: headerProfile?.projects.flatMap((g) => g.contracts).length ?? 0,
+    },
+    { label: "Advance ledger entries", value: data.entries.length + data.hiddenEntryCount },
+  ].filter((r) => r.value > 0);
+
+
   const canRestore = can("contractors.restore") && archived;
   const hasActions =
     canCreateAgreement || canAdvance || canSettle || canEdit || canArchive || canRestore;
@@ -199,11 +221,13 @@ export function ContractorDetailView({ contractorId }: { contractorId: string })
               canEdit={canEdit}
               canArchive={canArchive}
               canRestore={canRestore}
+              isOwner={isOwner}
               onCreateAgreement={() => setAgreementOpen(true)}
               onAdvance={() => setAdvanceOpen(true)}
               onSettle={() => setSettleOpen(true)}
               onEdit={() => setEditOpen(true)}
               onArchive={() => setArchiveOpen(true)}
+              onDelete={() => setArchiveOpen("asked-to-delete")}
             />
           ) : undefined
         }
@@ -257,6 +281,8 @@ export function ContractorDetailView({ contractorId }: { contractorId: string })
         <ArchiveContractorDialog
           contractor={contractor}
           balancePaise={data.scope === "COMPANY" ? contractor.advanceBalancePaise : null}
+          askedToDelete={archiveOpen === "asked-to-delete"}
+          impact={impact}
           onOpenChange={(o) => !o && setArchiveOpen(false)}
         />
       )}
@@ -960,11 +986,17 @@ function PartialLedgerNote({ ledger }: { ledger: ContractorLedgerDto }) {
 function ArchiveContractorDialog({
   contractor,
   balancePaise,
+  askedToDelete = false,
+  impact = [],
   onOpenChange,
 }: {
   contractor: ContractorLedgerDto["contractor"];
   /** Null when the viewer only sees a project-scoped figure. */
   balancePaise: number | null;
+  /** Opened from the Owner's Delete rather than from Archive. */
+  askedToDelete?: boolean;
+  /** What is attached to this contractor, for the impact summary. */
+  impact?: { label: string; value: React.ReactNode }[];
   onOpenChange: (o: boolean) => void;
 }) {
   const archive = useArchiveContractor();
@@ -983,6 +1015,29 @@ function ArchiveContractorDialog({
         </DialogHeader>
 
         <div className="space-y-3 text-sm text-foreground-muted">
+          {/* The Owner pressed Delete. Say plainly that permanent deletion is
+              not one of the outcomes here, and show the figures that explain
+              it, before repeating what archiving does. */}
+          {askedToDelete && !archived && (
+            <Callout tone="info" title="A contractor is never permanently deleted">
+              <p>
+                Their record is referenced by settlements, payments, attendance and every report
+                that has ever counted them, so erasing it would change history that has already
+                been acted on. Archiving is the governed equivalent: they stop taking new work
+                and everything they did stays readable.
+              </p>
+              {impact.length > 0 && (
+                <dl className="mt-2 flex flex-wrap gap-x-6 gap-y-1">
+                  {impact.map((row) => (
+                    <div key={row.label} className="flex items-baseline gap-1.5">
+                      <dt className="text-xs">{row.label}</dt>
+                      <dd className="font-medium tabular-nums text-foreground">{row.value}</dd>
+                    </div>
+                  ))}
+                </dl>
+              )}
+            </Callout>
+          )}
           {archived ? (
             <p>
               They can take on new work again — agreements, advances, attendance and project
@@ -1060,11 +1115,13 @@ function ContractorActions({
   canEdit,
   canArchive,
   canRestore,
+  isOwner,
   onCreateAgreement,
   onAdvance,
   onSettle,
   onEdit,
   onArchive,
+  onDelete,
 }: {
   archived: boolean;
   canCreateAgreement: boolean;
@@ -1073,11 +1130,13 @@ function ContractorActions({
   canEdit: boolean;
   canArchive: boolean;
   canRestore: boolean;
+  isOwner: boolean;
   onCreateAgreement: () => void;
   onAdvance: () => void;
   onSettle: () => void;
   onEdit: () => void;
   onArchive: () => void;
+  onDelete: () => void;
 }) {
   // Settlement stays available while ARCHIVED on purpose: it recognises
   // attendance already recorded, so withholding it would strand a real
@@ -1137,6 +1196,17 @@ function ContractorActions({
               <DropdownMenuItem onSelect={onArchive} className="text-danger-foreground">
                 <Archive />
                 Archive contractor
+              </DropdownMenuItem>
+            )}
+            {/* The Owner gets the destructive affordance they look for, and it
+                leads to what the domain actually does — the same dialog, opened
+                with an explanation of why nothing is erased. Hiding Delete
+                would leave them hunting; a real Delete would take settlements,
+                payments and reports down with it. */}
+            {canArchive && isOwner && (
+              <DropdownMenuItem onSelect={onDelete} className="text-danger-foreground">
+                <Trash2 />
+                Delete contractor
               </DropdownMenuItem>
             )}
             {canRestore && (

@@ -2,16 +2,9 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import {
-  listMembers,
-  listInvitations,
-  inviteMember,
-  resendInvitation,
-  cancelInvitation,
-  changeMemberRole,
-  setMemberStatus,
-  removeMember,
-} from "./server/actions";
+// Through the repository, never the server actions directly: in demo mode
+// those hit Prisma and Users renders as an empty screen.
+import { teamApi } from "./data";
 import type { InviteInput, MemberStatus } from "./types";
 import type { Role } from "@/lib/auth/types";
 
@@ -21,10 +14,10 @@ export const teamKeys = {
 };
 
 export function useMembers() {
-  return useQuery({ queryKey: teamKeys.members, queryFn: () => listMembers() });
+  return useQuery({ queryKey: teamKeys.members, queryFn: () => teamApi.listMembers() });
 }
 export function useInvitations() {
-  return useQuery({ queryKey: teamKeys.invitations, queryFn: () => listInvitations() });
+  return useQuery({ queryKey: teamKeys.invitations, queryFn: () => teamApi.listInvitations() });
 }
 
 function errMsg(e: unknown): string {
@@ -45,7 +38,7 @@ function useTeamInvalidate() {
 export function useInviteMember() {
   const invalidate = useTeamInvalidate();
   return useMutation({
-    mutationFn: (input: InviteInput) => inviteMember(input),
+    mutationFn: (input: InviteInput) => teamApi.inviteMember(input),
     onSuccess: () => {
       invalidate();
       toast.success("Invitation sent");
@@ -57,7 +50,7 @@ export function useInviteMember() {
 export function useResendInvitation() {
   const invalidate = useTeamInvalidate();
   return useMutation({
-    mutationFn: (id: string) => resendInvitation(id),
+    mutationFn: (id: string) => teamApi.resendInvitation(id),
     onSuccess: () => {
       invalidate();
       toast.success("Invitation resent");
@@ -69,7 +62,7 @@ export function useResendInvitation() {
 export function useCancelInvitation() {
   const invalidate = useTeamInvalidate();
   return useMutation({
-    mutationFn: (id: string) => cancelInvitation(id),
+    mutationFn: (id: string) => teamApi.cancelInvitation(id),
     onSuccess: () => {
       invalidate();
       toast.success("Invitation cancelled");
@@ -81,7 +74,7 @@ export function useCancelInvitation() {
 export function useChangeMemberRole() {
   const invalidate = useTeamInvalidate();
   return useMutation({
-    mutationFn: ({ userId, role }: { userId: string; role: Role }) => changeMemberRole(userId, role),
+    mutationFn: ({ userId, role }: { userId: string; role: Role }) => teamApi.changeMemberRole(userId, role),
     onSuccess: () => {
       invalidate();
       toast.success("Role updated");
@@ -94,7 +87,7 @@ export function useSetMemberStatus() {
   const invalidate = useTeamInvalidate();
   return useMutation({
     mutationFn: ({ userId, status }: { userId: string; status: MemberStatus }) =>
-      setMemberStatus(userId, status),
+      teamApi.setMemberStatus(userId, status),
     onSuccess: (_r, v) => {
       invalidate();
       toast.success(v.status === "DISABLED" ? "Member deactivated" : "Member reactivated");
@@ -106,7 +99,7 @@ export function useSetMemberStatus() {
 export function useRemoveMember() {
   const invalidate = useTeamInvalidate();
   return useMutation({
-    mutationFn: (userId: string) => removeMember(userId),
+    mutationFn: (userId: string) => teamApi.removeMember(userId),
     onSuccess: () => {
       invalidate();
       toast.success("Member removed");

@@ -13,5 +13,19 @@ export default async function ReportPage({ params }: { params: Promise<{ id: str
   // Server-first: viewing a report requires reports.view + its class permission
   // (financial reports need reports.view_financial), or reports.view_all.
   if (!user || !canViewReport((p) => hasPermission(user, p), id)) redirect("/reports");
-  return <ReportView id={id} />;
+
+  return (
+    <ReportView
+      id={id}
+      userId={user.id}
+      isOwner={user.role === "OWNER"}
+      // The caller's own grants, passed down so a report can ask its SOURCE
+      // module what this user may see rather than Reports inventing a rule.
+      permissions={user.permissions ?? []}
+      // Pinned here so "this month" cannot resolve differently on the server
+      // than in the browser (React #418, and a mislabelled total besides).
+      today={new Date().toISOString().slice(0, 10)}
+      companyName={user.company.name}
+    />
+  );
 }

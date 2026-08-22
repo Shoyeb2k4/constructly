@@ -227,15 +227,10 @@ export function usePaymentMutations() {
     },
     onError: () => toast.error("Couldn't record the payment"),
   });
-  const remove = useMutation({
-    mutationFn: (id: string) => procurementApi.deletePayment(id),
-    onSuccess: () => {
-      invalidateAll();
-      toast.success("Payment deleted");
-    },
-  });
-
-  return { create, remove };
+  // There is deliberately no delete mutation here. The repository refuses to
+  // remove a recorded vendor payment, so a hook whose success toast read
+  // "Payment deleted" could only ever lie. See features/governance/delete-policy.ts.
+  return { create };
 }
 
 /* ── Material category mutations ─────────────────────────────────────── */

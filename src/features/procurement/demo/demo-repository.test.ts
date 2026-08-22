@@ -163,14 +163,18 @@ describe("procurement demo — payments + outstanding", () => {
     aging.rows.forEach((r) => expect(typeof r.poNumber === "string" || r.poNumber === undefined).toBe(true));
   });
 
-  it("deletes a payment (owner action)", async () => {
+  it("refuses to delete a recorded payment, and keeps it", async () => {
+    // This used to hard-delete. A vendor payment is cash that moved, and the
+    // Payments centre plus every "paid against orders" figure read these rows —
+    // so removing one made real money disappear from the record of it. Vendor
+    // payments have no reversal yet, so refusing is the only safe answer.
     const p = await repo.createPayment({
       vendorId: V2, projectId: SKY, purchaseOrderId: null,
       amountPaise: 5_000, paymentMode: "CASH", date: "2026-07-14",
     });
-    await repo.deletePayment(p.id);
+    await expect(repo.deletePayment(p.id)).rejects.toThrow("VENDOR_PAYMENT_IMMUTABLE");
     const list = await repo.listPayments({ vendorId: V2 });
-    expect(list.find((x) => x.id === p.id)).toBeUndefined();
+    expect(list.find((x) => x.id === p.id)).toBeTruthy();
   });
 });
 

@@ -16,6 +16,7 @@ import {
   Truck,
   IndianRupee,
   X,
+  Lock,
   Trash2,
   ExternalLink,
   Upload,
@@ -26,20 +27,14 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { EmptyState } from "@/components/patterns/empty-state";
 import { MoneyText } from "@/components/patterns/money-text";
 import { StatusBadge, PO_STATUS_META } from "@/components/patterns/status-badge";
 import { TagChip } from "@/features/projects/components/tag-chip";
 import { cn } from "@/lib/utils";
 import { formatDate } from "@/features/projects/format";
-import { useVendor, useVendorAging, useVendorMutations, usePaymentMutations } from "../hooks";
+import { useVendor, useVendorAging, useVendorMutations } from "../hooks";
+import { GovernedDeleteDialog } from "@/features/governance/components/governed-delete-dialog";
 import { CopyableRef, PaymentModeChip, PaymentStatusBadge } from "./payment-bits";
 import { RecordPaymentDialog } from "./record-payment-dialog";
 
@@ -66,7 +61,6 @@ export function VendorDetailView({ id }: { id: string }) {
   const { data: vendor, isLoading } = useVendor(id);
   const { toggleFavorite, addDocument, removeDocument } = useVendorMutations();
   const qc = useQueryClient();
-  const { remove: removePayment } = usePaymentMutations();
   const [payOpen, setPayOpen] = React.useState(false);
   const [tab, setTab] = React.useState("overview");
   /** Project filter pill — set from the Projects tab, applies profile-wide. */
@@ -280,14 +274,20 @@ export function VendorDetailView({ id }: { id: string }) {
                     {can("payments.delete") && (
                       <button
                         onClick={() => setConfirmPaymentId(p.id)}
-                        className="text-foreground-subtle hover:text-danger-foreground"
-                        aria-label="Delete payment"
+                        className="text-foreground-subtle hover:text-foreground"
+                        aria-label="Why this payment can't be removed"
                       >
-                        <Trash2 className="size-3.5" />
+                        <Lock className="size-3.5" />
                       </button>
                     )}
                   </div>
                 ))
+              )}
+              {filteredPayments.length > 0 && (
+                <p className="px-5 py-3 text-xs text-foreground-subtle">
+                  Recorded payments stay as they happened — they can&apos;t be edited or
+                  removed. Record a correcting payment instead.
+                </p>
               )}
             </CardContent>
           </Card>
@@ -423,29 +423,15 @@ export function VendorDetailView({ id }: { id: string }) {
         defaultProjectId={projectFilter ?? undefined}
       />
 
-      <Dialog open={confirmPaymentId != null} onOpenChange={(o) => !o && setConfirmPaymentId(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete this payment?</DialogTitle>
-            <DialogDescription>
-              The vendor&apos;s outstanding will increase by the payment amount. This is
-              recorded in the activity log.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="flex justify-end gap-2">
-            <Button variant="ghost" onClick={() => setConfirmPaymentId(null)}>Cancel</Button>
-            <Button
-              variant="danger"
-              onClick={() => {
-                if (confirmPaymentId) removePayment.mutate(confirmPaymentId);
-                setConfirmPaymentId(null);
-              }}
-            >
-              Delete payment
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+      {/* A recorded vendor payment is cash that moved. The server refuses to
+          remove one, so the UI says so instead of offering a button that fails.
+          See features/governance/delete-policy.ts. */}
+      <GovernedDeleteDialog
+        entity="vendorPayment"
+        open={confirmPaymentId != null}
+        onOpenChange={(o) => !o && setConfirmPaymentId(null)}
+        subject={vendor.businessName}
+      />
     </div>
   );
 }

@@ -25,7 +25,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { MoneyText } from "@/components/patterns/money-text";
-import { toPaise, toRupees } from "@/lib/money";
+import { MoneyInput } from "@/components/patterns/money-input";
 import { milestoneCoverage } from "../milestones";
 import { useCreateMilestone, useUpdateMilestone } from "../hooks";
 import type { Contract, Milestone } from "../types";
@@ -47,7 +47,7 @@ export function MilestoneFormSheet({
   const update = useUpdateMilestone();
 
   const [title, setTitle] = React.useState("");
-  const [rupees, setRupees] = React.useState("");
+  const [valuePaiseRaw, setValuePaise] = React.useState<number | null>(null);
   const [plannedDate, setPlannedDate] = React.useState("");
   const [notes, setNotes] = React.useState("");
 
@@ -56,13 +56,13 @@ export function MilestoneFormSheet({
     setWasOpen(open);
     if (open) {
       setTitle(milestone?.title ?? "");
-      setRupees(milestone ? String(toRupees(milestone.valuePaise)) : "");
+      setValuePaise(milestone ? milestone.valuePaise : null);
       setPlannedDate(milestone?.plannedDate ?? "");
       setNotes(milestone?.notes ?? "");
     }
   }
 
-  const valuePaise = rupees.trim() ? toPaise(Number(rupees) || 0) : 0;
+  const valuePaise = valuePaiseRaw ?? 0;
   const pending = create.isPending || update.isPending;
   const canSave = !!title.trim() && valuePaise > 0 && !pending;
 
@@ -131,14 +131,12 @@ export function MilestoneFormSheet({
 
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <Label htmlFor="milestone-value">Value (₹)</Label>
-              <Input
+              <Label htmlFor="milestone-value">Value</Label>
+              <MoneyInput
                 id="milestone-value"
-                type="number"
-                min={0}
-                value={rupees}
-                onChange={(e) => setRupees(e.target.value)}
-                placeholder="e.g. 1000000"
+                value={valuePaiseRaw}
+                onValueChange={setValuePaise}
+                placeholder="10,00,000"
               />
             </div>
             <div className="space-y-1.5">

@@ -21,7 +21,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { MoneyText } from "@/components/patterns/money-text";
-import { toPaise } from "@/lib/money";
+import { MoneyInput } from "@/components/patterns/money-input";
 import { useRecordContractPayment } from "../hooks";
 import { PAYMENT_MODES, PAYMENT_MODE_LABEL, PAYMENT_TYPES, PAYMENT_TYPE_LABEL } from "../constants";
 import type { Contract, ContractPaymentType, PaymentMode } from "../types";
@@ -41,7 +41,7 @@ export function RecordContractPaymentSheet({
 }) {
   const record = useRecordContractPayment();
   const [date, setDate] = React.useState(todayISO());
-  const [rupees, setRupees] = React.useState("");
+  const [amountPaiseRaw, setAmountPaise] = React.useState<number | null>(null);
   const [type, setType] = React.useState<ContractPaymentType>("INTERIM");
   const [mode, setMode] = React.useState<PaymentMode>("BANK_TRANSFER");
   const [reference, setReference] = React.useState("");
@@ -52,7 +52,7 @@ export function RecordContractPaymentSheet({
     setWasOpen(open);
     if (open) {
       setDate(todayISO());
-      setRupees("");
+      setAmountPaise(null);
       setType("INTERIM");
       setMode("BANK_TRANSFER");
       setReference("");
@@ -60,7 +60,7 @@ export function RecordContractPaymentSheet({
     }
   }
 
-  const amountPaise = rupees.trim() ? toPaise(Number(rupees) || 0) : 0;
+  const amountPaise = amountPaiseRaw ?? 0;
   // The credit ceiling: total credits may never exceed the agreement's
   // AUTHORISED value. Paying ahead of earned work is fine — only this binds, and
   // raising it requires an approved amendment. Advisory here; the server
@@ -115,8 +115,13 @@ export function RecordContractPaymentSheet({
 
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <Label>Amount (₹)</Label>
-              <Input type="number" min={0} value={rupees} onChange={(e) => setRupees(e.target.value)} placeholder="e.g. 50000" autoFocus />
+              <Label>Amount</Label>
+              <MoneyInput
+                value={amountPaiseRaw}
+                onValueChange={setAmountPaise}
+                placeholder="50,000"
+                autoFocus
+              />
             </div>
             <div className="space-y-1.5">
               <Label>Date</Label>

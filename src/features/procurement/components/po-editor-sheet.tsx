@@ -3,6 +3,7 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { useForm, useFieldArray, Controller } from "react-hook-form";
+import { RupeeInput } from "@/components/patterns/money-input";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Plus, Trash2, ChevronUp, ChevronDown } from "lucide-react";
 import {
@@ -251,7 +252,19 @@ export function POEditorSheet({
                         </Select>
                       )}
                     />
-                    <Input className="h-8 px-2" type="number" step="0.01" min={0} {...register(`lineItems.${i}.rateRupees`)} />
+                    <Controller
+                      control={control}
+                      name={`lineItems.${i}.rateRupees`}
+                      render={({ field }) => (
+                        <RupeeInput
+                          className="h-8 px-2"
+                          value={field.value as number | undefined}
+                          onValueChange={field.onChange}
+                          onBlur={field.onBlur}
+                          aria-label="Rate per unit"
+                        />
+                      )}
+                    />
                     <Input
                       className="h-8 px-2"
                       type="number"

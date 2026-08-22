@@ -585,20 +585,15 @@ export const demoProcurementRepository: ProcurementRepository = {
 
   async deletePurchaseOrder(id) {
     // Demo actor is the owner; permanently remove the PO (line items are
-    // embedded in the record, so they go with it). Linked payments keep the
-    // record with the PO link nulled.
+    // embedded in the record, so they go with it).
     const pos = loadPOs();
     if (!pos.some((p) => p.id === id)) throw new Error("NOT_FOUND");
-    write(K.pos, pos.filter((p) => p.id !== id));
-    const payments = loadPayments();
-    let touched = false;
-    for (const pay of payments) {
-      if (pay.purchaseOrderId === id) {
-        pay.purchaseOrderId = null;
-        touched = true;
-      }
+    // Parity with the server: an order with payments recorded against it stays.
+    // Deleting it would leave the cash in place with nothing it was paid for.
+    if (loadPayments().some((pay) => pay.purchaseOrderId === id)) {
+      throw new Error("PO_HAS_PAYMENTS");
     }
-    if (touched) write(K.payments, payments);
+    write(K.pos, pos.filter((p) => p.id !== id));
   },
 
   async pendingApprovalCount() {
@@ -649,8 +644,11 @@ export const demoProcurementRepository: ProcurementRepository = {
     return toPaymentItem(rec, loadVendors(), loadPOs(), projectMeta());
   },
 
-  async deletePayment(id) {
-    write(K.payments, loadPayments().filter((p) => p.id !== id));
+  async deletePayment(): Promise<never> {
+    // Parity with the server: a recorded vendor payment is cash that moved, and
+    // deleting it would take that movement out of the Payments centre and every
+    // report. See features/governance/delete-policy.ts.
+    throw new Error("VENDOR_PAYMENT_IMMUTABLE");
   },
 
   /* ── Project-aware views ───────────────────────────────────────────── */

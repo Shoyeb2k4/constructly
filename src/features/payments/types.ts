@@ -224,22 +224,14 @@ export interface RawPaymentsData {
 
 /* ── Filters & period ─────────────────────────────────────────────────── */
 
-export type PeriodPreset =
-  | "THIS_MONTH"
-  | "LAST_MONTH"
-  | "LAST_90"
-  | "FINANCIAL_YEAR"
-  | "ALL_TIME"
-  | "CUSTOM";
-
-export interface PaymentPeriod {
-  preset: PeriodPreset;
-  /** Inclusive YYYY-MM-DD. Null on ALL_TIME — unbounded, and stated as such. */
-  from: string | null;
-  to: string | null;
-  /** Always rendered beside a headline figure. A total with no period is a lie. */
-  label: string;
-}
+/**
+ * The period vocabulary is app-wide (`@/lib/period`), not a payments concept —
+ * Reports resolves "this month" from the same function, so the two can never
+ * disagree about what a month is.
+ */
+import type { Period } from "@/lib/period";
+export type { PeriodPreset } from "@/lib/period";
+export type PaymentPeriod = Period;
 
 export interface PaymentsFilters {
   search?: string;

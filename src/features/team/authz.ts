@@ -30,12 +30,23 @@ export function assertCanAssignRole(actor: SessionUser, role: Role): void {
   assertCanGrantPermissions(actor, permissionsForLegacyRole(role));
 }
 
-/** Only the Owner role is protected from editing: it holds implicit all-access,
- *  so its permission set is not customisable. Every other role — including the
- *  seeded system templates (Admin, Project Manager, Accountant, …) — is editable,
- *  letting companies tailor the defaults to how they actually operate. */
+/**
+ * Built-in roles are READ-ONLY templates; only custom roles are editable.
+ *
+ * They used to be editable, and that was a trap. `prisma/reconcile-rbac.ts`
+ * rewrites every `isSystem` role to its code preset whenever Constructly ships
+ * a change to the defaults — so a company that tailored Admin would silently
+ * lose that work on a future release, with no warning and no way back. Phase 6
+ * ran exactly that reconciliation against production; it only did no damage
+ * because no customer had edited a built-in role yet.
+ *
+ * The answer is Duplicate to customise: a copy is `isSystem: false`, belongs to
+ * the customer, and reconciliation never touches it. Enforced HERE rather than
+ * by hiding the UI, so a direct server call cannot get around it.
+ */
 export function assertRoleEditable(role: { isOwner: boolean; isSystem?: boolean }): void {
   if (role.isOwner) throw new Error("PROTECTED_ROLE");
+  if (role.isSystem) throw new Error("BUILT_IN_ROLE");
 }
 
 /** System roles are default templates and can't be deleted (the app re-seeds

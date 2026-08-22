@@ -17,6 +17,9 @@ const h = vi.hoisted(() => ({
 
 vi.mock("@/features/rbac/permission-context", () => ({
   useCan: () => (p: Permission) => h.permissions.has(p),
+  // The view asks whether the viewer is the Owner, to decide whether to offer
+  // the governed Delete. Nobody here is.
+  useIsOwner: () => false,
 }));
 vi.mock("../hooks", () => ({
   useContractorLedger: () => ({ data: h.ledger, isLoading: false }),

@@ -14,7 +14,7 @@ export default async function ReportsPage() {
     <div className="space-y-8">
       <PageHeader
         title="Reports"
-        description="Project, labour, procurement, vendor, and financial reports — exact to every module, exportable to PDF and Excel."
+        description="Analysis over the same figures the operational modules record — filter it, compare it, export it."
       />
       <ReportHub />
     </div>

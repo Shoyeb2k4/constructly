@@ -43,7 +43,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { MoneyText } from "@/components/patterns/money-text";
-import { toPaise } from "@/lib/money";
+import { MoneyInput } from "@/components/patterns/money-input";
 import { cn } from "@/lib/utils";
 import { approveBlockedReason, isStale, previewAmendment } from "../amendments";
 import { AMENDMENT_TYPE_LABEL } from "../constants";
@@ -78,7 +78,7 @@ export function ProposeAmendmentSheet({
 }) {
   const propose = useProposeAmendment();
   const [type, setType] = React.useState<AmendmentType>("VARIATION");
-  const [deltaRupees, setDeltaRupees] = React.useState("");
+  const [deltaPaiseRaw, setDeltaPaise] = React.useState<number | null>(null);
   const [reason, setReason] = React.useState("");
   const [effectiveDate, setEffectiveDate] = React.useState(todayISO());
 
@@ -87,18 +87,18 @@ export function ProposeAmendmentSheet({
     setWasOpen(open);
     if (open) {
       setType("VARIATION");
-      setDeltaRupees("");
+      setDeltaPaise(null);
       setReason("");
       setEffectiveDate(todayISO());
     }
   }
 
   const r = contract.reconciliation;
-  const deltaPaise = deltaRupees.trim() ? toPaise(Number(deltaRupees) || 0) : 0;
+  const deltaPaise = deltaPaiseRaw ?? 0;
   const revisedAmountPaise = r.currentContractValuePaise + deltaPaise;
   const preview = previewAmendment({ revisedAmountPaise, reconciliation: r });
 
-  const entered = deltaRupees.trim() !== "";
+  const entered = deltaPaiseRaw != null;
   const canSave =
     entered && !preview.blockedReason && !!reason.trim() && !propose.isPending;
 
@@ -129,13 +129,16 @@ export function ProposeAmendmentSheet({
 
         <div className="flex-1 space-y-4 overflow-y-auto px-6 py-5">
           <div className="space-y-1.5">
-            <Label htmlFor="amendment-delta">Change to the agreement value (₹)</Label>
-            <Input
+            <Label htmlFor="amendment-delta">Change to the agreement value</Label>
+            <MoneyInput
               id="amendment-delta"
-              type="number"
-              value={deltaRupees}
-              onChange={(e) => setDeltaRupees(e.target.value)}
-              placeholder="e.g. 500000 for extra work, -300000 to reduce it"
+              value={deltaPaiseRaw}
+              onValueChange={setDeltaPaise}
+              // The one money field in the product with genuine signed
+              // semantics: an amendment can reduce an agreement as well as
+              // raise it, so a minus is meaningful here and nowhere else.
+              allowNegative
+              placeholder="5,00,000 for extra work, -3,00,000 to reduce it"
               autoFocus
             />
             <p className="text-xs text-foreground-subtle">

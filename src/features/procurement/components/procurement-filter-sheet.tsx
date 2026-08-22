@@ -1,5 +1,6 @@
 "use client";
 
+import { MoneyInput } from "@/components/patterns/money-input";
 import * as React from "react";
 import {
   Sheet,
@@ -19,7 +20,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { toRupees, toPaise } from "@/lib/money";
 import { PO_STATUSES, PO_STATUS_LABEL, PO_PAYMENT_STATUSES, PO_PAYMENT_STATUS_LABEL } from "../constants";
 import type { POFilters, POGstFilter } from "../types";
 
@@ -80,9 +80,6 @@ export function ProcurementFilterSheet({
   categories: string[];
   members: { id: string; fullName: string }[];
 }) {
-  const rupees = (paise?: number) => (paise != null ? String(toRupees(paise)) : "");
-  const parseRupees = (v: string) => (v.trim() === "" ? undefined : toPaise(Number(v) || 0));
-
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent>
@@ -170,22 +167,22 @@ export function ProcurementFilterSheet({
             </FilterRow>
           </div>
 
-          <FilterRow label="Amount range (₹)">
+          <FilterRow label="Amount range">
             <div className="flex items-center gap-2">
-              <Input
-                type="number"
-                min={0}
+              {/* A filter bound, not an amount to be paid — but it reads the
+                  same numbers, so it groups the same way. */}
+              <MoneyInput
+                value={filters.amountMinPaise ?? null}
+                onValueChange={(paise) => onChange({ amountMinPaise: paise ?? undefined })}
                 placeholder="Min"
-                value={rupees(filters.amountMinPaise)}
-                onChange={(e) => onChange({ amountMinPaise: parseRupees(e.target.value) })}
+                aria-label="Minimum amount"
               />
               <span className="text-foreground-subtle">–</span>
-              <Input
-                type="number"
-                min={0}
+              <MoneyInput
+                value={filters.amountMaxPaise ?? null}
+                onValueChange={(paise) => onChange({ amountMaxPaise: paise ?? undefined })}
                 placeholder="Max"
-                value={rupees(filters.amountMaxPaise)}
-                onChange={(e) => onChange({ amountMaxPaise: parseRupees(e.target.value) })}
+                aria-label="Maximum amount"
               />
             </div>
           </FilterRow>

@@ -37,7 +37,7 @@ import { Label } from "@/components/ui/label";
 import { MoneyText } from "@/components/patterns/money-text";
 import { Callout } from "@/components/patterns/callout";
 import { cn } from "@/lib/utils";
-import { toPaise } from "@/lib/money";
+import { MoneyInput } from "@/components/patterns/money-input";
 import { useContractorProfile } from "@/features/contracts/hooks";
 import { scopedAdvanceBlockedReason } from "@/features/contracts/agreement-actions";
 import { useAdvanceRescopePreview, useRescopeAdvance } from "../hooks";
@@ -80,7 +80,7 @@ export function RescopeAdvanceSheet({
   const [scope, setScope] = React.useState<ScopeChoice>("GENERAL");
   const [projectId, setProjectId] = React.useState<string | null>(null);
   const [contractId, setContractId] = React.useState<string | null>(null);
-  const [rupees, setRupees] = React.useState("");
+  const [amountPaise, setAmountPaise] = React.useState<number | null>(null);
   const [reason, setReason] = React.useState("");
 
   const [wasOpen, setWasOpen] = React.useState(false);
@@ -90,7 +90,7 @@ export function RescopeAdvanceSheet({
       setScope("GENERAL");
       setProjectId(null);
       setContractId(null);
-      setRupees("");
+      setAmountPaise(null);
       setReason("");
     }
   }
@@ -122,7 +122,7 @@ export function RescopeAdvanceSheet({
         ? { projectId, contractId: null }
         : { projectId: null, contractId: null };
 
-  const transferPaise = rupees.trim() ? toPaise(Number(rupees) || 0) : 0;
+  const transferPaise = amountPaise ?? 0;
   const preview = useAdvanceRescopePreview({
     contractorId,
     advanceId: open ? advance.id : null,
@@ -175,14 +175,12 @@ export function RescopeAdvanceSheet({
           )}
 
           <div className="space-y-1.5">
-            <Label htmlFor="rescope-amount">Amount to move (₹)</Label>
-            <Input
+            <Label htmlFor="rescope-amount">Amount to move</Label>
+            <MoneyInput
               id="rescope-amount"
-              type="number"
-              min={0}
-              value={rupees}
-              onChange={(e) => setRupees(e.target.value)}
-              placeholder="e.g. 200000"
+              value={amountPaise}
+              onValueChange={setAmountPaise}
+              placeholder="2,00,000"
               autoFocus
             />
             <p className="text-xs text-foreground-subtle">

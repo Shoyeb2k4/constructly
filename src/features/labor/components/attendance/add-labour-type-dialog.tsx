@@ -15,6 +15,7 @@
  * agreement just to get a labour type onto their sheet.
  */
 
+import { MoneyInput } from "@/components/patterns/money-input";
 import * as React from "react";
 import { Loader2 } from "lucide-react";
 import {
@@ -25,7 +26,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -34,7 +34,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { toPaise, toRupees } from "@/lib/money";
 import { useCan } from "@/features/rbac/permission-context";
 import { useProjectContractors, useSetProjectContractors } from "@/features/projects/hooks";
 import { useAddScopeItem } from "@/features/contracts/hooks";
@@ -98,7 +97,7 @@ function AddLabourTypeForm({
   const addScopeItem = useAddScopeItem();
 
   const [subId, setSubId] = React.useState("");
-  const [rate, setRate] = React.useState("");
+  const [ratePaiseRaw, setRatePaise] = React.useState<number | null>(null);
   const [creating, setCreating] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
 
@@ -110,10 +109,10 @@ function AddLabourTypeForm({
   function choose(sub: LabourSubcategory) {
     setSubId(sub.id);
     // Start from the company default; the user sets what THIS contractor gets.
-    setRate(String(toRupees(sub.dailyRatePaise ?? 0) || ""));
+    setRatePaise(sub.dailyRatePaise ?? null);
   }
 
-  const ratePaise = rate.trim() ? toPaise(Number(rate) || 0) : 0;
+  const ratePaise = ratePaiseRaw ?? 0;
   const canSave = !!subId && ratePaise > 0 && !busy;
 
   async function submit() {
@@ -197,15 +196,14 @@ function AddLabourTypeForm({
         {subId && (
           <div className="space-y-1.5">
             <Label htmlFor="attendance-rate">
-              {agreementTitle ? "Agreement" : "Contractor"} rate (₹/day)
+              {agreementTitle ? "Agreement" : "Contractor"} rate
             </Label>
-            <Input
+            <MoneyInput
               id="attendance-rate"
-              type="number"
-              min={0}
-              value={rate}
-              onChange={(e) => setRate(e.target.value)}
-              placeholder="e.g. 900"
+              value={ratePaiseRaw}
+              onValueChange={setRatePaise}
+              placeholder="900"
+              suffix="/ day"
             />
           </div>
         )}

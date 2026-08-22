@@ -22,6 +22,7 @@
  *    that did not happen.
  */
 
+import { inPeriod } from "@/lib/period";
 import type {
   PaymentPeriod,
   PaymentTransaction,
@@ -30,7 +31,6 @@ import type {
   PaymentsSnapshot,
   PaymentsSummary,
   PaymentTypeTotal,
-  PeriodPreset,
   RawAgreementPayment,
   RawLedgerEntry,
   RawPaymentsData,
@@ -252,81 +252,13 @@ export function assemblePayments(raw: RawPaymentsData): PaymentsSnapshot {
 
 /* ── Period ───────────────────────────────────────────────────────────── */
 
-const MONTHS = [
-  "January", "February", "March", "April", "May", "June",
-  "July", "August", "September", "October", "November", "December",
-];
-
-/** YYYY-MM-DD arithmetic in UTC, so a timezone can never shift a period edge. */
-function addDays(iso: string, days: number): string {
-  const d = new Date(`${iso}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + days);
-  return d.toISOString().slice(0, 10);
-}
-
-function monthStart(year: number, month: number): string {
-  return `${year}-${String(month + 1).padStart(2, "0")}-01`;
-}
-
-function monthEnd(year: number, month: number): string {
-  return addDays(monthStart(month === 11 ? year + 1 : year, (month + 1) % 12), -1);
-}
-
 /**
- * Resolve a preset against the viewer's today. The financial year is the Indian
- * one (1 April – 31 March) because that is the year this product's users close
- * their books on.
+ * Period resolution lives in `@/lib/period` — Reports needs the identical
+ * vocabulary, and two resolvers is how a total ends up labelled with a range it
+ * was not computed over. Re-exported here so this module stays the one import
+ * the Payments UI and its tests need.
  */
-export function resolvePeriod(
-  preset: PeriodPreset,
-  today: string,
-  custom?: { from?: string | null; to?: string | null },
-): PaymentPeriod {
-  const year = Number(today.slice(0, 4));
-  const month = Number(today.slice(5, 7)) - 1;
-
-  switch (preset) {
-    case "THIS_MONTH":
-      return {
-        preset,
-        from: monthStart(year, month),
-        to: monthEnd(year, month),
-        label: `${MONTHS[month]} ${year}`,
-      };
-    case "LAST_MONTH": {
-      const y = month === 0 ? year - 1 : year;
-      const m = month === 0 ? 11 : month - 1;
-      return { preset, from: monthStart(y, m), to: monthEnd(y, m), label: `${MONTHS[m]} ${y}` };
-    }
-    case "LAST_90":
-      return { preset, from: addDays(today, -89), to: today, label: "Last 90 days" };
-    case "FINANCIAL_YEAR": {
-      const startYear = month >= 3 ? year : year - 1;
-      return {
-        preset,
-        from: `${startYear}-04-01`,
-        to: `${startYear + 1}-03-31`,
-        label: `FY ${startYear}–${String(startYear + 1).slice(2)}`,
-      };
-    }
-    case "CUSTOM": {
-      const from = custom?.from || null;
-      const to = custom?.to || null;
-      const label =
-        from && to ? `${from} to ${to}` : from ? `From ${from}` : to ? `Up to ${to}` : "All time";
-      return { preset, from, to, label };
-    }
-    case "ALL_TIME":
-    default:
-      return { preset: "ALL_TIME", from: null, to: null, label: "All time" };
-  }
-}
-
-export function inPeriod(date: string, period: PaymentPeriod): boolean {
-  if (period.from && date < period.from) return false;
-  if (period.to && date > period.to) return false;
-  return true;
-}
+export { resolvePeriod, inPeriod } from "@/lib/period";
 
 /* ── Filtering & search ───────────────────────────────────────────────── */
 

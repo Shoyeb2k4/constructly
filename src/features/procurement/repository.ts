@@ -61,7 +61,12 @@ export interface ProcurementRepository {
   listPayments(filters?: PaymentFilters): Promise<VendorPaymentItem[]>;
   createPayment(input: CreatePaymentInput): Promise<VendorPaymentItem>;
   /** Owner-only: payments are financial records; removal is audited. */
-  deletePayment(id: string): Promise<void>;
+  /**
+   * Always refuses with VENDOR_PAYMENT_IMMUTABLE. Kept in the contract so a
+   * caller gets the explanation rather than a missing method — vendor payments
+   * have no reversal yet, so the only safe answer is not to destroy one.
+   */
+  deletePayment(id: string): Promise<never>;
 
   // Project-aware views
   getProjectProcurement(projectId: string): Promise<ProjectProcurement>;

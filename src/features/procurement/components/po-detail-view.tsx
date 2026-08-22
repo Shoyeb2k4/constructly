@@ -1,5 +1,6 @@
 "use client";
 
+import { GovernedDeleteDialog } from "@/features/governance/components/governed-delete-dialog";
 import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -21,13 +22,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { formatDate } from "@/features/projects/format";
 import { usePurchaseOrder, usePOMutations } from "../hooks";
 import { useCan } from "@/features/rbac/permission-context";
@@ -167,13 +161,25 @@ export function PODetailView({ id }: { id: string }) {
                   {can("purchase_orders.delete") && (
                     <>
                       <DropdownMenuSeparator />
-                      <DropdownMenuItem
-                        className="text-danger-foreground"
-                        onSelect={() => setConfirmDelete(true)}
-                      >
-                        <Trash2 />
-                        Delete purchase order
-                      </DropdownMenuItem>
+                      {po.payments.length === 0 ? (
+                        <DropdownMenuItem
+                          className="text-danger-foreground"
+                          onSelect={() => setConfirmDelete(true)}
+                        >
+                          <Trash2 />
+                          Delete purchase order
+                        </DropdownMenuItem>
+                      ) : (
+                        <DropdownMenuItem disabled className="flex-col items-start gap-0.5">
+                          <span className="flex items-center gap-2">
+                            <Trash2 className="size-4" />
+                            Delete purchase order
+                          </span>
+                          <span className="pl-6 text-xs text-foreground-subtle">
+                            Paid against — the order stays
+                          </span>
+                        </DropdownMenuItem>
+                      )}
                     </>
                   )}
                 </DropdownMenuContent>
@@ -358,26 +364,25 @@ export function PODetailView({ id }: { id: string }) {
 
       <POEditorSheet open={editOpen} onOpenChange={setEditOpen} editPo={po} />
 
-      <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete {po.poNumber}?</DialogTitle>
-            <DialogDescription>
-              Are you sure you want to permanently delete this Purchase Order? This action cannot be undone.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="flex justify-end gap-2">
-            <Button variant="ghost" onClick={() => setConfirmDelete(false)}>Cancel</Button>
-            <Button
-              variant="danger"
-              disabled={remove.isPending}
-              onClick={() => remove.mutate(po.id, { onSuccess: () => router.push("/procurement") })}
-            >
-              Delete permanently
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+      {/* The server refuses to delete an order that has been paid against, so
+          the dialog shows the reason rather than a button that would fail. */}
+      <GovernedDeleteDialog
+        entity="purchaseOrder"
+        open={confirmDelete}
+        onOpenChange={setConfirmDelete}
+        subject={`${po.poNumber} · ${po.vendor.name}`}
+        blockedReason={
+          po.payments.length > 0
+            ? `${po.payments.length === 1 ? "A payment has" : `${po.payments.length} payments have`} been recorded against this order.`
+            : null
+        }
+        onConfirm={
+          po.payments.length > 0
+            ? undefined
+            : () => remove.mutate(po.id, { onSuccess: () => router.push("/procurement") })
+        }
+        pending={remove.isPending}
+      />
     </div>
   );
 }

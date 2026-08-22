@@ -20,7 +20,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { MoneyText } from "@/components/patterns/money-text";
-import { toPaise } from "@/lib/money";
+import { MoneyInput } from "@/components/patterns/money-input";
 import { useProjects } from "@/features/projects/hooks";
 import { usePreviewSettlement, useCreateSettlement } from "../hooks";
 import type { SettlementPreview } from "../types";
@@ -60,7 +60,7 @@ export function SettlementSheet({
   const [projectId, setProjectId] = React.useState("");
   const [periodStart, setPeriodStart] = React.useState(isoDaysAgo(6));
   const [periodEnd, setPeriodEnd] = React.useState(isoDaysAgo(0));
-  const [adjRupees, setAdjRupees] = React.useState("");
+  const [adjPaiseRaw, setAdjPaise] = React.useState<number | null>(null);
   const [notes, setNotes] = React.useState("");
   const [result, setResult] = React.useState<SettlementPreview | null>(null);
 
@@ -72,13 +72,13 @@ export function SettlementSheet({
       setProjectId("");
       setPeriodStart(isoDaysAgo(6));
       setPeriodEnd(isoDaysAgo(0));
-      setAdjRupees("");
+      setAdjPaise(null);
       setNotes("");
       setResult(null);
     }
   }
 
-  const adjPaise = adjRupees.trim() ? toPaise(Number(adjRupees) || 0) : 0;
+  const adjPaise = adjPaiseRaw ?? 0;
   const inputsValid = !!projectId && !!periodStart && !!periodEnd && periodStart <= periodEnd;
 
   // Live preview: recompute whenever the inputs change.
@@ -161,12 +161,10 @@ export function SettlementSheet({
                 <Row label="Weekly labour bill" paise={shown.labourBillPaise} />
                 <Row label="Outstanding advance" paise={shown.outstandingAdvancePaise} />
                 <div className="my-2 space-y-1.5 border-y border-border py-2">
-                  <Label>Advance adjustment (₹)</Label>
-                  <Input
-                    type="number"
-                    min={0}
-                    value={adjRupees}
-                    onChange={(e) => setAdjRupees(e.target.value)}
+                  <Label>Advance adjustment</Label>
+                  <MoneyInput
+                    value={adjPaiseRaw}
+                    onValueChange={setAdjPaise}
                     placeholder="0"
                   />
                   <p className="text-xs text-foreground-subtle">

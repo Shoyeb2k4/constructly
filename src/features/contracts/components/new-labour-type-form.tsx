@@ -25,7 +25,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { toPaise } from "@/lib/money";
+import { MoneyInput } from "@/components/patterns/money-input";
 import { useHierarchyMutations } from "@/features/labor/hooks";
 import type { CategoryWithSubs, LabourSubcategory } from "@/features/labor/types";
 
@@ -47,7 +47,7 @@ export function NewLabourTypeForm({
   const [categoryId, setCategoryId] = React.useState(categories[0]?.id ?? NEW_TRADE);
   const [newTrade, setNewTrade] = React.useState("");
   const [name, setName] = React.useState("");
-  const [rate, setRate] = React.useState("");
+  const [ratePaise, setRatePaise] = React.useState<number | null>(null);
   const [busy, setBusy] = React.useState(false);
 
   const makingTrade = categoryId === NEW_TRADE;
@@ -65,11 +65,11 @@ export function NewLabourTypeForm({
         name: name.trim(),
         // The COMPANY default — a starting point for everyone. An agreement's
         // own rate is set separately and never overwrites this.
-        dailyRatePaise: rate.trim() ? toPaise(Number(rate) || 0) : null,
+        dailyRatePaise: ratePaise,
       });
       onCreated(sub);
       setName("");
-      setRate("");
+      setRatePaise(null);
       setNewTrade("");
     } catch {
       // The mutation's own toast already explained it (duplicate name, etc.).
@@ -125,14 +125,13 @@ export function NewLabourTypeForm({
           />
         </div>
         <div className="space-y-1.5">
-          <Label htmlFor="new-type-rate">Company default (₹/day)</Label>
-          <Input
+          <Label htmlFor="new-type-rate">Company default</Label>
+          <MoneyInput
             id="new-type-rate"
-            type="number"
-            min={0}
-            value={rate}
-            onChange={(e) => setRate(e.target.value)}
-            placeholder="e.g. 900"
+            value={ratePaise}
+            onValueChange={setRatePaise}
+            placeholder="900"
+            suffix="/ day"
           />
         </div>
       </div>

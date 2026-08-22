@@ -15,6 +15,7 @@
  * same shared taxonomy — reusable by every other contractor tomorrow.
  */
 
+import { MoneyInput } from "@/components/patterns/money-input";
 import * as React from "react";
 import Link from "next/link";
 import { Loader2, Plus, Settings2 } from "lucide-react";
@@ -27,10 +28,8 @@ import {
   SheetFooter,
 } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { MoneyText } from "@/components/patterns/money-text";
-import { toPaise, toRupees } from "@/lib/money";
 import { cn } from "@/lib/utils";
 import { useCategories } from "@/features/labor/hooks";
 import { useCan } from "@/features/rbac/permission-context";
@@ -42,8 +41,12 @@ import { NewLabourTypeForm } from "./new-labour-type-form";
 /** Today in the browser's timezone, as YYYY-MM-DD. */
 const todayISO = () => new Date().toLocaleDateString("en-CA");
 
-/** A user's override of one row. Absent = whatever the agreement already says. */
-type Draft = { selected: boolean; rate: string };
+/**
+ * A user's override of one row. Absent = whatever the agreement already says.
+ * The rate is held in paise, the same unit the server stores, so nothing in
+ * this sheet ever divides money to display it or multiplies it back to save.
+ */
+type Draft = { selected: boolean; ratePaise: number | null };
 
 export function ManageScopeSheet({
   open,
@@ -94,7 +97,7 @@ export function ManageScopeSheet({
         selected: !!existing,
         // An unticked row suggests the company default rather than demanding a
         // number; a ticked one shows what this agreement currently pays.
-        rate: String(toRupees(existing ? existing.currentRatePaise : (companyDefaultPaise ?? 0)) || ""),
+        ratePaise: existing ? existing.currentRatePaise : companyDefaultPaise,
       };
     },
     [drafts, inScope],
@@ -125,7 +128,7 @@ export function ManageScopeSheet({
         const override = drafts[sub.id];
         if (!override) continue; // untouched rows can't be changes
         const existing = inScope.get(sub.id);
-        const ratePaise = override.rate.trim() ? toPaise(Number(override.rate) || 0) : 0;
+        const ratePaise = override.ratePaise ?? 0;
         if (override.selected && !existing) toAdd.push({ subId: sub.id, ratePaise });
         else if (!override.selected && existing) toRemove.push(existing);
       }
@@ -237,17 +240,14 @@ export function ManageScopeSheet({
                           </div>
                         ) : (
                           <div className="flex shrink-0 items-center gap-1">
-                            <span className="text-xs text-foreground-subtle">₹</span>
-                            <Input
-                              type="number"
-                              min={0}
-                              value={d.rate}
-                              onChange={(e) =>
-                                setDraft(sub.id, { selected: true, rate: e.target.value }, d)
+                            <MoneyInput
+                              value={d.ratePaise}
+                              onValueChange={(paise) =>
+                                setDraft(sub.id, { selected: true, ratePaise: paise }, d)
                               }
                               placeholder="rate"
                               aria-label={`${sub.name} agreement rate per day`}
-                              className="h-8 w-24 text-sm"
+                              className="h-8 w-28 text-sm"
                             />
                             <span className="text-xs text-foreground-subtle">/day</span>
                           </div>
@@ -283,10 +283,7 @@ export function ManageScopeSheet({
                 // user overrides it for this agreement.
                 setDrafts((d) => ({
                   ...d,
-                  [sub.id]: {
-                    selected: true,
-                    rate: String(toRupees(sub.dailyRatePaise ?? 0) || ""),
-                  },
+                  [sub.id]: { selected: true, ratePaise: sub.dailyRatePaise ?? null },
                 }));
               }}
             />

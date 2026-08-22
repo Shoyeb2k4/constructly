@@ -23,7 +23,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { MoneyText } from "@/components/patterns/money-text";
-import { toPaise } from "@/lib/money";
+import { MoneyInput } from "@/components/patterns/money-input";
 import { milestoneCoverage } from "../milestones";
 import { useCreateMilestonesBulk } from "../hooks";
 import type { Contract, CreateMilestoneInput } from "../types";
@@ -61,7 +61,7 @@ export function BulkMilestonesSheet({
   const bulk = useCreateMilestonesBulk();
   const [prefix, setPrefix] = React.useState("Slab");
   const [count, setCount] = React.useState("6");
-  const [rupees, setRupees] = React.useState("");
+  const [valuePaiseRaw, setValuePaise] = React.useState<number | null>(null);
 
   const [wasOpen, setWasOpen] = React.useState(false);
   if (wasOpen !== open) {
@@ -69,12 +69,12 @@ export function BulkMilestonesSheet({
     if (open) {
       setPrefix("Slab");
       setCount("6");
-      setRupees("");
+      setValuePaise(null);
     }
   }
 
   const n = Math.min(Math.max(0, Math.floor(Number(count) || 0)), MAX_COUNT);
-  const valuePaise = rupees.trim() ? toPaise(Number(rupees) || 0) : 0;
+  const valuePaise = valuePaiseRaw ?? 0;
   const rows =
     n > 0 && valuePaise > 0 && prefix.trim()
       ? buildBulkMilestones({
@@ -136,14 +136,12 @@ export function BulkMilestonesSheet({
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="bulk-value">Value each (₹)</Label>
-              <Input
+              <Label htmlFor="bulk-value">Value each</Label>
+              <MoneyInput
                 id="bulk-value"
-                type="number"
-                min={0}
-                value={rupees}
-                onChange={(e) => setRupees(e.target.value)}
-                placeholder="1000000"
+                value={valuePaiseRaw}
+                onValueChange={setValuePaise}
+                placeholder="10,00,000"
               />
             </div>
           </div>

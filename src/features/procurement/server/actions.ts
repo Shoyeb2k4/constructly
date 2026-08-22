@@ -834,6 +834,16 @@ export async function deletePurchaseOrder(id: string): Promise<void> {
   if (!hasPermission(user, "purchase_orders.edit_all") && po.project.pmId !== user.id) {
     throw new Error("FORBIDDEN");
   }
+  // An order that has been paid against is no longer just a document. Deleting
+  // it takes the ordered value out of the budget and out of every report while
+  // the payments survive with their PO link nulled (schema: SetNull) — so the
+  // money stays but what it bought does not, and "still owed" stops meaning
+  // anything. Payments have no reversal yet, so the order has to stand.
+  // See features/governance/delete-policy.ts.
+  const paidAgainst = await prisma.vendorPayment.count({
+    where: { companyId: user.company.id, purchaseOrderId: po.id },
+  });
+  if (paidAgainst > 0) throw new Error("PO_HAS_PAYMENTS");
   await prisma.$transaction([
     prisma.purchaseOrder.delete({ where: { id, companyId: user.company.id } }),
     prisma.activityLog.create({
@@ -936,32 +946,38 @@ export async function createPayment(input: CreatePaymentInput): Promise<VendorPa
   }
 }
 
-export async function deletePayment(id: string): Promise<void> {
+/**
+ * Vendor payments are immutable once recorded.
+ *
+ * This used to hard-delete the row. That quietly destroyed cash movement: the
+ * Payments centre, the Cash movement report and every "paid against orders"
+ * figure read `vendorPayment`, so removing one made money that had genuinely
+ * left the company disappear from the record of it — with only an activity-log
+ * line left behind, and no way to tell an erroneous entry from a real payment
+ * that was erased.
+ *
+ * Contractor instruments solve this with reversal: the row stays, marked
+ * reversed, excluded from active totals, reason recorded. Vendor payments have
+ * no such concept yet — a deliberate, reported gap — so until they do, the safe
+ * answer is to refuse rather than to destroy. Correction happens where the
+ * payment was recorded.
+ *
+ * Kept as a function, rather than removed, so a caller gets this explanation
+ * instead of a missing export.
+ */
+export async function deletePayment(id: string): Promise<never> {
+  // Still permission-gated and still company-scoped: an unauthorised caller
+  // learns nothing about whether the payment exists.
   const user = await requirePermission("payments.delete");
   const row = await prisma.vendorPayment.findFirst({
     where: { id, companyId: user.company.id },
-    select: { id: true, vendorId: true, projectId: true, amountPaise: true, project: { select: { pmId: true } } },
+    select: { id: true, project: { select: { pmId: true } } },
   });
   if (!row) throw new Error("NOT_FOUND");
-  // Ownership scope: broad payments.view_all deletes any; otherwise only payments
-  // on the caller's assigned projects.
   if (!hasPermission(user, "payments.view_all") && row.project.pmId !== user.id) {
     throw new Error("FORBIDDEN");
   }
-  await prisma.$transaction([
-    prisma.vendorPayment.delete({ where: { id } }),
-    prisma.activityLog.create({
-      data: {
-        companyId: user.company.id,
-        actorId: user.id,
-        action: "payment.deleted",
-        entityType: "vendor_payment",
-        entityId: id,
-        summary: "Deleted a vendor payment",
-        meta: { vendorId: row.vendorId, projectId: row.projectId, amountPaise: Number(row.amountPaise) },
-      },
-    }),
-  ]);
+  throw new Error("VENDOR_PAYMENT_IMMUTABLE");
 }
 
 /* ── Project-aware views ─────────────────────────────────────────────── */

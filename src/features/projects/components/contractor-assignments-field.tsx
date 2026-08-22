@@ -11,10 +11,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { MoneyInput } from "@/components/patterns/money-input";
 import { useContractors } from "@/features/contractors/hooks";
 import { useCategories } from "@/features/labor/hooks";
-import { toPaise, toRupees } from "@/lib/money";
 import type { ProjectContractorInput } from "../types";
 
 /** Agreement-rate units (project-level ₹/sq.ft etc. — display only, not billed). */
@@ -23,14 +22,6 @@ const RATE_UNITS = [
   { value: "lumpsum", label: "lump sum" },
 ];
 
-/** Rupees for an input (blank for 0/undefined so the placeholder shows). */
-const rupeeValue = (paise: number | null | undefined) =>
-  paise != null && paise > 0 ? String(toRupees(paise)) : "";
-/** Parse a rupee input back to integer paise (blank → 0). */
-const parsePaise = (v: string) => {
-  const n = Number(v);
-  return v.trim() === "" || !Number.isFinite(n) ? 0 : toPaise(n);
-};
 
 /**
  * Contractor-first labour config for a project (the owner's mental model):
@@ -147,22 +138,13 @@ export function ContractorAssignmentsField({
               {/* Optional project agreement rate (₹/sq.ft) — display only. */}
               <div className="flex items-center gap-2">
                 <span className="w-24 shrink-0 text-xs text-foreground-subtle">Contract rate</span>
-                <div className="flex flex-1 items-center gap-1 rounded-md border border-border px-2">
-                  <span className="text-xs text-foreground-subtle">₹</span>
-                  <Input
-                    type="number"
-                    min={0}
-                    inputMode="decimal"
+                <div className="flex-1">
+                  <MoneyInput
                     placeholder="optional"
                     aria-label="Contract agreement rate"
-                    className="h-8 border-0 px-1 shadow-none focus-visible:ring-0"
-                    value={rupeeValue(row.contractRatePaise)}
-                    onChange={(e) =>
-                      setContractor(i, {
-                        contractRatePaise: e.target.value.trim() === "" ? null : parsePaise(e.target.value),
-                        contractRateUnit: row.contractRateUnit ?? "sqft",
-                      })
-                    }
+                    className="h-8"
+                    value={row.contractRatePaise ?? null}
+                    onValueChange={(paise) => setContractor(i, { contractRatePaise: paise })}
                   />
                 </div>
                 <Select
@@ -221,17 +203,13 @@ export function ContractorAssignmentsField({
                             )}
                           </SelectContent>
                         </Select>
-                        <div className="flex w-32 shrink-0 items-center gap-1 rounded-md border border-border px-2">
-                          <span className="text-xs text-foreground-subtle">₹</span>
-                          <Input
-                            type="number"
-                            min={0}
-                            inputMode="decimal"
+                        <div className="w-36 shrink-0">
+                          <MoneyInput
                             placeholder="rate"
                             aria-label="Day rate"
-                            className="h-8 border-0 px-1 shadow-none focus-visible:ring-0"
-                            value={rupeeValue(lr.ratePaise)}
-                            onChange={(e) => setRate(i, j, { ratePaise: parsePaise(e.target.value) })}
+                            className="h-8"
+                            value={lr.ratePaise || null}
+                            onValueChange={(paise) => setRate(i, j, { ratePaise: paise ?? 0 })}
                           />
                           <span className="text-[10px] text-foreground-subtle">/day</span>
                         </div>

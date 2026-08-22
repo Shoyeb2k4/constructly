@@ -1,0 +1,23 @@
+{
+	"appId": "in.co.constructly.app",
+	"appName": "Constructly",
+	"webDir": "mobile/dist",
+	"ios": {
+		"contentInset": "always"
+	},
+	"server": {
+		"iosScheme": "capacitor",
+		"androidScheme": "https"
+	},
+	"packageClassList": [
+		"SecureStorage",
+		"AppPlugin",
+		"CAPBrowserPlugin",
+		"CAPCameraPlugin",
+		"FilesystemPlugin",
+		"KeyboardPlugin",
+		"PreferencesPlugin",
+		"SharePlugin",
+		"StatusBarPlugin"
+	]
+}

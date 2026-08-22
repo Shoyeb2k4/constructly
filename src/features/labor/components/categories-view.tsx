@@ -3,6 +3,7 @@
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useForm, Controller } from "react-hook-form";
+import { RupeeInput } from "@/components/patterns/money-input";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
   DndContext,
@@ -216,8 +217,20 @@ function SubcategoryDialog({
             {errors.name && <p className="text-xs text-danger-foreground">{errors.name.message}</p>}
           </div>
           <div className="space-y-1.5">
-            <Label>Day rate (₹, optional)</Label>
-            <Input type="number" min={0} step={50} placeholder="900" {...register("dailyRateRupees")} />
+            <Label>Day rate (optional)</Label>
+            <Controller
+              control={control}
+              name="dailyRateRupees"
+              render={({ field }) => (
+                <RupeeInput
+                  value={field.value as number | undefined}
+                  onValueChange={field.onChange}
+                  onBlur={field.onBlur}
+                  placeholder="900"
+                  suffix="/ day"
+                />
+              )}
+            />
             <p className="text-xs text-foreground-subtle">
               Used to estimate labour cost (rate × headcount). Historical records keep their snapshot.
             </p>
