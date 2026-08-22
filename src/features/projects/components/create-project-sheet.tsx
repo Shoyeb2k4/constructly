@@ -2,7 +2,9 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { useForm, Controller } from "react-hook-form";
+import { useForm, Controller, type Control } from "react-hook-form";
+import { MoneyInput } from "@/components/patterns/money-input";
+import { toPaise, toRupees } from "@/lib/money";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { X } from "lucide-react";
 import {
@@ -28,6 +30,42 @@ import { useCreateProject, useManagers } from "../hooks";
 import type { ProjectContractorInput } from "../types";
 import { Field } from "./field";
 import { ContractorAssignmentsField, cleanAssignments } from "./contractor-assignments-field";
+
+/**
+ * Bridges a react-hook-form RUPEE field to MoneyInput, which speaks paise.
+ *
+ * The schemas here coerce rupees and convert on submit, so the form's meaning is
+ * left alone; only the control changes. Empty stays `undefined` rather than 0,
+ * so an optional budget is still distinguishable from a budget of nothing.
+ */
+function RupeeField({
+  control,
+  name,
+  placeholder,
+}: {
+  control: Control<ProjectFormValues>;
+  name: "budgetRupees" | "contractValueRupees" | "procurementBudgetRupees";
+  placeholder?: string;
+}) {
+  return (
+    <Controller
+      control={control}
+      name={name}
+      render={({ field }) => (
+        <MoneyInput
+          placeholder={placeholder}
+          value={
+            typeof field.value === "number" && Number.isFinite(field.value)
+              ? toPaise(field.value)
+              : null
+          }
+          onValueChange={(paise) => field.onChange(paise == null ? undefined : toRupees(paise))}
+          onBlur={field.onBlur}
+        />
+      )}
+    />
+  );
+}
 
 export function CreateProjectSheet({
   open,
@@ -135,16 +173,19 @@ export function CreateProjectSheet({
             </div>
 
             <div className="grid grid-cols-2 gap-4">
-              <Field label="Budget (₹)" error={errors.budgetRupees?.message}>
-                <Input type="number" min={0} step={1000} {...register("budgetRupees")} />
+              <Field label="Budget" error={errors.budgetRupees?.message}>
+                <RupeeField control={control} name="budgetRupees" placeholder="50,00,000" />
               </Field>
-              <Field label="Contract value (₹)" error={errors.contractValueRupees?.message}>
-                <Input type="number" min={0} step={1000} {...register("contractValueRupees")} />
+              <Field label="Contract value" error={errors.contractValueRupees?.message}>
+                <RupeeField control={control} name="contractValueRupees" placeholder="60,00,000" />
               </Field>
             </div>
 
-            <Field label="Procurement budget (₹, optional)" error={errors.procurementBudgetRupees?.message}>
-              <Input type="number" min={0} step={1000} placeholder="Dedicated materials budget" {...register("procurementBudgetRupees")} />
+            <Field
+              label="Procurement budget (optional)"
+              error={errors.procurementBudgetRupees?.message}
+            >
+              <RupeeField control={control} name="procurementBudgetRupees" placeholder="Dedicated materials budget" />
             </Field>
 
             <div className="grid grid-cols-2 gap-4">

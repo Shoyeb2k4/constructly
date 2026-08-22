@@ -20,7 +20,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { toPaise, toRupees } from "@/lib/money";
+import { MoneyInput } from "@/components/patterns/money-input";
 import { useProjects } from "@/features/projects/hooks";
 import { useContractors } from "@/features/contractors/hooks";
 import { useCreateContract, useUpdateContract } from "../hooks";
@@ -60,7 +60,7 @@ export function ContractFormSheet({
   const [scope, setScope] = React.useState("");
   const [quantity, setQuantity] = React.useState("");
   const [unit, setUnit] = React.useState("");
-  const [amountRupees, setAmountRupees] = React.useState("");
+  const [amountPaiseRaw, setAmountPaise] = React.useState<number | null>(null);
   const [startDate, setStartDate] = React.useState("");
   const [endDate, setEndDate] = React.useState("");
   const [notes, setNotes] = React.useState("");
@@ -78,14 +78,15 @@ export function ContractFormSheet({
       setUnit(contract?.unit ?? "");
       // Editing shows the ORIGINAL agreed value; the amount field is disabled
       // in edit mode because value changes go through an amendment.
-      setAmountRupees(contract ? String(toRupees(contract.originalAmountPaise)) : "");
+      // Paise straight through — no rupee string in between to round.
+      setAmountPaise(contract ? contract.originalAmountPaise : null);
       setStartDate(contract?.startDate ?? "");
       setEndDate(contract?.expectedCompletionDate ?? "");
       setNotes(contract?.notes ?? "");
     }
   }
 
-  const amountPaise = amountRupees.trim() ? toPaise(Number(amountRupees) || 0) : 0;
+  const amountPaise = amountPaiseRaw ?? 0;
   const pending = create.isPending || update.isPending;
   const canSave =
     !!title.trim() && (isEdit || amountPaise > 0) && !!ctorId && !!projId && !pending;
@@ -179,13 +180,11 @@ export function ContractFormSheet({
             </div>
           </div>
           <div className="space-y-1.5">
-            <Label>Contract amount (₹)</Label>
-            <Input
-              type="number"
-              min={0}
-              value={amountRupees}
-              onChange={(e) => setAmountRupees(e.target.value)}
-              placeholder="e.g. 6000000"
+            <Label>Contract amount</Label>
+            <MoneyInput
+              value={amountPaiseRaw}
+              onValueChange={setAmountPaise}
+              placeholder="60,00,000"
               disabled={isEdit}
             />
             {isEdit && (

@@ -1,9 +1,9 @@
 "use client";
 
 import * as React from "react";
-import { useForm } from "react-hook-form";
+import { useForm, Controller } from "react-hook-form";
+import { RupeeInput } from "@/components/patterns/money-input";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Input } from "@/components/ui/input";
 import { toRupees } from "@/lib/money";
 import {
   budgetSectionSchema,
@@ -31,7 +31,7 @@ export function BudgetEditSheet({
 }) {
   const { update } = useProjectDetailActions(projectId);
   const {
-    register,
+    control,
     handleSubmit,
     reset,
     formState: { errors },
@@ -63,22 +63,48 @@ export function BudgetEditSheet({
       onSubmit={onSubmit}
       saving={update.isPending}
     >
-      <Field label="Total project budget (₹)" error={errors.budgetRupees?.message}>
-        <Input type="number" min={0} step={1000} autoFocus {...register("budgetRupees")} />
+      <Field label="Total project budget" error={errors.budgetRupees?.message}>
+        <Controller
+          control={control}
+          name="budgetRupees"
+          render={({ field }) => (
+            <RupeeInput
+              value={field.value as number | undefined}
+              onValueChange={field.onChange}
+              onBlur={field.onBlur}
+              autoFocus
+            />
+          )}
+        />
       </Field>
-      <Field label="Contract value (₹)" error={errors.contractValueRupees?.message}>
-        <Input type="number" min={0} step={1000} {...register("contractValueRupees")} />
+      <Field label="Contract value" error={errors.contractValueRupees?.message}>
+        <Controller
+          control={control}
+          name="contractValueRupees"
+          render={({ field }) => (
+            <RupeeInput
+              value={field.value as number | undefined}
+              onValueChange={field.onChange}
+              onBlur={field.onBlur}
+            />
+          )}
+        />
       </Field>
       <Field
-        label="Procurement budget (₹, optional)"
+        label="Procurement budget (optional)"
         error={errors.procurementBudgetRupees?.message}
       >
-        <Input
-          type="number"
-          min={0}
-          step={1000}
-          placeholder="Leave blank to unset"
-          {...register("procurementBudgetRupees")}
+        <Controller
+          control={control}
+          name="procurementBudgetRupees"
+          render={({ field }) => (
+            <RupeeInput
+              value={field.value as number | undefined}
+              onValueChange={field.onChange}
+              onBlur={field.onBlur}
+              placeholder="Leave blank to unset"
+            />
+          )}
         />
       </Field>
     </SectionEditSheet>

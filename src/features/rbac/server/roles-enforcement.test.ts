@@ -55,17 +55,20 @@ describe("updateRole — protected roles + manage_permissions", () => {
     expect(h.prisma.companyRole.update).not.toHaveBeenCalled();
   });
 
-  it("allows editing a SYSTEM role — templates are now customisable", async () => {
+  it("refuses to edit a BUILT-IN role, even for a full-access caller", async () => {
+    // Built-in roles are read-only templates. `reconcile-rbac.ts` rewrites them
+    // on every Constructly update, so an edit here would be silently discarded
+    // later — the trap Phase 8 found. Enforced on the SERVER, not by hiding the
+    // button, so a direct call cannot get around it.
     h.user = u([...ALL_PERMISSIONS]);
-    h.prisma.companyRole.findFirst
-      .mockResolvedValueOnce({ id: "r1", isSystem: true, isOwner: false, permissions: [] }) // the role
-      .mockResolvedValueOnce(null); // no name clash
-    h.prisma.companyRole.update.mockResolvedValue({
-      id: "r1", key: "admin", name: "Renamed", description: null,
-      isSystem: true, isOwner: false, permissions: [], _count: { users: 0 },
+    h.prisma.companyRole.findFirst.mockResolvedValueOnce({
+      id: "r1",
+      isSystem: true,
+      isOwner: false,
+      permissions: [],
     });
-    await expect(updateRole("r1", { name: "Renamed" })).resolves.toMatchObject({ name: "Renamed" });
-    expect(h.prisma.companyRole.update).toHaveBeenCalled();
+    await expect(updateRole("r1", { name: "Renamed" })).rejects.toThrow("BUILT_IN_ROLE");
+    expect(h.prisma.companyRole.update).not.toHaveBeenCalled();
   });
 
   it("editing permissions requires roles.manage_permissions", async () => {

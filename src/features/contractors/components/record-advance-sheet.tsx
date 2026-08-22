@@ -21,7 +21,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { MoneyText } from "@/components/patterns/money-text";
 import { cn } from "@/lib/utils";
-import { toPaise } from "@/lib/money";
+import { MoneyInput } from "@/components/patterns/money-input";
 import { useContractorProfile } from "@/features/contracts/hooks";
 import { scopedAdvanceBlockedReason } from "@/features/contracts/agreement-actions";
 import { useRecordAdvance } from "../hooks";
@@ -77,7 +77,8 @@ export function RecordAdvanceSheet({
   const { data: profile } = useContractorProfile(contractorId);
 
   const [date, setDate] = React.useState(todayISO());
-  const [rupees, setRupees] = React.useState("");
+  // Null until something is entered, so "not filled in" stays distinct from ₹0.
+  const [amountPaiseRaw, setAmountPaise] = React.useState<number | null>(null);
   const [notes, setNotes] = React.useState("");
   const [scope, setScope] = React.useState<ScopeChoice>("GENERAL");
   const [projectId, setProjectId] = React.useState<string | null>(null);
@@ -88,7 +89,7 @@ export function RecordAdvanceSheet({
     setKey(open);
     if (open) {
       setDate(todayISO());
-      setRupees("");
+      setAmountPaise(null);
       setNotes("");
       setScope("GENERAL");
       setProjectId(null);
@@ -135,7 +136,8 @@ export function RecordAdvanceSheet({
   const chosenProject = projects.find((p) => p.id === projectId) ?? null;
   const chosenAgreement = agreements.find((a) => a.id === contractId) ?? null;
 
-  const amountPaise = rupees.trim() ? toPaise(Number(rupees) || 0) : 0;
+  // Integer paise throughout — MoneyInput never hands back a string.
+  const amountPaise = amountPaiseRaw ?? 0;
   const scopeReady =
     scope === "GENERAL" ||
     (scope === "PROJECT" && !!chosenProject) ||
@@ -189,14 +191,15 @@ export function RecordAdvanceSheet({
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="advance-amount">Amount (₹)</Label>
-            <Input
+            <Label htmlFor="advance-amount">Amount</Label>
+            <MoneyInput
               id="advance-amount"
-              type="number"
-              min={0}
-              value={rupees}
-              onChange={(e) => setRupees(e.target.value)}
-              placeholder="e.g. 100000"
+              // The RAW value, not the `?? 0` used for arithmetic below: an
+              // empty field must read as empty and show its placeholder, not
+              // as a zero the user has to delete before typing.
+              value={amountPaiseRaw}
+              onValueChange={setAmountPaise}
+              placeholder="1,00,000"
               autoFocus
             />
           </div>

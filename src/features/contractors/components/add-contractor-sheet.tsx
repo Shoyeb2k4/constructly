@@ -12,7 +12,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { toPaise } from "@/lib/money";
+import { MoneyInput } from "@/components/patterns/money-input";
 import { useCreateContractor, useUpdateContractor } from "../hooks";
 import { describeDuplicates, type DuplicateMatch } from "../lifecycle";
 import type { Contractor } from "../types";
@@ -51,7 +51,7 @@ export function AddContractorSheet({
 
   const [name, setName] = React.useState("");
   const [phone, setPhone] = React.useState("");
-  const [openingRupees, setOpeningRupees] = React.useState("");
+  const [openingPaise, setOpeningPaise] = React.useState<number | null>(null);
   // Look-alikes the server found. A QUESTION, not a refusal: two different crews
   // can share a name, so the user confirms and we retry with allowDuplicate.
   const [duplicates, setDuplicates] = React.useState<DuplicateMatch[]>([]);
@@ -63,7 +63,7 @@ export function AddContractorSheet({
     setKey(target);
     setName(contractor?.name ?? "");
     setPhone(contractor?.phone ?? "");
-    setOpeningRupees("");
+    setOpeningPaise(null);
     setDuplicates([]);
   }
 
@@ -81,7 +81,7 @@ export function AddContractorSheet({
       );
       return;
     }
-    const opening = openingRupees.trim() ? toPaise(Number(openingRupees) || 0) : undefined;
+    const opening = openingPaise ?? undefined;
     create.mutate(
       { name: name.trim(), phone: phone.trim() || null, openingAdvancePaise: opening, allowDuplicate },
       {
@@ -118,12 +118,10 @@ export function AddContractorSheet({
             <Input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+91 …" inputMode="tel" />
           </Field>
           {!editing && (
-            <Field label="Opening advance (₹)" hint="Optional — an advance already paid before using the app.">
-              <Input
-                type="number"
-                min={0}
-                value={openingRupees}
-                onChange={(e) => setOpeningRupees(e.target.value)}
+            <Field label="Opening advance" hint="Optional — an advance already paid before using the app.">
+              <MoneyInput
+                value={openingPaise}
+                onValueChange={setOpeningPaise}
                 placeholder="0"
               />
             </Field>

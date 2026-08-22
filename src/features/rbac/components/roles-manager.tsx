@@ -95,10 +95,11 @@ export function RolesManager() {
   const selected = roles.find((r) => r.id === selectedId) ?? roles[0] ?? null;
   const isOwnerRole = !!selected?.isOwner;
   const isSystemRole = !!selected && selected.isSystem && !selected.isOwner;
-  // Only the Owner role is locked (implicit all-access). System templates + custom
-  // roles are editable, given the manage-permissions grant.
-  const editable = !!selected && !isOwnerRole && canManagePerms;
-  const canEditMeta = !!selected && !isOwnerRole && canEditName;
+  // Built-in roles are read-only templates: `reconcile-rbac.ts` rewrites them on
+  // every Constructly update, so an edit here would be quietly discarded later.
+  // Only CUSTOM roles are editable. The server enforces the same rule.
+  const editable = !!selected && !selected.isSystem && !isOwnerRole && canManagePerms;
+  const canEditMeta = !!selected && !selected.isSystem && !isOwnerRole && canEditName;
   const canDeleteSelected = !!selected && !selected.isSystem && !selected.isOwner && canDelete;
 
   // The permissions the current admin may grant (no privilege escalation).
@@ -289,7 +290,7 @@ export function RolesManager() {
                   ) : selected.isSystem ? (
                     <>
                       <Badge variant="neutral">Built-in</Badge>
-                      <Badge variant="warning">Reset by updates</Badge>
+                      <Badge variant="outline">Managed by Constructly</Badge>
                     </>
                   ) : (
                     <Badge variant="outline">Custom</Badge>
@@ -306,9 +307,23 @@ export function RolesManager() {
               </div>
               <div className="flex shrink-0 items-center gap-1.5">
                 {canCreate && (
-                  <Button variant="ghost" size="sm" onClick={() => duplicate.mutate(selected.id)} disabled={duplicate.isPending}>
+                  <Button
+                    // On a built-in role this is the ONLY way to customise, so
+                    // it leads rather than hiding among ghost buttons.
+                    variant={selected.isSystem ? "primary" : "ghost"}
+                    size="sm"
+                    onClick={() =>
+                      duplicate.mutate(selected.id, {
+                        // Reveal the copy. Duplicating and staying on the
+                        // read-only original looks like nothing happened —
+                        // and on a built-in role the copy IS the point.
+                        onSuccess: (created) => setSelectedId(created.id),
+                      })
+                    }
+                    disabled={duplicate.isPending}
+                  >
                     <Copy className="size-4" />
-                    Duplicate
+                    {selected.isSystem ? "Duplicate to customise" : "Duplicate"}
                   </Button>
                 )}
                 {canDeleteSelected && (
@@ -416,15 +431,15 @@ export function RolesManager() {
               )}
 
               {isSystemRole && (
-                <Callout tone="attention" title="This is a built-in role, managed by Constructly">
+                <Callout tone="info" title="Built-in role, managed by Constructly">
                   <p>
-                    You can tailor it, and your changes take effect immediately. But a
-                    Constructly update that revises the built-in roles will reset this one
-                    back to its template — including anything you changed here.
+                    Its permissions are maintained by Constructly and may change when new
+                    features are added, so they cannot be edited here — an edit would be
+                    replaced by the next update.
                   </p>
                   <p className="mt-1">
-                    For changes you need to keep, <strong>Duplicate</strong> this role and
-                    edit the copy. Custom roles are never touched by an update.
+                    To build on it, use <strong>Duplicate to customise</strong>. The copy
+                    belongs to your company and is never changed by an update.
                   </p>
                 </Callout>
               )}
@@ -471,10 +486,14 @@ export function RolesManager() {
                           <button
                             key={a.key}
                             type="button"
-                            role="checkbox"
-                            aria-checked={on}
+                            // A read-only template exposes FACTS, not controls.
+                            // Announcing an untickable checkbox tells a screen
+                            // reader user to do something the server forbids.
+                            role={editable ? "checkbox" : undefined}
+                            aria-checked={editable ? on : undefined}
+                            aria-disabled={!editable || undefined}
                             disabled={locked}
-                            onClick={() => togglePerm(a.key)}
+                            onClick={editable ? () => togglePerm(a.key) : undefined}
                             className={cn(
                               "group flex flex-col items-start gap-1.5 rounded-lg border px-3 py-2.5 text-left text-sm transition-all",
                               on
@@ -523,7 +542,7 @@ export function RolesManager() {
                               >
                                 {SCOPE_LABEL[meta.scope]}
                               </span>
-                              {ungrantable && !on && (
+                              {ungrantable && !on && editable && (
                                 <span className="flex items-center gap-1 text-[10px] text-foreground-subtle">
                                   <Lock className="size-3" aria-hidden />
                                   You do not hold this yourself

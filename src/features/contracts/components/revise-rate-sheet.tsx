@@ -31,11 +31,11 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
+import { MoneyInput } from "@/components/patterns/money-input";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { MoneyText } from "@/components/patterns/money-text";
 import { formatDate } from "@/features/projects/format";
-import { toPaise, toRupees } from "@/lib/money";
 import { useRateRevisions, useSetScopeRate } from "../hooks";
 import { effectiveRateOn, rateBands, supersedesOn, validateRateRevision } from "../rates";
 import type { Contract, ScopeItem } from "../types";
@@ -73,7 +73,7 @@ export function ReviseRateSheet({
   const { data: revisions = [] } = useRateRevisions(item.id);
   const setRate = useSetScopeRate();
 
-  const [rupees, setRupees] = React.useState("");
+  const [ratePaiseRaw, setRatePaise] = React.useState<number | null>(null);
   const [effectiveFrom, setEffectiveFrom] = React.useState(todayISO());
   const [reason, setReason] = React.useState("");
 
@@ -83,7 +83,7 @@ export function ReviseRateSheet({
   if (wasOpen !== open) {
     setWasOpen(open);
     if (open) {
-      setRupees(String(toRupees(item.currentRatePaise)));
+      setRatePaise(item.currentRatePaise);
       setEffectiveFrom(todayISO());
       setReason("");
     }
@@ -91,7 +91,7 @@ export function ReviseRateSheet({
 
   // Same idiom as the amendment and scope sheets: blank means "not entered yet",
   // which is different from zero (which validateRateRevision rejects by name).
-  const ratePaise = rupees.trim() ? toPaise(Number(rupees) || 0) : null;
+  const ratePaise = ratePaiseRaw;
   const today = todayISO();
 
   /** The rate that applies on the proposed date TODAY — what is being replaced. */
@@ -162,12 +162,14 @@ export function ReviseRateSheet({
           </p>
 
           <div className="space-y-1.5">
-            <Label htmlFor="revise-rate">New rate (₹ per {item.rateUnit})</Label>
-            <Input
+            <Label htmlFor="revise-rate">New rate</Label>
+            <MoneyInput
               id="revise-rate"
-              inputMode="decimal"
-              value={rupees}
-              onChange={(e) => setRupees(e.target.value)}
+              value={ratePaiseRaw}
+              onValueChange={setRatePaise}
+              // The unit belongs beside the number, never inside it — the value
+              // is money and stays parseable as money.
+              suffix={`per ${item.rateUnit}`}
               autoFocus
             />
           </div>

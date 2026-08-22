@@ -13,6 +13,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Field } from "@/components/patterns/field";
+import { MoneyInput } from "@/components/patterns/money-input";
 import { Callout } from "@/components/patterns/callout";
 import {
   Select,
@@ -21,7 +22,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { formatPaiseCompact, toPaise } from "@/lib/money";
+import { formatPaiseCompact, toPaise, toRupees } from "@/lib/money";
 import { useProjects } from "@/features/projects/hooks";
 import { paymentFormSchema, paymentFormToInput, type PaymentFormValues } from "../schema";
 import { PAYMENT_MODE_LABEL, PAYMENT_MODES } from "../constants";
@@ -180,8 +181,28 @@ function PaymentDialogInner({
           </Field>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-            <Field label="Amount ₹" required error={errors.amountRupees?.message}>
-              <Input type="number" step="0.01" min={0} placeholder="50,000" {...register("amountRupees")} />
+            <Field label="Amount" required error={errors.amountRupees?.message}>
+              {/* The form still speaks RUPEES, because the schema coerces and
+                  converts. MoneyInput speaks paise, so the two are bridged here
+                  rather than by changing what the schema means. */}
+              <Controller
+                control={control}
+                name="amountRupees"
+                render={({ field }) => (
+                  <MoneyInput
+                    placeholder="50,000"
+                    value={
+                      typeof field.value === "number" && Number.isFinite(field.value)
+                        ? toPaise(field.value)
+                        : null
+                    }
+                    onValueChange={(paise) =>
+                      field.onChange(paise == null ? undefined : toRupees(paise))
+                    }
+                    onBlur={field.onBlur}
+                  />
+                )}
+              />
             </Field>
             <Field label="Mode">
               <Controller

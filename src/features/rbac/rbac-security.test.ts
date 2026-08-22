@@ -310,47 +310,126 @@ describe("the custom-role workflow", () => {
 
 /* ── Reconciliation safety ───────────────────────────────────────────── */
 
+describe("built-in roles are read-only templates", () => {
+  it("refuses an edit to a built-in role", async () => {
+    const roles = await demoRolesRepository.listRoles();
+    const admin = roles.find((r) => r.key === "admin")!;
+    // Previously allowed, and that was the trap: reconciliation would discard
+    // the edit on the next Constructly update, silently.
+    await expect(
+      demoRolesRepository.updateRole(admin.id, { permissions: ["projects.view"] }),
+    ).rejects.toThrow("BUILT_IN_ROLE");
+
+    const after = (await demoRolesRepository.listRoles()).find((r) => r.key === "admin")!;
+    expect(after.permissions).toHaveLength(94);
+  });
+
+  it("refuses a rename of a built-in role too", async () => {
+    const roles = await demoRolesRepository.listRoles();
+    const pm = roles.find((r) => r.key === "project_manager")!;
+    await expect(
+      demoRolesRepository.updateRole(pm.id, { name: "Site Lead" }),
+    ).rejects.toThrow("BUILT_IN_ROLE");
+  });
+
+  it("offers Duplicate as the way to customise, and the copy IS editable", async () => {
+    const roles = await demoRolesRepository.listRoles();
+    const admin = roles.find((r) => r.key === "admin")!;
+    const copy = await demoRolesRepository.duplicateRole(admin.id);
+
+    expect(copy.isSystem).toBe(false);
+    await expect(
+      demoRolesRepository.updateRole(copy.id, { permissions: ["projects.view"] }),
+    ).resolves.toBeTruthy();
+    const edited = (await demoRolesRepository.listRoles()).find((r) => r.id === copy.id)!;
+    expect(edited.permissions).toEqual(["projects.view"]);
+  });
+
+  it("never turns a duplicate of Owner into another implicit Owner", async () => {
+    const roles = await demoRolesRepository.listRoles();
+    const owner = roles.find((r) => r.isOwner)!;
+    const copy = await demoRolesRepository.duplicateRole(owner.id);
+    // It carries today's full permission list, but is NOT an owner role — so it
+    // will not silently gain permissions added by a future release, and it can
+    // be edited and deleted like any other custom role.
+    expect(copy.isOwner).toBe(false);
+    expect(copy.isSystem).toBe(false);
+    expect(copy.permissions.length).toBe(ALL_PERMISSIONS.length);
+    await expect(demoRolesRepository.updateRole(copy.id, { name: "Deputy" })).resolves.toBeTruthy();
+  });
+});
+
 describe("reconciliation only touches built-in roles", () => {
-  it("leaves a custom role's name and permissions untouched", async () => {
+  /**
+   * What `prisma/reconcile-rbac.ts` actually does: `updateMany` where
+   * `isSystem: true`, writing the code preset. It goes straight to the database
+   * and does NOT pass through `updateRole`, so the read-only guard does not
+   * apply to it — which is the whole point. Custom roles are excluded by that
+   * where-clause, and this proves it.
+   */
+  const reconcile = () => {
+    const KEY = "constructly.demo.companyRoles.v1";
+    const rows = JSON.parse(localStorage.getItem(KEY) ?? "[]") as {
+      key: string | null;
+      isSystem: boolean;
+      isOwner: boolean;
+      name: string;
+      description: string | null;
+      permissions: string[];
+    }[];
+    for (const def of SYSTEM_ROLES) {
+      const target = rows.find((r) => r.key === def.key && r.isSystem);
+      if (!target) continue;
+      target.name = def.name;
+      target.description = def.description;
+      target.permissions = def.isOwner ? [] : [...def.permissions];
+    }
+    localStorage.setItem(KEY, JSON.stringify(rows));
+  };
+
+  it("leaves a custom role byte-for-byte unchanged", async () => {
     const custom = await demoRolesRepository.createRole({
       name: "Project Accounts Reviewer",
+      description: "Reads money, changes nothing.",
       permissions: ["projects.view", "payments.view"],
     });
+    const before = JSON.stringify(custom);
 
-    // What `prisma/reconcile-rbac.ts` does: rewrite every SYSTEM role to its
-    // preset. Custom roles are excluded by `isSystem: true` in the where clause.
-    const reconcile = async () => {
-      for (const def of SYSTEM_ROLES) {
-        const rows = await demoRolesRepository.listRoles();
-        const target = rows.find((r) => r.key === def.key);
-        if (!target || !target.isSystem || target.isOwner) continue;
-        await demoRolesRepository.updateRole(target.id, {
-          name: def.name,
-          description: def.description,
-          permissions: [...def.permissions],
-        });
-      }
-    };
-    await reconcile();
+    reconcile();
 
     const after = (await demoRolesRepository.listRoles()).find((r) => r.id === custom.id)!;
+    expect(JSON.stringify(after)).toBe(before);
     expect(after.name).toBe("Project Accounts Reviewer");
+    expect(after.description).toBe("Reads money, changes nothing.");
     expect(after.permissions.sort()).toEqual(["payments.view", "projects.view"]);
     expect(after.isSystem).toBe(false);
   });
 
-  it("DOES overwrite an edited built-in role — which is why the UI warns", async () => {
-    const roles = await demoRolesRepository.listRoles();
-    const admin = roles.find((r) => r.key === "admin")!;
-    await demoRolesRepository.updateRole(admin.id, { permissions: ["projects.view"] });
-    expect((await demoRolesRepository.listRoles()).find((r) => r.key === "admin")!.permissions).toHaveLength(1);
+  it("returns a built-in role to its canonical template", async () => {
+    // Simulate drift arriving from anywhere (an older release, a direct write)
+    // and confirm reconciliation restores the preset.
+    const KEY = "constructly.demo.companyRoles.v1";
+    await demoRolesRepository.listRoles();
+    const rows = JSON.parse(localStorage.getItem(KEY)!);
+    const admin = rows.find((r: { key: string }) => r.key === "admin");
+    admin.permissions = ["projects.view"];
+    localStorage.setItem(KEY, JSON.stringify(rows));
 
-    // Reconciliation restores the template, discarding the customisation. This
-    // is real, current behaviour — the Roles screen now says so rather than
-    // letting an admin discover it after an update.
-    const def = systemRole("admin");
-    await demoRolesRepository.updateRole(admin.id, { permissions: [...def.permissions] });
-    expect((await demoRolesRepository.listRoles()).find((r) => r.key === "admin")!.permissions).toHaveLength(94);
+    reconcile();
+
+    const after = (await demoRolesRepository.listRoles()).find((r) => r.key === "admin")!;
+    expect(after.permissions).toHaveLength(94);
+  });
+
+  it("keeps a custom role safe across a reload", async () => {
+    const custom = await demoRolesRepository.createRole({
+      name: "Reviewer",
+      permissions: ["reports.view", "reports.view_operational"],
+    });
+    reconcile();
+    // A fresh read, as a page reload would do.
+    const after = (await demoRolesRepository.listRoles()).find((r) => r.id === custom.id)!;
+    expect(after.permissions.sort()).toEqual(["reports.view", "reports.view_operational"]);
   });
 });
 

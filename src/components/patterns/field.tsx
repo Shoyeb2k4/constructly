@@ -22,6 +22,31 @@ import * as React from "react";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 
+/**
+ * The wiring Field would otherwise only be able to give a DIRECT child.
+ *
+ * Cloning covers `<Field><Input/></Field>`, but not the shape react-hook-form
+ * pushes people towards — `<Field><Controller render={…}/></Field>` — where the
+ * clone lands on a component that renders no DOM and drops what it was given.
+ * The field then LOOKS labelled and is not, which is the exact failure Field
+ * was built to end.
+ *
+ * So the same wiring is published on a context, and a control nested at any
+ * depth can claim it when nothing was passed to it explicitly. One control per
+ * Field claims it; a second one needs its own `aria-label`.
+ */
+export interface FieldWiring {
+  id: string;
+  describedBy?: string;
+  invalid?: boolean;
+}
+
+const FieldContext = React.createContext<FieldWiring | null>(null);
+
+export function useFieldWiring(): FieldWiring | null {
+  return React.useContext(FieldContext);
+}
+
 export function Field({
   label,
   hint,
@@ -45,33 +70,47 @@ export function Field({
   const errorId = error ? `${id}-error` : undefined;
   const describedBy = [hintId, errorId].filter(Boolean).join(" ") || undefined;
 
-  const control = React.cloneElement(children as React.ReactElement<Record<string, unknown>>, {
-    id,
-    "aria-describedby": describedBy,
-    "aria-invalid": error ? true : undefined,
-  });
+  const control = React.cloneElement(
+    children as React.ReactElement<Record<string, unknown>>,
+    {
+      id,
+      "aria-describedby": describedBy,
+      "aria-invalid": error ? true : undefined,
+    },
+  );
+
+  const wiring = React.useMemo<FieldWiring>(
+    () => ({ id, describedBy, invalid: !!error }),
+    [id, describedBy, error],
+  );
 
   return (
-    <div className={cn("space-y-1.5", className)}>
-      <Label htmlFor={id}>
-        {label}
-        {required && (
-          <span className="ml-0.5 text-danger" aria-hidden="true">
-            *
-          </span>
+    <FieldContext.Provider value={wiring}>
+      <div className={cn("space-y-1.5", className)}>
+        <Label htmlFor={id}>
+          {label}
+          {required && (
+            <span className="ml-0.5 text-danger" aria-hidden="true">
+              *
+            </span>
+          )}
+        </Label>
+        {control}
+        {hint && (
+          <p id={hintId} className="text-xs text-foreground-subtle">
+            {hint}
+          </p>
         )}
-      </Label>
-      {control}
-      {hint && (
-        <p id={hintId} className="text-xs text-foreground-subtle">
-          {hint}
-        </p>
-      )}
-      {error && (
-        <p id={errorId} role="alert" className="text-xs font-medium text-danger">
-          {error}
-        </p>
-      )}
-    </div>
+        {error && (
+          <p
+            id={errorId}
+            role="alert"
+            className="text-xs font-medium text-danger"
+          >
+            {error}
+          </p>
+        )}
+      </div>
+    </FieldContext.Provider>
   );
 }

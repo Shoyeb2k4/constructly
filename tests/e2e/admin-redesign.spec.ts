@@ -143,7 +143,7 @@ test("Owner reads as full access, never as zero permissions", async ({ page }) =
   await expect(page.getByText(/\b0 of 97 permissions/)).toHaveCount(0);
 });
 
-test("a built-in role admits an update will reset it", async ({ page }) => {
+test("a built-in role is read-only and offers Duplicate instead", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await open(page, "roles");
 
@@ -151,12 +151,35 @@ test("a built-in role admits an update will reset it", async ({ page }) => {
   await page.waitForTimeout(600);
 
   await expect(page.getByText("Built-in").first()).toBeVisible();
-  await expect(page.getByText("Reset by updates").first()).toBeVisible();
-  await expect(page.getByText(/will reset this one back to its template/).first()).toBeVisible();
-  // And it points at the safe alternative rather than just warning.
-  await expect(page.getByText(/Duplicate/).first()).toBeVisible();
+  await expect(page.getByText("Managed by Constructly").first()).toBeVisible();
+  await expect(page.getByText(/cannot be edited here/).first()).toBeVisible();
+
+  // Duplicate is the way to customise, and it leads.
+  await expect(page.getByRole("button", { name: /Duplicate to customise/ })).toBeVisible();
+
+  // Read-only means no checkboxes to tick — the permissions are shown as facts.
+  await expect(page.getByRole("checkbox")).toHaveCount(0);
+  // …and no save bar, because there is nothing to save.
+  await expect(page.getByRole("button", { name: /^Save/ })).toHaveCount(0);
+
   // Admin's real size, matching production.
   await expect(page.getByText(/94 of 97 permissions/).first()).toBeVisible();
+});
+
+test("duplicating a built-in role produces an editable custom copy", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await open(page, "roles");
+
+  await page.getByRole("button", { name: /^Admin/ }).first().click();
+  await page.waitForTimeout(600);
+  await page.getByRole("button", { name: /Duplicate to customise/ }).click();
+  await page.waitForTimeout(1500);
+
+  // The copy is custom, editable, and carries Admin's grants to start from.
+  await expect(page.getByText("Custom").first()).toBeVisible();
+  await expect(page.getByText(/94 of 97 permissions/).first()).toBeVisible();
+  expect(await page.getByRole("checkbox").count()).toBeGreaterThan(0);
+  await expect(page.getByRole("button", { name: /Delete/ }).first()).toBeVisible();
 });
 
 test("every permission explains itself, its scope and its impact", async ({ page }) => {

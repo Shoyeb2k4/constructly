@@ -1,25 +1,13 @@
-import * as React from "react";
-import { Label } from "@/components/ui/label";
-import { cn } from "@/lib/utils";
-
-/** Labelled form field with an optional inline error — shared by the create
- *  sheet and the per-section detail edit sheets. */
-export function Field({
-  label,
-  error,
-  children,
-  className,
-}: {
-  label: string;
-  error?: string;
-  children: React.ReactNode;
-  className?: string;
-}) {
-  return (
-    <div className={cn("space-y-1.5", className)}>
-      <Label>{label}</Label>
-      {children}
-      {error && <p className="text-xs text-danger-foreground">{error}</p>}
-    </div>
-  );
-}
+/**
+ * This module used to hold a second `Field`.
+ *
+ * It rendered a `<Label>` with no `htmlFor` next to a control with no id — the
+ * exact shape `components/patterns/field` was written to end, reintroduced
+ * locally. Every field in the project create sheet and the per-section edit
+ * sheets was therefore unlabelled, which no test caught: the label was on
+ * screen, just not attached to anything.
+ *
+ * Keeping the module (rather than rewriting five files' imports) means the
+ * fix lands everywhere at once and there is one Field again.
+ */
+export { Field } from "@/components/patterns/field";
