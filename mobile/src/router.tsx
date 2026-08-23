@@ -9,6 +9,7 @@ import { paymentsVisibilityFor } from "@/features/payments/visibility";
 import { DashboardView } from "@/features/dashboard/components/dashboard-view";
 import { ProjectsView } from "@/features/projects/components/projects-view";
 import { ProjectDetailView } from "@/features/projects/components/detail/project-detail-view";
+import { LaborSectionHeader } from "@/features/labor/components/labor-section-header";
 import { AttendanceView } from "@/features/labor/components/attendance/attendance-view";
 import { CategoriesView } from "@/features/labor/components/categories-view";
 import { LaborSummaryView } from "@/features/labor/components/labor-summary-view";
@@ -77,12 +78,23 @@ export function MobileRoutes({ user }: { user: SessionUser }) {
         }
       />
 
-      {/* ── Labour ───────────────────────────────────────────────────── */}
+      {/* ── Labour ───────────────────────────────────────────────────────
+          Every /labor route is wrapped in <LaborSection>, which is this
+          router's equivalent of src/app/(app)/labor/layout.tsx.
+
+          WITHOUT IT THE SECTION HAS NO NAVIGATION. `LaborSectionHeader`
+          renders the Attendance / Contractors / Summary tabs on list screens
+          (and a breadcrumb on a record). Nesting the routes but not the layout
+          left Contractors and Summary registered, reachable by URL, and
+          unreachable by any tap — which is how it shipped to a phone, where the
+          contractor module simply could not be opened. */}
       <Route
         path="/labor"
         element={
           <Guard need="attendance.view">
-            <AttendanceView />
+            <LaborSection>
+              <AttendanceView />
+            </LaborSection>
           </Guard>
         }
       />
@@ -90,7 +102,9 @@ export function MobileRoutes({ user }: { user: SessionUser }) {
         path="/labor/categories"
         element={
           <Guard need="labour.view">
-            <CategoriesView />
+            <LaborSection>
+              <CategoriesView />
+            </LaborSection>
           </Guard>
         }
       />
@@ -98,15 +112,31 @@ export function MobileRoutes({ user }: { user: SessionUser }) {
         path="/labor/summary"
         element={
           <Guard need="attendance.view">
-            <LaborSummaryView />
+            <LaborSection>
+              <LaborSummaryView />
+            </LaborSection>
           </Guard>
         }
       />
       {/* Deliberately ungated, matching the web route: the view gates each of
           its own actions on the permission that action's server function
           demands. */}
-      <Route path="/labor/contractors" element={<ContractorsView />} />
-      <Route path="/labor/contractors/:id" element={<ContractorDetail />} />
+      <Route
+        path="/labor/contractors"
+        element={
+          <LaborSection>
+            <ContractorsView />
+          </LaborSection>
+        }
+      />
+      <Route
+        path="/labor/contractors/:id"
+        element={
+          <LaborSection>
+            <ContractorDetail />
+          </LaborSection>
+        }
+      />
 
       {/* ── Vendors & procurement ────────────────────────────────────── */}
       <Route
@@ -236,6 +266,22 @@ function Report({ user, today }: { user: SessionUser; today: string }) {
       today={today}
       companyName={user.company.name}
     />
+  );
+}
+
+/**
+ * The mobile counterpart of `src/app/(app)/labor/layout.tsx`.
+ *
+ * Same component, same spacing, so the section's chrome cannot drift between
+ * platforms. `LaborSectionHeader` decides for itself whether to show the tabs
+ * or a breadcrumb, based on the path.
+ */
+function LaborSection({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="space-y-6">
+      <LaborSectionHeader />
+      {children}
+    </div>
   );
 }
 
