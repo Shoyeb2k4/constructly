@@ -37,9 +37,13 @@ export function MobileRoutes({ user }: { user: SessionUser }) {
 
       <Route path="/projects" element={<ProjectsView />} />
 
-      {/* Registered, not yet ported. */}
+      {/* Registered, not yet ported. Every destination in src/config/nav.ts must
+          appear here: a route that is merely absent falls through to the
+          catch-all below and bounces the user back to the dashboard with no
+          explanation, which reads as a bug rather than as "not built yet". */}
       <Route path="/projects/:id" element={<NotPortedYet title="Project detail" />} />
       <Route path="/labor/*" element={<NotPortedYet title="Labour" />} />
+      <Route path="/payments/*" element={<NotPortedYet title="Payments" />} />
       <Route path="/procurement/*" element={<NotPortedYet title="Procurement" />} />
       <Route path="/vendors/*" element={<NotPortedYet title="Vendors" />} />
       <Route path="/reports/*" element={<NotPortedYet title="Reports" />} />

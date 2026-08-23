@@ -1,6 +1,7 @@
 import "server-only";
 import { requireUser } from "@/lib/auth/current-user";
 import * as projects from "@/features/projects/server/actions";
+import { gatherServerDashboard } from "@/features/dashboard/server/gather";
 import type {
   CreateProjectInput,
   ProjectContractorInput,
@@ -73,8 +74,21 @@ const sessionMethods: Record<string, RpcMethod> = {
   me: () => requireUser(),
 };
 
+/**
+ * The dashboard is the app's landing screen, so it is registered alongside
+ * projects rather than left for the later feature sweep.
+ *
+ * Read-only and argument-free: `gatherServerDashboard` derives the company and
+ * the owner flag from the resolved session itself, so a caller cannot ask for
+ * another tenant's overview by passing a different id — there is no id to pass.
+ */
+const dashboardMethods: Record<string, RpcMethod> = {
+  gather: () => gatherServerDashboard(),
+};
+
 const REGISTRY: Record<string, Record<string, RpcMethod>> = {
   session: sessionMethods,
+  dashboard: dashboardMethods,
   projects: projectMethods,
 };
 
