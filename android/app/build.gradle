@@ -1,0 +1,146 @@
+apply plugin: 'com.android.application'
+
+/* ── Release identity ────────────────────────────────────────────────────
+ * Read from version.properties rather than hard-coded here, so bumping a
+ * release is a one-line diff that cannot accidentally touch build logic.
+ */
+def versionProps = new Properties()
+def versionPropsFile = rootProject.file('version.properties')
+if (versionPropsFile.exists()) {
+    versionPropsFile.withInputStream { versionProps.load(it) }
+} else {
+    throw new GradleException("android/version.properties is missing — refusing to build an artifact with an unknown version.")
+}
+
+/* ── Signing material ────────────────────────────────────────────────────
+ * Resolved from, in priority order:
+ *
+ *   1. android/keystore.properties  — local developer machines. Gitignored.
+ *   2. environment variables        — CI, where the keystore is materialised
+ *                                     from a secret at build time.
+ *
+ * If NEITHER is present the release build is left UNSIGNED rather than being
+ * silently signed with the debug key. That is deliberate: a debug-signed
+ * "release" APK installs happily on a test phone and looks completely normal,
+ * but can never be updated by a real release and must never reach Play. Failing
+ * to produce a signed artifact is loud; shipping the wrong one is not.
+ *
+ * No password, alias or path is ever written into the build output or the
+ * console. See docs/android-signing.md.
+ */
+def keystoreProps = new Properties()
+def keystorePropsFile = rootProject.file('keystore.properties')
+if (keystorePropsFile.exists()) {
+    keystorePropsFile.withInputStream { keystoreProps.load(it) }
+}
+
+def resolveSigning = { ->
+    def storeFilePath = keystoreProps['storeFile'] ?: System.getenv('ANDROID_KEYSTORE_PATH')
+    def storePassword = keystoreProps['storePassword'] ?: System.getenv('ANDROID_KEYSTORE_PASSWORD')
+    def keyAlias = keystoreProps['keyAlias'] ?: System.getenv('ANDROID_KEY_ALIAS')
+    def keyPassword = keystoreProps['keyPassword'] ?: System.getenv('ANDROID_KEY_PASSWORD')
+
+    if (!storeFilePath || !storePassword || !keyAlias || !keyPassword) return null
+
+    def resolved = rootProject.file(storeFilePath)
+    if (!resolved.exists()) resolved = file(storeFilePath)
+    if (!resolved.exists()) {
+        throw new GradleException("Signing was configured but the keystore was not found at: ${storeFilePath}")
+    }
+
+    return [store: resolved, storePassword: storePassword, alias: keyAlias, keyPassword: keyPassword]
+}
+
+def signing = resolveSigning()
+
+android {
+    namespace = "in.co.constructly.app"
+    compileSdk = rootProject.ext.compileSdkVersion
+    defaultConfig {
+        applicationId "in.co.constructly.app"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        versionCode versionProps['versionCode'].toString().toInteger()
+        versionName versionProps['versionName'].toString()
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        aaptOptions {
+             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
+             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
+            ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+
+    signingConfigs {
+        if (signing != null) {
+            release {
+                storeFile signing.store
+                storePassword signing.storePassword
+                keyAlias signing.alias
+                keyPassword signing.keyPassword
+                // v2 is what actually signs this app: it is verified from
+                // API 24 up, which is our minSdk, so AGP correctly SKIPS v1
+                // (apksigner reports "v1 scheme: false" — that is expected, not
+                // a misconfiguration). v1 is left enabled only so that lowering
+                // minSdk below 24 would start producing it again rather than
+                // silently shipping an APK those devices cannot verify.
+                enableV1Signing true
+                enableV2Signing true
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            // Left off deliberately. The application logic lives in the
+            // JavaScript bundle, not in Java, so shrinking the thin Capacitor
+            // shell buys almost nothing while adding a class of release-only
+            // crashes (stripped plugin classes resolved reflectively) that
+            // never reproduce in debug.
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            if (signing != null) {
+                signingConfig signingConfigs.release
+            }
+        }
+    }
+}
+
+/* Says once, at configuration time, which signing identity this build will use.
+ * Prints no secret — only whether one was found and from where. */
+gradle.projectsEvaluated {
+    if (signing == null) {
+        logger.lifecycle("[constructly] No signing material found — `release` artifacts will be UNSIGNED. See docs/android-signing.md")
+    } else {
+        def source = keystorePropsFile.exists() ? "android/keystore.properties" : "environment"
+        logger.lifecycle("[constructly] Release signing configured from ${source} (alias hidden).")
+    }
+}
+
+repositories {
+    flatDir{
+        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
+    implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    implementation project(':capacitor-android')
+    testImplementation "junit:junit:$junitVersion"
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+    implementation project(':capacitor-cordova-android-plugins')
+}
+
+apply from: 'capacitor.build.gradle'
+
+try {
+    def servicesJSON = file('google-services.json')
+    if (servicesJSON.text) {
+        apply plugin: 'com.google.gms.google-services'
+    }
+} catch(Exception e) {
+    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+}

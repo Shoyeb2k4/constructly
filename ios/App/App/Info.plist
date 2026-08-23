@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CAPACITOR_DEBUG</key>
+	<string>$(CAPACITOR_DEBUG)</string>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+        <string>Constructly</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<!--
+		Export compliance, declared up front.
+
+		Constructly uses only HTTPS/TLS and the iOS Keychain — encryption
+		provided by the operating system, which is exempt. Declaring it here
+		means TestFlight stops asking the compliance question on every single
+		upload and holding the build until it is answered by hand.
+
+		If the app ever ships its OWN cryptography (custom ciphers, bundled
+		crypto libraries, encrypted local storage we implement ourselves), this
+		must be revisited — the exemption would no longer apply.
+	-->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<!--
+		Purpose strings for the file/photo attachment flow.
+
+		iOS TERMINATES an app that touches the camera or photo library without a
+		declared purpose string — it is a hard crash, not a denied permission.
+		These are required before the document/photo upload paths can be used on
+		a device, and the wording is what the user actually sees in the prompt,
+		so it names the real reason rather than a generic one.
+	-->
+	<key>NSCameraUsageDescription</key>
+	<string>Take photos of site progress, drawings and documents to attach to a project.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Attach existing site photos and documents to a project.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Save exported reports and site photos to your photo library.</string>
+	<!--
+		Custom URL scheme for the OAuth return leg only.
+
+		Google rejects `capacitor://localhost` as a redirect URI, so native
+		Google sign-in redirects to `in.co.constructly.app://auth/callback`,
+		which iOS routes back to this app. Must stay in sync with
+		MOBILE_URL_SCHEME in src/lib/mobile/auth-callback.ts and with the
+		redirect allow-list in Supabase Auth.
+
+		Password-reset emails deliberately do NOT use this scheme: mail clients
+		strip custom schemes, and those links must also work on another device.
+		They stay https and require Universal Links (Associated Domains + an
+		AASA file on the domain) — external configuration, not yet in place.
+	-->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>in.co.constructly.app.oauth</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>in.co.constructly.app</string>
+			</array>
+		</dict>
+	</array>
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+    <false/>
+    <key>UISceneConfigurations</key>
+    <dict>
+      <key>UIWindowSceneSessionRoleApplication</key>
+      <array>
+        <dict>
+            <key>UISceneConfigurationName</key>
+            <string>Default Configuration</string>
+            <key>UISceneDelegateClassName</key>
+            <string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>
+            <key>UISceneStoryboardFile</key>
+            <string>Main</string>
+        </dict>
+      </array>
+    </dict>
+	</dict>
+	<key>UILaunchStoryboardName</key>
+	<string>LaunchScreen</string>
+	<key>UIMainStoryboardFile</key>
+	<string>Main</string>
+	<key>UIRequiredDeviceCapabilities</key>
+	<array>
+		<string>armv7</string>
+	</array>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UIViewControllerBasedStatusBarAppearance</key>
+	<true/>
+</dict>
+</plist>

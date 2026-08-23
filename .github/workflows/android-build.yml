@@ -1,0 +1,245 @@
+name: Android build
+
+# Produces the Android release artifacts.
+#
+# SIGNING IS OPTIONAL AND DETECTED, NOT ASSUMED. With the four
+# ANDROID_KEYSTORE_* secrets present the job emits SIGNED artifacts ready for
+# device testing and Play upload. Without them it still builds — and says
+# clearly that the output is unsigned — so the pipeline is provably working
+# before the production key exists.
+#
+# This workflow NEVER publishes to Google Play. Uploading is a separate,
+# deliberate act.
+#
+# Nothing here writes to the repository.
+
+on:
+  workflow_dispatch:
+    inputs:
+      artifact:
+        description: "Which artifact to build"
+        type: choice
+        default: both
+        options: [apk, aab, both]
+  push:
+    branches: [feat/android-distribution]
+
+concurrency:
+  group: android-build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Release artifacts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    env:
+      NEXT_TELEMETRY_DISABLED: "1"
+      # Asserted against the built artifact below, so an accidental identity
+      # change fails CI instead of shipping quietly.
+      APPLICATION_ID: in.co.constructly.app
+
+      # Client-safe values ONLY. Every one of these is inlined into the mobile
+      # JS bundle and is therefore public by definition — the Supabase
+      # publishable key is designed to be shipped to clients. They are
+      # repository VARIABLES, not secrets, precisely so nothing here implies
+      # confidentiality.
+      #
+      # No server-only value (SUPABASE_SERVICE_ROLE_KEY, DATABASE_URL,
+      # DIRECT_URL, SUPABASE_DB_PASSWORD, AUTH_AUTOCONFIRM) is referenced
+      # anywhere in this file, and scripts/verify-mobile-bundle.mjs +
+      # scripts/verify-android-artifact.mjs independently fail the build if any
+      # of them reach the bundle or the APK.
+      NEXT_PUBLIC_SUPABASE_URL: ${{ vars.NEXT_PUBLIC_SUPABASE_URL || 'https://ci-placeholder.supabase.co' }}
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${{ vars.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || 'sb_publishable_ci_placeholder' }}
+      NEXT_PUBLIC_MOBILE_API_BASE: ${{ vars.NEXT_PUBLIC_MOBILE_API_BASE || 'https://ci-placeholder.invalid' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      # Runs before anything expensive: if signing material has been committed,
+      # the right response is to stop and rotate it, not to spend ten minutes
+      # building first.
+      - name: Reject committed signing material
+        run: node scripts/verify-no-signing-material.mjs
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      # AGP 8.13 / Gradle 8.14 run on JDK 17 or 21. NOT on 24+, where Gradle's
+      # embedded Groovy fails with "Unsupported class file major version".
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('android/**/*.gradle', 'android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: npm ci
+
+      # ── Toolchain diagnostics ──────────────────────────────────────────
+      # Captured before anything can fail, so a broken run still says which
+      # toolchain produced it. Nothing sensitive is printed.
+      - name: Inspect toolchain
+        run: |
+          set -euo pipefail
+          echo "── Node ──";   node --version
+          echo "── npm ──";    npm --version
+          echo "── Java ──";   java -version
+          echo "── Gradle ──"; (cd android && ./gradlew --version)
+          echo "── SDK ──";    echo "$ANDROID_HOME"
+
+      # ── Web layer ──────────────────────────────────────────────────────
+      # Uses the repository's own scripts rather than re-implementing them in
+      # YAML, so CI and local builds cannot drift apart.
+      - name: Build mobile SPA
+        run: npm run mobile:build
+
+      - name: Verify no server secrets in the bundle
+        run: npm run mobile:verify
+
+      - name: Capacitor sync (Android)
+        run: npx cap sync android
+
+      # The artifact is only as good as the backend it points at. A signed APK
+      # with the correct production URL still dies on launch with "Failed to
+      # fetch" if /api/mobile/** was never deployed there — which is exactly how
+      # the first real-device install failed. Reachable-but-wrong is a hard
+      # failure; unreachable or a CI placeholder is "cannot verify" and passes.
+      - name: Verify the backend can serve the mobile app
+        run: npm run verify:backend
+
+      # ── Signing ────────────────────────────────────────────────────────
+      # The keystore exists only for the life of this job, outside the workspace
+      # so it cannot be picked up by an artifact upload. `base64 -d` reads from
+      # an env var rather than an inline expression, so the secret is never part
+      # of a command line visible in a process listing.
+      - name: Configure signing
+        id: signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "${KEYSTORE_BASE64}" ]; then
+            echo "No ANDROID_KEYSTORE_BASE64 secret — artifacts will be UNSIGNED."
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          keystore="${RUNNER_TEMP}/upload.jks"
+          printf '%s' "${KEYSTORE_BASE64}" | base64 -d > "${keystore}"
+          # A truncated or mis-encoded secret produces a file that is not a
+          # keystore; find out now rather than during packaging.
+          if [ ! -s "${keystore}" ]; then
+            echo "::error::ANDROID_KEYSTORE_BASE64 decoded to an empty file."
+            exit 1
+          fi
+          echo "ANDROID_KEYSTORE_PATH=${keystore}" >> "$GITHUB_ENV"
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Build APK
+        if: ${{ inputs.artifact == 'apk' || inputs.artifact == 'both' || github.event_name == 'push' }}
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: node scripts/android-build.mjs apk
+
+      - name: Build AAB
+        if: ${{ inputs.artifact == 'aab' || inputs.artifact == 'both' || github.event_name == 'push' }}
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: node scripts/android-build.mjs aab
+
+      # ── Proof ──────────────────────────────────────────────────────────
+      - name: Verify artifacts carry no privileged material
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          for f in android/app/build/outputs/apk/release/*.apk android/app/build/outputs/bundle/release/*.aab; do
+            echo "── $f"
+            node scripts/verify-android-artifact.mjs "$f"
+          done
+
+      - name: Assert application identity and signing state
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          aapt2="$(find "$ANDROID_HOME/build-tools" -name aapt2 | sort -V | tail -1)"
+          want_signed="${{ steps.signing.outputs.signed }}"
+
+          # Signing is decided by INSPECTING the archive, never by its filename:
+          # Gradle marks an unsigned APK "-unsigned" but names an unsigned AAB
+          # exactly like a signed one, so a name check would wave through the
+          # very bundle Play rejects. A v1 JAR signature block in META-INF is
+          # present in both formats when signed.
+          check_signed() {
+            if unzip -Z1 "$1" | grep -qiE '^META-INF/[^/]+\.(RSA|DSA|EC)$'; then
+              echo signed
+            else
+              echo unsigned
+            fi
+          }
+
+          for apk in android/app/build/outputs/apk/release/*.apk; do
+            echo "── $apk"
+            "$aapt2" dump badging "$apk" | head -3
+            "$aapt2" dump badging "$apk" | grep -q "package: name='${APPLICATION_ID}'" || {
+              echo "::error::APK application id is not ${APPLICATION_ID}"; exit 1; }
+            # targetSdk gates Play acceptance; assert it rather than trusting the
+            # gradle file to still say what it said last month.
+            "$aapt2" dump badging "$apk" | grep -q "targetSdkVersion:'36'" || {
+              echo "::error::APK targetSdkVersion is not 36"; exit 1; }
+          done
+
+          for artifact in android/app/build/outputs/apk/release/*.apk android/app/build/outputs/bundle/release/*.aab; do
+            state="$(check_signed "$artifact")"
+            echo "── $artifact: $state"
+            if [ "$state" = "unsigned" ]; then
+              if [ "$want_signed" = "true" ]; then
+                echo "::error::Signing secrets were present but $artifact is unsigned."
+                exit 1
+              fi
+              echo "::warning::$artifact is UNSIGNED — cannot be installed or uploaded. See docs/android-signing.md"
+            else
+              case "$artifact" in
+                *.apk)
+                  apksigner="$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -1)"
+                  "$apksigner" verify --print-certs "$artifact" | grep -E "Signer #1 certificate (DN|SHA-256)" ;;
+                *.aab)
+                  keytool -printcert -jarfile "$artifact" | grep -E "Owner|SHA256" ;;
+              esac
+            fi
+          done
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: constructly-android-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            android/app/build/outputs/apk/release/*.apk
+            android/app/build/outputs/bundle/release/*.aab
+            android/app/build/outputs/**/mapping.txt

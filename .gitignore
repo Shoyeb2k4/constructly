@@ -53,5 +53,32 @@ next-env.d.ts
 /test-results
 /playwright-report
 
+# ── Mobile / Capacitor ────────────────────────────────────────────────
+# Vite output for the native app. This is Capacitor's webDir; CI rebuilds it
+# before `cap sync`, so it must never be committed.
+/mobile/dist/
+
+# Simulator/CI runtime output. Screenshots and logs are CI artifacts, never
+# repository content; DerivedData and the SPM clone cache are build caches.
+/artifacts/
+/.spm-cache/
+
+# Apple signing material. These live on your machine and, transiently, on the
+# macOS runner — never in git. `scripts/verify-no-signing-material.mjs` fails
+# CI if any of them is tracked anyway.
+*.p12
+*.pfx
+*.cer
+*.certSigningRequest
+*.mobileprovision
+*.provisionprofile
+AuthKey_*.p8
+
+# The native iOS project IS tracked — do NOT ignore /ios. Its generated and
+# machine-local artifacts (build output, synced web assets, DerivedData, the
+# generated capacitor.config.json) are excluded by `ios/.gitignore`, which
+# Capacitor owns and regenerates. Keep that as the single source of truth.
+*.xcuserstate
+
 .vercel
 .env*

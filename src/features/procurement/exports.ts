@@ -6,6 +6,7 @@ import { toRupees } from "@/lib/money";
 import { createBrandedPdf } from "@/features/branding/pdf";
 import { PO_STATUS_LABEL, PO_PAYMENT_STATUS_LABEL } from "./constants";
 import type { PurchaseOrderListItem } from "./types";
+import { saveWorkbook, saveGeneratedFile } from "@/lib/exports";
 
 // jsPDF's built-in fonts lack the ₹ glyph — use "Rs." in the PDF export.
 const rs = (paise: number) => `Rs. ${toRupees(paise).toLocaleString("en-IN")}`;
@@ -44,32 +45,24 @@ function numericRow(p: PurchaseOrderListItem): (string | number)[] {
   ];
 }
 
-function download(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-}
-
 function csvCell(v: string | number): string {
   const s = String(v);
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
-export function exportPOsCsv(items: PurchaseOrderListItem[]) {
+export async function exportPOsCsv(items: PurchaseOrderListItem[]) {
   const lines = [HEADERS, ...items.map(numericRow)].map((r) => r.map(csvCell).join(","));
-  download(new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" }), `purchase-orders-${stamp()}.csv`);
+  await saveGeneratedFile(
+    new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" }),
+    `purchase-orders-${stamp()}.csv`,
+  );
 }
 
-export function exportPOsExcel(items: PurchaseOrderListItem[]) {
+export async function exportPOsExcel(items: PurchaseOrderListItem[]) {
   const aoa: (string | number)[][] = [[...HEADERS], ...items.map(numericRow)];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), "Purchase orders");
-  XLSX.writeFile(wb, `purchase-orders-${stamp()}.xlsx`);
+  await saveWorkbook(wb, `purchase-orders-${stamp()}.xlsx`);
 }
 
 export async function exportPOsPdf(items: PurchaseOrderListItem[]) {

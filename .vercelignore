@@ -12,3 +12,21 @@ playwright-report
 test-results
 *.log
 scratchpad
+
+# Native shells. The Vercel build produces the WEB app only; the Capacitor
+# projects and the mobile SPA are built separately. Excluded so nothing here can
+# affect (or slow) a production web deploy.
+#
+# THE LEADING SLASH IS LOAD-BEARING. .vercelignore follows .gitignore matching,
+# where an unrooted pattern matches a directory of that name at ANY depth. Bare
+# `mobile` therefore also excluded `src/lib/mobile/` and — critically —
+# `src/app/api/mobile/`, the mobile RPC route. The result was a production
+# backend that had never once served /api/mobile/**, so the first APK installed
+# on a real phone died on launch: the CORS preflight hit a 404 page carrying no
+# Access-Control-Allow-Origin, and the WebView blocked the request.
+#
+# Nothing in the build reported it. The route simply was not in the upload.
+# src/app/api/mobile/deployment.test.ts now fails if an unrooted pattern can reach src/.
+/ios
+/mobile
+/android

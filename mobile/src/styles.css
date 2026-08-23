@@ -1,0 +1,46 @@
+/**
+ * The mobile app's stylesheet IS the web app's stylesheet — same design tokens,
+ * same Tailwind theme, no fork. Only iOS-specific chrome is added below.
+ */
+@import "../../src/app/globals.css";
+
+/* Tailwind v4 scans from this file's location by default; point it at the real
+   component tree so utilities used only in src/ are not tree-shaken away. */
+@source "../../src";
+@source "../src";
+
+/* ── iOS native chrome ───────────────────────────────────────────────────
+   The WebView renders edge to edge under viewport-fit=cover. These variables
+   expose the physical insets so the shell can keep the topbar clear of the
+   notch / Dynamic Island and keep bottom controls clear of the home indicator.
+   Zero on every non-notched device and in the browser, so this is inert on
+   the web preview. */
+:root {
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  /* Rubber-band scrolling on the document makes a WebView feel like a browser;
+     individual scroll areas inside the app still scroll normally. */
+  overscroll-behavior-y: none;
+  /* Long-press text selection is a desktop affordance; inputs re-enable it. */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+input,
+textarea,
+[contenteditable="true"] {
+  -webkit-user-select: text;
+  user-select: text;
+}

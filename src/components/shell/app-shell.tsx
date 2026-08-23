@@ -41,7 +41,20 @@ export function AppShell({
           onMenu={() => setMobileOpen(true)}
         />
         <main id="main-content" tabIndex={-1} className="flex-1 overflow-y-auto">
-          <div className="mx-auto w-full max-w-[1200px] px-4 py-8 sm:px-6 lg:px-8">
+          {/*
+            Safe-area padding keeps content clear of the home indicator and the
+            rounded corners on notched iPhones. `env(safe-area-inset-*)` is 0 in
+            a desktop browser and on non-notched devices, so this is inert on
+            the web — no separate layout, no branching.
+          */}
+          <div
+            className="mx-auto w-full max-w-[1200px] px-4 py-8 sm:px-6 lg:px-8"
+            style={{
+              paddingLeft: "max(1rem, env(safe-area-inset-left))",
+              paddingRight: "max(1rem, env(safe-area-inset-right))",
+              paddingBottom: "calc(2rem + env(safe-area-inset-bottom))",
+            }}
+          >
             {children}
           </div>
         </main>
