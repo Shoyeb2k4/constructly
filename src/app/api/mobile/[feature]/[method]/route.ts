@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { lookupRpcMethod } from "../../registry";
+import { mobileCorsHeaders, mobilePreflightHeaders } from "../../cors";
 import { bearerTokenFrom, verifyBearerToken } from "@/lib/supabase/bearer";
 import { resolveSessionUser } from "@/lib/auth/current-user";
 import { runWithSession } from "@/lib/auth/request-context";
@@ -39,45 +40,64 @@ const ERROR_STATUS: Record<string, number> = {
   INVALID_RETENTION: 400,
 };
 
+/**
+ * CORS preflight.
+ *
+ * The native app is cross-origin by construction (see ../../cors.ts), and every
+ * RPC call sends `Authorization` + `Content-Type: application/json`, which
+ * forces a preflight. Without this handler Next answers 405 and the app cannot
+ * make a single successful call.
+ *
+ * Answers only for allowlisted origins; anything else gets a bare 204 with no
+ * CORS headers, which the browser correctly treats as "not permitted".
+ */
+export async function OPTIONS(request: Request) {
+  return new Response(null, {
+    status: 204,
+    headers: mobilePreflightHeaders(request.headers.get("origin")),
+  });
+}
+
 export async function POST(
   request: Request,
   ctx: { params: Promise<{ feature: string; method: string }> },
 ) {
   const { feature, method } = await ctx.params;
+  const cors = mobileCorsHeaders(request.headers.get("origin"));
 
   const fn = lookupRpcMethod(feature, method);
   // Unregistered names are indistinguishable from unknown routes — no probing
   // the server-action surface for what exists.
-  if (!fn) return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 });
+  if (!fn) return NextResponse.json({ error: "NOT_FOUND" }, { status: 404, headers: cors });
 
   let body: { args: unknown[] };
   try {
     body = bodySchema.parse(await request.json());
   } catch {
-    return NextResponse.json({ error: "BAD_REQUEST" }, { status: 400 });
+    return NextResponse.json({ error: "BAD_REQUEST" }, { status: 400, headers: cors });
   }
 
   // Demo mode has no real auth at all: getCurrentUser() already returns the
   // seeded demo owner, so nothing is injected and the actions resolve normally.
   if (isDemoMode) {
-    return dispatch(fn, body.args, `demo:${feature}.${method}`);
+    return dispatch(fn, body.args, `demo:${feature}.${method}`, cors);
   }
 
   const token = bearerTokenFrom(request.headers.get("authorization"));
   if (!token) {
-    return NextResponse.json({ error: "UNAUTHENTICATED" }, { status: 401 });
+    return NextResponse.json({ error: "UNAUTHENTICATED" }, { status: 401, headers: cors });
   }
 
   const authUserId = await verifyBearerToken(token);
   if (!authUserId) {
-    return NextResponse.json({ error: "UNAUTHENTICATED" }, { status: 401 });
+    return NextResponse.json({ error: "UNAUTHENTICATED" }, { status: 401, headers: cors });
   }
 
   // Rate-limit per authenticated user, not per token — refreshing a token must
   // not reset the budget.
   const limited = rateLimit(`mobile-rpc:${authUserId}`, RPC_LIMIT);
   if (!limited.ok) {
-    return NextResponse.json({ error: "RATE_LIMITED" }, { status: 429 });
+    return NextResponse.json({ error: "RATE_LIMITED" }, { status: 429, headers: cors });
   }
 
   // A verified auth user without an ACTIVE application row (not onboarded,
@@ -85,30 +105,31 @@ export async function POST(
   // web app applies in src/app/(app)/layout.tsx.
   const user = await resolveSessionUser(authUserId);
   if (!user) {
-    return NextResponse.json({ error: "NO_WORKSPACE" }, { status: 403 });
+    return NextResponse.json({ error: "NO_WORKSPACE" }, { status: 403, headers: cors });
   }
 
-  return runWithSession(user, () => dispatch(fn, body.args, `${feature}.${method}`));
+  return runWithSession(user, () => dispatch(fn, body.args, `${feature}.${method}`, cors));
 }
 
 async function dispatch(
   fn: (args: unknown[]) => Promise<unknown>,
   args: unknown[],
   scope: string,
+  cors: Record<string, string>,
 ): Promise<Response> {
   try {
     const data = await fn(args);
     // `data` may legitimately be undefined (void actions); normalise to null so
     // the response is always valid JSON.
-    return NextResponse.json({ data: data ?? null });
+    return NextResponse.json({ data: data ?? null }, { headers: cors });
   } catch (err) {
     const message = err instanceof Error ? err.message : "";
     const status = ERROR_STATUS[message];
-    if (status) return NextResponse.json({ error: message }, { status });
+    if (status) return NextResponse.json({ error: message }, { status, headers: cors });
 
     // Unexpected failures are logged server-side and reported opaquely, exactly
     // as Server Actions mask thrown errors in production.
     reportError(err, { scope: `mobile-rpc:${scope}` });
-    return NextResponse.json({ error: "INTERNAL" }, { status: 500 });
+    return NextResponse.json({ error: "INTERNAL" }, { status: 500, headers: cors });
   }
 }

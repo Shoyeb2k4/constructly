@@ -24,7 +24,11 @@
     "mobile:dev:demo": "node scripts/mobile-dev-demo.mjs",
     "mobile:verify": "node scripts/verify-mobile-bundle.mjs",
     "mobile:sync": "npm run mobile:build && npm run mobile:verify && cap sync ios",
+    "mobile:sync:android": "npm run mobile:build && npm run mobile:verify && cap sync android",
     "mobile:sync:demo": "node scripts/mobile-sync-demo.mjs",
+    "android:apk": "node scripts/android-build.mjs apk",
+    "android:aab": "node scripts/android-build.mjs aab",
+    "android:verify": "node scripts/verify-android-artifact.mjs",
     "verify:oauth": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/verify-oauth-provider.mjs",
     "verify:signing": "node scripts/verify-no-signing-material.mjs",
     "assets:generate": "node scripts/generate-app-assets.mjs"

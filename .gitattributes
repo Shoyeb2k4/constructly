@@ -1,0 +1,9 @@
+# Gradle's wrapper script is executed by /bin/sh on Linux and macOS CI runners.
+# Git for Windows would otherwise check it out with CRLF endings, which makes
+# the shebang unparseable and fails every Android build outside Windows with a
+# bare "not found". Pin the whole Gradle wrapper to LF.
+android/gradlew text eol=lf
+gradlew        text eol=lf
+
+# Wrapper jar is binary.
+android/gradle/wrapper/gradle-wrapper.jar binary

@@ -52,10 +52,17 @@ captures/
 # Comment next line if keeping position of elements in Navigation Editor is relevant for you
 .idea/navEditor.xml
 
-# Keystore files
-# Uncomment the following lines if you do not want to check your keystore files in.
-#*.jks
-#*.keystore
+# Keystore files — ALWAYS ignored.
+# Signing material is production-critical and must never enter version control.
+# Losing control of the upload key means an attacker can publish builds as us;
+# committing it also means it can never be rotated out of the git history.
+# See docs/android-signing.md for where these actually live.
+*.jks
+*.keystore
+*.p12
+*.pepk
+keystore.properties
+signing.properties
 
 # External native build folder generated in Android Studio 2.2 and later
 .externalNativeBuild

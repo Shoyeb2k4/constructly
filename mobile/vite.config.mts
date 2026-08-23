@@ -27,8 +27,28 @@ const root = path.resolve(__dirname, "..");
  * loudly and legibly instead of shipping a mystery runtime error.
  * `scripts/verify-mobile-bundle.mjs` independently proves the outcome.
  */
+/**
+ * WHAT COUNTS AS SERVER CODE.
+ *
+ * Structural, not a list of filenames. This codebase's convention is that
+ * everything under a feature's `server/` directory is server-only, so that is
+ * what the barrier keys on — ANY module in a `server/` folder, plus the two
+ * legacy flat names that predate the convention.
+ *
+ * It used to enumerate `server/actions` and `server/gather` explicitly, and
+ * that is precisely how it broke: new server modules (contracts/amendments,
+ * contracts/reconciliation, contractors/advance-rescope, …) were added on the
+ * web side, matched nothing here, and were dragged whole into the mobile
+ * bundle — where their `import { prisma }` resolved to the empty stub and the
+ * build died on a missing export. A rule that has to be extended every time
+ * someone adds a file is a rule that will be out of date.
+ *
+ * Test files are excluded: they never enter the bundle, and stubbing them
+ * would only make a failure harder to read if one ever did.
+ */
 const SERVER_MODULE =
-  /[\\/](server[\\/]actions|server[\\/]gather|server-actions|upload-actions)(\.ts)?$/;
+  /[\\/](?:server[\\/][A-Za-z0-9_.-]+|server-actions|upload-actions)(\.ts)?$/;
+const SERVER_MODULE_EXCLUDE = /\.(test|spec)\.tsx?$/;
 
 /** `export async function foo(`, `export function foo(`, `export const foo =` */
 const EXPORT_PATTERNS = [
@@ -42,7 +62,7 @@ function serverStubPlugin(): Plugin {
     enforce: "pre",
     load(id: string) {
       const file = id.split("?")[0];
-      if (!SERVER_MODULE.test(file)) return null;
+      if (!SERVER_MODULE.test(file) || SERVER_MODULE_EXCLUDE.test(file)) return null;
 
       const names = new Set<string>();
       try {

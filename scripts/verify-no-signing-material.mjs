@@ -1,5 +1,5 @@
 /**
- * Refuse to let Apple signing material into the repository.
+ * Refuse to let code-signing material into the repository — Apple's and Android's.
  *
  * Signing assets are supposed to exist in exactly two places: your machine (or
  * Apple's servers), and transiently on the macOS runner during a build. They
@@ -44,6 +44,19 @@ const FORBIDDEN_ASSIGNMENTS = [
   /IOS_DEVELOPMENT_CERTIFICATE_PASSWORD\s*[=:]\s*["'][^"']{3,}/,
   /IOS_PROVISIONING_PROFILE_BASE64\s*[=:]\s*["']?[A-Za-z0-9+/]{40,}/,
   /KEYCHAIN_PASSWORD\s*[=:]\s*["'][^"']{3,}/,
+  // ── Android ──────────────────────────────────────────────────────────
+  // The upload key is the credential that says a build is ours. Committing
+  // it (or its password) means it can never be trusted again, and it cannot
+  // be un-published from git history.
+  /ANDROID_KEYSTORE_BASE64\s*[=:]\s*["']?[A-Za-z0-9+/]{40,}/,
+  /ANDROID_KEYSTORE_PASSWORD\s*[=:]\s*["'][^"']{3,}/,
+  /ANDROID_KEY_PASSWORD\s*[=:]\s*["'][^"']{3,}/,
+  /ANDROID_KEY_ALIAS\s*[=:]\s*["'][^"']{3,}/,
+  // Gradle reads these names out of android/keystore.properties, which is
+  // gitignored. Seeing one with a value in a TRACKED file means that file
+  // escaped the ignore rules.
+  /^\s*storePassword\s*=\s*\S+/m,
+  /^\s*keyPassword\s*=\s*\S+/m,
 ];
 
 /**
