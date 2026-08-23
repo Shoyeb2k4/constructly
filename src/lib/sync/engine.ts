@@ -1,6 +1,8 @@
 import { getDB } from "./db";
 import { getEntity } from "./registry";
 import type { SyncMutation, SyncOp, SyncResult } from "./types";
+import { isNativeClient, mobileApiBase } from "@/lib/mobile/platform";
+import { getAccessToken } from "@/lib/mobile/session";
 
 let seqCounter = 0;
 
@@ -58,9 +60,20 @@ export async function flush(): Promise<SyncResult> {
   const batch = await db.outbox.orderBy("clientSeq").toArray();
   if (batch.length === 0) return { applied: [], conflicts: [] };
 
-  const res = await fetch("/api/sync", {
+  // Two things differ inside Capacitor, and both are silent failures if missed:
+  //  - a relative "/api/sync" resolves against the WebView's own origin
+  //    (https://localhost), where no server exists;
+  //  - there are no cookies to authenticate with, so the session is presented
+  //    as a bearer token, exactly as the mobile RPC does.
+  // On the web both reduce to the original behaviour: empty base, no header.
+  const token = isNativeClient ? await getAccessToken() : null;
+
+  const res = await fetch(`${mobileApiBase}/api/sync`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
     body: JSON.stringify({
       mutations: batch.map((m) => ({
         clientUuid: m.clientUuid,

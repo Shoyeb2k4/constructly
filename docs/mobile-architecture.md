@@ -1,7 +1,9 @@
-# Mobile architecture (iOS / Capacitor)
+# Mobile architecture (Capacitor — iOS and Android)
 
-Status: **Phase 1 — scaffolding complete, one vertical slice proven.** Not signed,
-not on TestFlight, not compiled on macOS yet.
+Status: **all eight modules ported to the RPC transport; Android builds a
+release APK/AAB.** Not signed, not on Play, not yet exercised on a physical
+device — see [android-acceptance.md](./android-acceptance.md), which is the
+gate between here and a real tester.
 
 ## Why the web app cannot simply be exported
 
@@ -116,51 +118,106 @@ throw with an explanatory message rather than silently doing nothing.
 ## Workflow
 
 ```bash
-npm run mobile:dev:demo   # SPA on :5300 with fixtures — no backend needed
-npm run mobile:build      # → mobile/dist
-npm run mobile:verify     # secret scan of the built bundle
-npm run mobile:sync       # build + verify + cap sync ios
+npm run mobile:dev:demo      # SPA on :5300 with fixtures — no backend needed
+npm run mobile:build         # → mobile/dist
+npm run mobile:verify        # secret scan of the built bundle
+npm run mobile:sync          # build + verify + cap sync ios
+npm run mobile:sync:android  # build + verify + cap sync android
+
+npm run android:apk          # signed (or unsigned) release APK
+npm run android:aab          # release App Bundle for Play
+npm run android:verify       # secret scan of the built ARTIFACT
 ```
 
-Capacitor 8 uses **Swift Package Manager**, not CocoaPods — there is no
-`Podfile`, so `cap sync ios` completes fully on Windows.
+A non-demo mobile build requires `NEXT_PUBLIC_MOBILE_API_BASE` — the absolute
+origin of the deployed backend. The Vite config refuses to build without it,
+because a relative `/api/…` would resolve against the WebView's own origin,
+where no server exists, and every screen would fail on the device rather than in
+CI.
 
-## Phase 1 scope
+Capacitor 8 uses **Swift Package Manager**, not CocoaPods, so `cap sync ios`
+completes fully on Windows. `cap sync android` likewise needs no macOS.
 
-Registered over RPC: `session.me` and the whole `projects` feature. Mounted in
-the native router: Dashboard and Projects. Every other route is registered but
-renders an explicit placeholder. Adding a feature is a registry entry plus an
-`http-repository.ts` — no new architecture.
+## Scope
 
-## Known gaps before TestFlight
+Registered over RPC and mounted in the native router: **all eight modules** —
+Dashboard, Projects, Labour (attendance, categories, summary, contractors),
+Vendors, Procurement, Payments, Reports and Settings, plus `session.me`.
 
-**Authentication**
+That is 120 methods across 12 registry features, each forwarding to the same
+server function the web app invokes. Adding another is a registry entry plus a
+line in the feature's `http-repository.ts` — no new architecture.
 
-- Google OAuth uses `redirectTo: window.location.origin + "/auth/callback"`,
-  which is `capacitor://localhost` natively — Google rejects it. Needs
-  `@capacitor/browser` (ASWebAuthenticationSession), a registered custom scheme
-  in `CFBundleURLTypes`, an `@capacitor/app` `appUrlOpen` listener, and a
-  **client-side** PKCE exchange (the server route cannot hold the verifier).
-- Password-reset links must remain `https://` Universal Links (mail clients strip
-  custom schemes) → Associated Domains entitlement + an AASA file.
-  `/auth/confirm`'s `verifyOtp(token_hash)` flow is already cross-device safe.
-- Session storage falls back to WebView localStorage; move to
-  `@capacitor/preferences` backed by the Keychain.
+The pairing between the two halves is the one link the compiler cannot check:
+`rpcMethod("labor", "getSheet")` is two plain strings. `registry.test.ts` scans
+every `http-repository.ts` and asserts the registry resolves each pair, so a
+typo fails a test instead of returning 404 to a phone.
 
-**iPhone UI**
+## Cross-origin, and why it is not optional
 
-- No `env(safe-area-inset-*)` handling in shared components (only the mobile
-  shell adds it) — notch / home-indicator clipping.
-- Five tables hard-set `min-w-[560px]`–`min-w-[680px]` → forced horizontal scroll
-  at 390px.
-- `a.download` + `createObjectURL` (`features/procurement/exports.ts`,
-  `features/branding/pdf.ts`) is inert in WKWebView → needs
-  `@capacitor/filesystem` + `@capacitor/share`.
-- `<input type="file">` works but offers no camera capture → `@capacitor/camera`.
-- Toaster is bottom-right, colliding with the home indicator; the ⌘K command
-  palette has no touch entry point; four `group-hover:opacity-100` reveals are
-  invisible on touch.
+The native bundle is served by the platform WebView from its own origin —
+`capacitor://localhost` on iOS, `https://localhost` on Android — and calls the
+deployed backend. Every RPC carries `Authorization` and
+`Content-Type: application/json`, so the WebView preflights.
 
-**Info.plist additions still required:** `CFBundleURLTypes`,
-`NSCameraUsageDescription`, `NSPhotoLibraryAddUsageDescription`, and Associated
-Domains.
+`src/app/api/mobile/cors.ts` holds a closed origin allowlist and the route
+answers `OPTIONS`. Without it Next replies 405, the preflight fails, and every
+screen dies on its first fetch — the app looks completely broken while the
+server logs show nothing wrong. `/api/sync` carries the same handling, for the
+same reason, plus bearer authentication so the offline outbox can flush from a
+device that has no cookies.
+
+Credentials are deliberately NOT allowed: this surface is bearer-only, which is
+what keeps the cookie/CSRF surface off it.
+
+## Android specifics
+
+| | |
+|---|---|
+| applicationId | `in.co.constructly.app` — from `capacitor.config.ts`, shared with iOS so the two cannot drift |
+| minSdk | 24 (Android 7) |
+| compileSdk / targetSdk | 36 (Android 16) |
+| AGP / Gradle / JDK | 8.13.0 / 8.14.3 / **21** |
+| Permissions | `INTERNET` only |
+
+**JDK 21, not newer.** Gradle 8.14 cannot read Java 24+ class files and fails
+during configuration with `Unsupported class file major version`, which names
+neither a cause nor a file. Android Studio's bundled runtime is currently 25 —
+so the most discoverable JDK on a Windows machine is the one that does not work.
+`scripts/android-build.mjs` searches for a supported version and says so plainly
+when it only finds an unsupported one.
+
+**The OAuth return leg** is an intent-filter on `MainActivity`, scoped to
+`in.co.constructly.app://auth/callback` rather than the bare scheme. The activity
+is `launchMode="singleTask"`, so the return arrives at the existing activity via
+`onNewIntent` and the PKCE verifier created before the browser opened is still in
+memory. A new task would lose it and every Google sign-in would fail.
+
+**Session storage** is the Android Keystore via
+`@aparajita/capacitor-secure-storage`, the same plugin the Keychain path uses.
+`describeStorage()` reports which store is actually in force, so a silent
+downgrade to an unencrypted one cannot pass for the real thing.
+
+## Signing
+
+No production keystore exists yet; release builds are left **unsigned** rather
+than falling back to the debug key, because a debug-signed "release" installs
+and looks entirely normal but can never be updated by a real release. See
+[android-signing.md](./android-signing.md) for creating the upload key and the
+distinction between it and the app signing key Google holds.
+
+## What has NOT been proven
+
+Stated plainly, because "it compiles" is not "it works":
+
+- **No physical device run.** Every claim about launch, Google OAuth, session
+  persistence across force-stop, deep links, offline flush and the back button
+  is a claim about code that has not yet met hardware.
+- **Google OAuth end-to-end** depends on two account-level settings that are not
+  in this repository: the custom scheme on Supabase's redirect allow-list, and a
+  **Web**-type Google client whose redirect URI is Supabase's callback.
+  `npm run verify:oauth` checks these without a device.
+- **Data written from a device** has not been reconciled against the web app.
+  That is step 6 of the acceptance checklist and the thing most worth doing
+  first.
+- **iOS** is untouched by this phase and remains where the iOS work left it.

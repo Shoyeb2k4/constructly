@@ -7,19 +7,20 @@ import type { MobileAuthStorage } from "@/lib/mobile/session";
  * Where the native app keeps its Supabase session.
  *
  * WHAT THIS IS
- * `@aparajita/capacitor-secure-storage` stores values in the iOS **Keychain**.
- * Keychain items are encrypted at rest by the OS, are not included in normal
- * iTunes/iCloud backups when marked device-only, and survive app updates. That
- * is the right home for a refresh token, which is long-lived and grants new
- * access tokens.
+ * `@aparajita/capacitor-secure-storage` stores values in the platform's own
+ * hardware-backed store: the **Keychain** on iOS, and **EncryptedSharedPrefs**
+ * keyed by the **Android Keystore** on Android. Both are encrypted at rest by
+ * the OS, both survive app updates, and neither ends up in an ordinary backup
+ * when marked device-only. That is the right home for a refresh token, which is
+ * long-lived and grants new access tokens.
  *
  * WHAT THIS IS NOT
- * The obvious alternative, `@capacitor/preferences`, is NSUserDefaults: a plain
- * plist inside the app container. It is protected by the app sandbox and
- * file-level Data Protection, but it is **not encrypted by the app and not the
- * Keychain**. Anything with access to the container (a jailbroken device, an
- * unencrypted backup, a forensic image) can read it. Preferences is therefore
- * used ONLY for non-sensitive diagnostics in this codebase, never for tokens.
+ * The obvious alternative, `@capacitor/preferences`, is NSUserDefaults on iOS
+ * and plain SharedPreferences on Android: an unencrypted file inside the app
+ * container. It is protected by the app sandbox, but it is **not encrypted by
+ * the app**. Anything with access to the container (a rooted or jailbroken
+ * device, an unencrypted backup, a forensic image) can read it. Preferences is
+ * therefore used ONLY for non-sensitive diagnostics here, never for tokens.
  *
  * FALLBACK
  * In a browser preview (`npm run mobile:dev:demo`) there is no native layer at
@@ -40,10 +41,20 @@ function nativeSecureStorageUsable(): boolean {
   return secureAvailable;
 }
 
-/** Which backing store is actually in use — surfaced in diagnostics so a silent
- *  downgrade to localStorage can never masquerade as Keychain storage. */
+/**
+ * Which backing store is actually in use.
+ *
+ * Surfaced in diagnostics so a silent downgrade to an unencrypted store can
+ * never masquerade as hardware-backed storage. The name is resolved from the
+ * RUNNING platform rather than hard-coded: reporting "ios-keychain" on an
+ * Android phone would undermine the one job this function has.
+ */
 export function describeStorage(): { backend: string; secure: boolean } {
-  if (nativeSecureStorageUsable()) return { backend: "ios-keychain", secure: true };
+  if (nativeSecureStorageUsable()) {
+    const backend =
+      Capacitor.getPlatform() === "android" ? "android-keystore" : "ios-keychain";
+    return { backend, secure: true };
+  }
   if (Capacitor.isNativePlatform()) return { backend: "capacitor-preferences", secure: false };
   return { backend: "web-localstorage", secure: false };
 }

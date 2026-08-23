@@ -20,22 +20,62 @@ describe("mobile RPC allowlist", () => {
     expect(lookupRpcMethod("session", "me")).toBeTypeOf("function");
   });
 
-  it("does not expose server functions under their real export names", () => {
-    // `listProjects` IS exported by features/projects/server/actions.ts, but is
-    // only reachable through the registered key `list`. A caller cannot address
-    // the module's export surface directly.
+  it("registers every feature the native app can reach", () => {
+    // The app mounts all eight modules (mobile/src/router.tsx). If a feature
+    // silently stops resolving, that module goes blank on the device while the
+    // web app carries on working.
+    for (const feature of [
+      "session",
+      "dashboard",
+      "projects",
+      "contractors",
+      "contracts",
+      "labor",
+      "procurement",
+      "team",
+      "rbac",
+      "branding",
+      "payments",
+      "budget",
+    ]) {
+      expect(lookupRpcMethod(feature, "__nope__"), feature).toBeNull();
+    }
+    // Spot-check one real method per money-bearing feature.
+    expect(lookupRpcMethod("contractors", "createSettlement")).toBeTypeOf("function");
+    expect(lookupRpcMethod("contracts", "recordContractPayment")).toBeTypeOf("function");
+    expect(lookupRpcMethod("procurement", "createPayment")).toBeTypeOf("function");
+    expect(lookupRpcMethod("payments", "gather")).toBeTypeOf("function");
+  });
+
+  it("does not expose server functions under names it did not register", () => {
+    // `projects` registers SHORT keys (`list`, `get`, …), so the module's real
+    // export names are not addressable. Elsewhere the registered key matches the
+    // repository method name on purpose — one vocabulary across repository,
+    // registry and call site. Either way the property that matters is the same:
+    // a name that was not written down is not reachable.
     expect(lookupRpcMethod("projects", "listProjects")).toBeNull();
     expect(lookupRpcMethod("projects", "duplicateProject")).toBeNull();
     expect(lookupRpcMethod("projects", "removeProject")).toBeNull();
   });
 
-  it("does not expose features that were never registered", () => {
-    // Every one of these is a real, exported server action in this codebase.
-    expect(lookupRpcMethod("labor", "listCategories")).toBeNull();
-    expect(lookupRpcMethod("team", "inviteMember")).toBeNull();
-    expect(lookupRpcMethod("procurement", "createPayment")).toBeNull();
-    expect(lookupRpcMethod("contracts", "createContract")).toBeNull();
-    expect(lookupRpcMethod("rbac", "createRole")).toBeNull();
+  it("does not expose server helpers that no repository puts on the wire", () => {
+    // Each of these is a real, exported function in a `server/` module. None is
+    // part of any Repository interface, so none should be callable — several
+    // are the internal guards the registered actions rely on, and reaching one
+    // directly would mean calling an action's authorization check instead of
+    // the action.
+    expect(lookupRpcMethod("contracts", "assertProjectAccess")).toBeNull();
+    expect(lookupRpcMethod("contracts", "assertContractorAccess")).toBeNull();
+    expect(lookupRpcMethod("contracts", "loadAgreement")).toBeNull();
+    expect(lookupRpcMethod("labor", "resolveAttendanceRate")).toBeNull();
+    expect(lookupRpcMethod("labor", "eligibleAgreements")).toBeNull();
+    expect(lookupRpcMethod("branding", "getLayoutBranding")).toBeNull();
+  });
+
+  it("does not expose features that do not exist", () => {
+    for (const feature of ["documents", "governance", "settings", "reports", "admin", "sync"]) {
+      expect(lookupRpcMethod(feature, "list"), feature).toBeNull();
+    }
   });
 
   it("never resolves inherited object properties", () => {
@@ -75,5 +115,44 @@ describe("mobile RPC does not weaken web authentication", () => {
     // from cookies no longer holds.
     expect(callers).toHaveLength(1);
     expect(callers[0]).toMatch(/app\/api\/mobile\/\[feature\]\/\[method\]\/route\.ts$/);
+  });
+});
+
+describe("every repository method the app calls is actually registered", () => {
+  /**
+   * The one link in this chain TypeScript cannot check.
+   *
+   * Each `http-repository.ts` is type-checked against its Repository interface,
+   * so the CLIENT side is safe. But `rpcMethod("labor", "getSheet")` passes two
+   * plain strings, and nothing at compile time proves the registry has a `labor`
+   * feature with a `getSheet` key. A typo there compiles perfectly and then
+   * returns 404 to a phone.
+   *
+   * So: read every http-repository, extract the pairs it actually asks for, and
+   * assert the registry answers each one.
+   */
+  it("resolves every (feature, method) pair used by an http-repository", async () => {
+    const { readFileSync, readdirSync, existsSync } = await import("node:fs");
+    const path = await import("node:path");
+    const FEATURES = path.resolve(import.meta.dirname, "..", "..", "..", "features");
+
+    const pairs: Array<{ file: string; feature: string; method: string }> = [];
+    for (const dir of readdirSync(FEATURES)) {
+      const file = path.join(FEATURES, dir, "http-repository.ts");
+      if (!existsSync(file)) continue;
+      const source = readFileSync(file, "utf8");
+      for (const m of source.matchAll(/rpcMethod\(\s*"([^"]+)"\s*,\s*"([^"]+)"\s*\)/g)) {
+        pairs.push({ file: `${dir}/http-repository.ts`, feature: m[1], method: m[2] });
+      }
+    }
+
+    // Guards against the test quietly passing because the scan found nothing.
+    expect(pairs.length).toBeGreaterThan(100);
+
+    const unresolved = pairs
+      .filter(({ feature, method }) => lookupRpcMethod(feature, method) === null)
+      .map(({ file, feature, method }) => `${file}: ${feature}.${method}`);
+
+    expect(unresolved).toEqual([]);
   });
 });

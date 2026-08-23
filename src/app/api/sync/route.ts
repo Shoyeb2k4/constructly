@@ -2,7 +2,9 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import type { SyncResult } from "@/lib/sync/types";
 import type { SessionUser } from "@/lib/auth/types";
-import { getCurrentUser } from "@/lib/auth/current-user";
+import { getCurrentUser, resolveSessionUser } from "@/lib/auth/current-user";
+import { bearerTokenFrom, verifyBearerToken } from "@/lib/supabase/bearer";
+import { mobileCorsHeaders, mobilePreflightHeaders } from "../mobile/cors";
 import { rateLimit } from "@/lib/rate-limit";
 import { reportError } from "@/lib/logger";
 
@@ -220,12 +222,49 @@ const handlers: Record<string, SyncHandler> = {
   labour_attendance: applyLabourAttendance,
 };
 
+/**
+ * CORS preflight for the native app.
+ *
+ * The offline outbox is flushed from the Capacitor WebView, which is a
+ * cross-origin client (see ../mobile/cors.ts). Without this the browser rejects
+ * the flush before it is sent, and field attendance recorded offline would
+ * queue forever with no error anyone could see.
+ */
+export async function OPTIONS(request: Request) {
+  return new Response(null, {
+    status: 204,
+    headers: mobilePreflightHeaders(request.headers.get("origin")),
+  });
+}
+
+/**
+ * Resolve the caller from a cookie session (web) or a bearer token (native).
+ *
+ * The bearer branch verifies the token against the auth server and then goes
+ * through the SAME `resolveSessionUser` the cookie path uses, so a device gets
+ * identical tenant scoping and identical active-membership rules. It grants
+ * nothing the web session would not.
+ */
+async function resolveSyncUser(req: Request): Promise<SessionUser | null> {
+  const cookieUser = await getCurrentUser();
+  if (cookieUser) return cookieUser;
+
+  const token = bearerTokenFrom(req.headers.get("authorization"));
+  if (!token) return null;
+
+  const authUserId = await verifyBearerToken(token);
+  if (!authUserId) return null;
+
+  return resolveSessionUser(authUserId);
+}
+
 export async function POST(req: Request) {
-  const user = await getCurrentUser();
+  const cors = mobileCorsHeaders(req.headers.get("origin"));
+  const user = await resolveSyncUser(req);
   if (!user) {
     return NextResponse.json(
       { error: { code: "UNAUTHENTICATED", message: "Sign in required" } },
-      { status: 401 },
+      { status: 401, headers: cors },
     );
   }
 

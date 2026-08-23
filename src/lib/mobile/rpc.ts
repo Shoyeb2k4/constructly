@@ -39,3 +39,27 @@ export async function call<T>(feature: string, method: string, args: unknown[] =
   }
   return payload.data as T;
 }
+
+/**
+ * A repository method that forwards to the RPC allowlist.
+ *
+ * Used to build the `http-repository.ts` of each feature. The point is not
+ * brevity — it is that the object literal is still declared as the feature's
+ * Repository interface, so TypeScript checks the whole surface: a missing
+ * method, a misspelled key or a signature that drifted from the interface is a
+ * compile error, not a runtime 404 discovered on a phone.
+ *
+ * The method name given here must match the key registered in
+ * `src/app/api/mobile/registry.ts`. That pairing is the one thing the compiler
+ * cannot check, so `registry.test.ts` asserts it instead.
+ */
+export function rpcMethod<F extends (...args: never[]) => Promise<unknown>>(
+  feature: string,
+  method: string,
+): F {
+  // Double assertion: the forwarder is uniformly variadic, which TypeScript
+  // cannot prove is assignable to every specific F the interfaces ask for.
+  // Safety comes from the call site — the object literal is annotated with the
+  // Repository interface, so each method is still checked against it there.
+  return ((...args: unknown[]) => call(feature, method, args)) as unknown as F;
+}

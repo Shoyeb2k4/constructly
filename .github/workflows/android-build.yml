@@ -179,6 +179,21 @@ jobs:
           set -euo pipefail
           shopt -s nullglob
           aapt2="$(find "$ANDROID_HOME/build-tools" -name aapt2 | sort -V | tail -1)"
+          want_signed="${{ steps.signing.outputs.signed }}"
+
+          # Signing is decided by INSPECTING the archive, never by its filename:
+          # Gradle marks an unsigned APK "-unsigned" but names an unsigned AAB
+          # exactly like a signed one, so a name check would wave through the
+          # very bundle Play rejects. A v1 JAR signature block in META-INF is
+          # present in both formats when signed.
+          check_signed() {
+            if unzip -Z1 "$1" | grep -qiE '^META-INF/[^/]+\.(RSA|DSA|EC)$'; then
+              echo signed
+            else
+              echo unsigned
+            fi
+          }
+
           for apk in android/app/build/outputs/apk/release/*.apk; do
             echo "── $apk"
             "$aapt2" dump badging "$apk" | head -3
@@ -188,17 +203,26 @@ jobs:
             # gradle file to still say what it said last month.
             "$aapt2" dump badging "$apk" | grep -q "targetSdkVersion:'36'" || {
               echo "::error::APK targetSdkVersion is not 36"; exit 1; }
-            case "$apk" in
-              *unsigned*)
-                if [ "${{ steps.signing.outputs.signed }}" = "true" ]; then
-                  echo "::error::Signing secrets were present but the APK is unsigned."
-                  exit 1
-                fi
-                echo "::warning::APK is UNSIGNED — cannot be installed or uploaded. See docs/android-signing.md" ;;
-              *)
-                apksigner="$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -1)"
-                "$apksigner" verify --print-certs "$apk" | grep -E "Signer #1 certificate (DN|SHA-256)" ;;
-            esac
+          done
+
+          for artifact in android/app/build/outputs/apk/release/*.apk android/app/build/outputs/bundle/release/*.aab; do
+            state="$(check_signed "$artifact")"
+            echo "── $artifact: $state"
+            if [ "$state" = "unsigned" ]; then
+              if [ "$want_signed" = "true" ]; then
+                echo "::error::Signing secrets were present but $artifact is unsigned."
+                exit 1
+              fi
+              echo "::warning::$artifact is UNSIGNED — cannot be installed or uploaded. See docs/android-signing.md"
+            else
+              case "$artifact" in
+                *.apk)
+                  apksigner="$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -1)"
+                  "$apksigner" verify --print-certs "$artifact" | grep -E "Signer #1 certificate (DN|SHA-256)" ;;
+                *.aab)
+                  keytool -printcert -jarfile "$artifact" | grep -E "Owner|SHA256" ;;
+              esac
+            fi
           done
 
       - name: Upload artifacts

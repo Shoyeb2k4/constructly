@@ -222,19 +222,43 @@ if (artifacts.length === 0) {
   process.exit(1);
 }
 
+/**
+ * Is this artifact signed?
+ *
+ * Determined by INSPECTING it, not by reading its filename. Gradle marks an
+ * unsigned APK with "-unsigned", but gives an unsigned AAB exactly the same name
+ * as a signed one — so a filename check silently passes the unsigned bundle
+ * that Play will reject, which is the one case this warning exists for.
+ *
+ * A signed archive carries a signature block in META-INF (`.RSA`/`.DSA`/`.EC`
+ * for the v1 JAR signature that both APKs and AABs use). Reading the zip's
+ * entry names is enough and needs no SDK tool on PATH.
+ */
+function isSigned(file) {
+  const listing = spawnSync("unzip", ["-Z1", file], { encoding: "utf8" });
+  if (listing.status !== 0) return null; // cannot tell — do not claim either way
+  return /META-INF\/[^/]+\.(RSA|DSA|EC)$/im.test(listing.stdout);
+}
+
 console.log(`\n── Artifact ────────────────────────────────────────`);
 for (const name of artifacts) {
   const full = path.join(outDir, name);
   const mb = (statSync(full).size / 1024 / 1024).toFixed(1);
-  console.log(`${full}  (${mb} MB)`);
+  const signed = isSigned(full);
 
-  // An unsigned release is a real outcome, not an edge case — Gradle names it
-  // so, and it will neither install nor upload. Say it here, loudly.
-  if (name.includes("unsigned")) {
+  const label = signed === null ? "signing unknown" : signed ? "signed" : "UNSIGNED";
+  console.log(`${full}  (${mb} MB, ${label})`);
+
+  if (signed === false) {
     console.log(
       `\n  ⚠ UNSIGNED. This artifact cannot be installed on a device or uploaded to Play.\n` +
         `    Configure signing (android/keystore.properties or ANDROID_KEYSTORE_* env)\n` +
         `    — see docs/android-signing.md.`,
+    );
+  } else if (signed === null) {
+    console.log(
+      `\n  ⚠ Could not inspect the archive (\`unzip\` not on PATH), so signing state\n` +
+        `    is unverified. Check with apksigner before distributing.`,
     );
   }
 }
