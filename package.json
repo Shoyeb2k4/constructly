@@ -18,12 +18,33 @@
     "db:seed": "tsx prisma/seed.ts",
     "dev:demo": "node scripts/dev-demo.mjs",
     "start:demo": "node scripts/start-demo.mjs",
-    "build:demo": "node scripts/build-demo.mjs"
+    "build:demo": "node scripts/build-demo.mjs",
+    "mobile:dev": "vite --config mobile/vite.config.mts",
+    "mobile:build": "vite build --config mobile/vite.config.mts",
+    "mobile:dev:demo": "node scripts/mobile-dev-demo.mjs",
+    "mobile:verify": "node scripts/verify-mobile-bundle.mjs",
+    "mobile:sync": "npm run mobile:build && npm run mobile:verify && cap sync ios",
+    "mobile:sync:demo": "node scripts/mobile-sync-demo.mjs",
+    "verify:oauth": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/verify-oauth-provider.mjs",
+    "verify:signing": "node scripts/verify-no-signing-material.mjs",
+    "assets:generate": "node scripts/generate-app-assets.mjs"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
+    "@aparajita/capacitor-secure-storage": "^8.0.0",
+    "@capacitor/android": "^8.5.0",
+    "@capacitor/app": "^8.1.1",
+    "@capacitor/browser": "^8.0.4",
+    "@capacitor/camera": "^8.2.2",
+    "@capacitor/core": "^8.5.0",
+    "@capacitor/filesystem": "^8.1.2",
+    "@capacitor/ios": "^8.5.0",
+    "@capacitor/keyboard": "^8.0.5",
+    "@capacitor/preferences": "^8.0.1",
+    "@capacitor/share": "^8.0.1",
+    "@capacitor/status-bar": "^8.0.3",
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
@@ -66,8 +87,10 @@
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.12.1",
+    "@capacitor/cli": "^8.5.0",
     "@playwright/test": "^1.61.1",
     "@tailwindcss/postcss": "^4",
+    "@tailwindcss/vite": "^4.3.3",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@types/node": "^20",
@@ -78,10 +101,12 @@
     "eslint-config-next": "16.2.10",
     "jsdom": "^29.1.1",
     "prisma": "^6.19.3",
+    "react-router": "^7.18.2",
     "tailwindcss": "^4",
     "tsx": "^4.23.1",
     "tw-animate-css": "^1.4.0",
     "typescript": "^5",
+    "vite": "^8.2.1",
     "vitest": "^4.1.10"
   },
   "allowScripts": {

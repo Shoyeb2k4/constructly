@@ -1,6 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
 import { LogOut, Settings } from "lucide-react";
 import { toast } from "sonner";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -25,6 +26,7 @@ function initials(name: string) {
 
 export function UserMenu({ user }: { user: SessionUser }) {
   const router = useRouter();
+  const queryClient = useQueryClient();
 
   async function signOut() {
     const { isSupabaseConfigured } = await import("@/lib/env");
@@ -34,6 +36,21 @@ export function UserMenu({ user }: { user: SessionUser }) {
       });
       return;
     }
+
+    // The native app holds its session in the Keychain via the mobile Supabase
+    // client, not in cookies — signing out through the SSR browser client would
+    // leave that session (and its refresh token) intact. Dynamically imported so
+    // the web bundle is unchanged.
+    const { isNativeClient } = await import("@/lib/mobile/platform");
+    if (isNativeClient) {
+      const { signOutMobile } = await import("@/lib/mobile/session");
+      await signOutMobile();
+      // Drop every cached query so no authenticated data outlives the session,
+      // then let the session gate fall back to the sign-in screen.
+      queryClient.clear();
+      return;
+    }
+
     const { createClient } = await import("@/lib/supabase/client");
     await createClient().auth.signOut();
     router.push("/sign-in");

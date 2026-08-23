@@ -142,8 +142,8 @@ export function ReportView({
       return;
     }
     const ex = await import("../exporters");
-    if (kind === "excel") ex.reportToExcel(result, companyName);
-    else if (kind === "csv") ex.reportToCsv(result, companyName);
+    if (kind === "excel") await ex.reportToExcel(result, companyName);
+    else if (kind === "csv") await ex.reportToCsv(result, companyName);
     else await ex.reportToPdf(result);
   }
 

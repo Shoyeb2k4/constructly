@@ -118,13 +118,23 @@ describe("HIGH: monitoring/error-reporting is not wired", () => {
 /* ═══════════════════════════════════════════════════════════════════════
  * MEDIUM — app-level rate limiting covers exactly one route
  * ═══════════════════════════════════════════════════════════════════════ */
-describe("MEDIUM: rate limiting is applied to only the sync route", () => {
-  it("has exactly one production caller of rateLimit()", () => {
+describe("MEDIUM: rate limiting is applied to route handlers only", () => {
+  it("is applied to every route handler, and nothing else", () => {
     // Files that actually invoke the limiter (exclude its own definition).
-    const callers = grepSrc(/\brateLimit\(/).filter((f) => !f.endsWith(path.join("lib", "rate-limit.ts")));
-    expect(callers.length).toBe(1);
-    expect(callers[0].replace(/\\/g, "/")).toMatch(/app\/api\/sync\/route\.ts$/);
-    // EXPECTED AFTER FIX: auth-sensitive + financial server actions are also
-    // rate-limited (and the limiter is backed by a shared store).
+    const callers = grepSrc(/\brateLimit\(/)
+      .filter((f) => !f.endsWith(path.join("lib", "rate-limit.ts")))
+      .map((f) => f.replace(/\\/g, "/"))
+      .sort();
+
+    // Both HTTP entry points are limited: the offline sync outbox, and the
+    // mobile RPC boundary (the native app's equivalent of a Server Action).
+    expect(callers.length).toBe(2);
+    expect(callers[0]).toMatch(/app\/api\/mobile\/\[feature\]\/\[method\]\/route\.ts$/);
+    expect(callers[1]).toMatch(/app\/api\/sync\/route\.ts$/);
+
+    // STILL OPEN: Server Actions carry no limiter, so the web app's
+    // auth-sensitive + financial mutations remain unlimited — and the limiter
+    // is still in-process rather than backed by a shared store.
+    expect(grepSrc(/"use server"/).filter((f) => /\brateLimit\(/.test(readFileSync(f, "utf8")))).toHaveLength(0);
   });
 });

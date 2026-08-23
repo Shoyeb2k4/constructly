@@ -12,3 +12,9 @@ playwright-report
 test-results
 *.log
 scratchpad
+
+# Native iOS app. The Vercel build produces the WEB app only; the Capacitor
+# project and the mobile SPA are built by the macOS CI runner instead. Excluded
+# so nothing here can affect (or slow) a production web deploy.
+ios
+mobile

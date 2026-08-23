@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Constructly</string>
+    <string name="title_activity_main">Constructly</string>
+    <string name="package_name">in.co.constructly.app</string>
+    <string name="custom_url_scheme">in.co.constructly.app</string>
+</resources>

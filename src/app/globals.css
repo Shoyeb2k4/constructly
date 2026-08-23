@@ -226,3 +226,47 @@
     }
   }
 }
+
+/* ─────────────────────────────────────────────────────────────
+   Touch-device affordances
+
+   Several controls are revealed on hover (`opacity-0` until
+   `group-hover:opacity-100`): the KPI card's drill-in arrow, the copy button on
+   a payment reference, the drag handle on a project card, the report card's
+   "open" hint. A finger cannot hover, so on a phone these are simply invisible
+   — the feature exists but is undiscoverable.
+
+   `hover: none` targets devices whose PRIMARY input cannot hover, which is
+   exactly the touch case, and leaves every desktop browser untouched. Revealing
+   them permanently is the right trade there: on a small screen the affordance
+   matters more than the visual quiet.
+   ───────────────────────────────────────────────────────────── */
+@media (hover: none) {
+  .group-hover\:opacity-100 {
+    opacity: 1 !important;
+  }
+  /* The same controls often slide in as they fade; land them in place. */
+  .group-hover\:translate-x-0 {
+    transform: translateX(0) !important;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Wide tables on a narrow screen
+
+   Several detail tables set an explicit `min-w-[560px]`–`min-w-[680px]` inside
+   a horizontally scrolling container. That is deliberate — collapsing a
+   financial table into cards loses the row-to-row comparison that makes it
+   useful — but on a 390px iPhone there is no indication that more content
+   exists to the right.
+
+   Momentum scrolling plus a fading right edge makes the overflow discoverable
+   without changing any layout.
+   ───────────────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .overflow-x-auto {
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+    overscroll-behavior-x: contain;
+  }
+}

@@ -1,5 +1,7 @@
 "use client";
 
+import * as React from "react";
+
 import { useTheme } from "next-themes";
 import { Toaster as Sonner, type ToasterProps } from "sonner";
 
@@ -9,6 +11,16 @@ export function Toaster(props: ToasterProps) {
     <Sonner
       theme={theme as ToasterProps["theme"]}
       className="toaster group"
+      // Bottom-anchored toasts collide with the iPhone home indicator, where
+      // the swipe-up gesture area sits — a toast there is both clipped and
+      // hard to dismiss. Lifting them clear of the safe-area inset costs
+      // nothing in a browser, where the inset is 0.
+      style={
+        {
+          "--offset-bottom": "calc(1rem + env(safe-area-inset-bottom))",
+          "--offset-top": "calc(1rem + env(safe-area-inset-top))",
+        } as React.CSSProperties
+      }
       toastOptions={{
         classNames: {
           toast:

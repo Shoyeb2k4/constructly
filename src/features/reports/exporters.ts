@@ -11,6 +11,7 @@ import {
   groupLabel,
 } from "./export-model";
 import type { ReportColumn, ReportResult, ReportRow } from "./types";
+import { saveGeneratedFile, saveWorkbook } from "@/lib/exports";
 
 /**
  * Report exports — three formats, one grammar.
@@ -110,28 +111,26 @@ function rowToPdf(row: ReportRow, columns: ReportColumn[]): RowInput {
 
 /* ── Excel ───────────────────────────────────────────────────────────── */
 
-export function reportToExcel(result: ReportResult, companyName = ""): void {
+export async function reportToExcel(result: ReportResult, companyName = ""): Promise<void> {
   const ws = XLSX.utils.aoa_to_sheet(buildExportRows(result, companyName));
   ws["!cols"] = result.columns.map((c) => ({
     wch: c.kind === "money" ? 16 : Math.max(12, c.label.length + 2),
   }));
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Report");
-  XLSX.writeFile(wb, `${exportFileName(result.title)}.xlsx`);
+  // Not `XLSX.writeFile`: that clicks a hidden `<a download>`, which is inert
+  // inside a Capacitor WebView. `saveWorkbook` keeps the browser behaviour and
+  // routes the native build through the share sheet instead.
+  await saveWorkbook(wb, `${exportFileName(result.title)}.xlsx`);
 }
 
-/* ── CSV ─────────────────────────────────────────────────────────────── */
+/* ── CSV ──────────────────────────────────────────────────────────────── */
 
-export function reportToCsv(result: ReportResult, companyName = ""): void {
+export async function reportToCsv(result: ReportResult, companyName = ""): Promise<void> {
   // A UTF-8 BOM so Excel on Windows reads the file as UTF-8 rather than the
   // system codepage — without it, any non-ASCII name arrives mangled.
   const blob = new Blob(["﻿" + buildCsv(result, companyName)], {
     type: "text/csv;charset=utf-8;",
   });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `${exportFileName(result.title)}.csv`;
-  a.click();
-  URL.revokeObjectURL(url);
+  await saveGeneratedFile(blob, `${exportFileName(result.title)}.csv`);
 }

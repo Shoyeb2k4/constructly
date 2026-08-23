@@ -6,6 +6,7 @@ import { toRupees } from "@/lib/money";
 import { createBrandedPdf } from "@/features/branding/pdf";
 import { estimateCostPaise } from "./calc";
 import type { AttendanceRecordItem, AttendanceSheet, LabourSummary } from "./types";
+import { saveWorkbook } from "@/lib/exports";
 
 // jsPDF's built-in fonts lack the ₹ glyph — use "Rs." in exports.
 const rs = (paise: number) => `Rs. ${toRupees(paise).toLocaleString("en-IN")}`;
@@ -50,7 +51,7 @@ export async function exportSheetPdf(sheet: AttendanceSheet, projectName: string
   finalize(`attendance-${projectName.replace(/\s+/g, "-").toLowerCase()}-${sheet.date}.pdf`);
 }
 
-export function exportSheetExcel(sheet: AttendanceSheet, projectName: string) {
+export async function exportSheetExcel(sheet: AttendanceSheet, projectName: string) {
   const rows: (string | number | null)[][] = [
     ["Constructly — Daily labour attendance"],
     [`${projectName} · ${sheet.date}`],
@@ -77,7 +78,7 @@ export function exportSheetExcel(sheet: AttendanceSheet, projectName: string) {
   rows.push([], ["Grand total", "", "", "", sheet.totalPresent, null, toRupees(sheet.estimatedCostPaise), ""]);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), "Attendance");
-  XLSX.writeFile(wb, `attendance-${projectName.replace(/\s+/g, "-").toLowerCase()}-${sheet.date}.xlsx`);
+  await saveWorkbook(wb, `attendance-${projectName.replace(/\s+/g, "-").toLowerCase()}-${sheet.date}.xlsx`);
 }
 
 /* ── Range summary (hierarchical) ────────────────────────────────────── */
@@ -138,7 +139,7 @@ export async function exportRangePdf({ records, summary, from, to, scope }: Rang
   finalize(`labour-summary-${from}-to-${to}.pdf`);
 }
 
-export function exportRangeExcel({ records, summary, from, to, scope }: RangeExportInput) {
+export async function exportRangeExcel({ records, summary, from, to, scope }: RangeExportInput) {
   const summaryRows: (string | number | null)[][] = [
     ["Constructly — Labour summary"],
     [`${scope} · ${from} → ${to}`],
@@ -173,5 +174,5 @@ export function exportRangeExcel({ records, summary, from, to, scope }: RangeExp
     ]),
     "Daily records",
   );
-  XLSX.writeFile(wb, `labour-summary-${from}-to-${to}.xlsx`);
+  await saveWorkbook(wb, `labour-summary-${from}-to-${to}.xlsx`);
 }

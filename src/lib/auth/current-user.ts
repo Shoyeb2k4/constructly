@@ -1,6 +1,7 @@
 import { cache } from "react";
 import { isDemoMode } from "@/lib/env";
 import { DEMO_USER } from "./demo";
+import { injectedSession } from "./request-context";
 import type { Role, SessionUser } from "./types";
 import { resolvePermissions } from "@/features/rbac/resolve";
 
@@ -14,10 +15,16 @@ import { resolvePermissions } from "@/features/rbac/resolve";
  * instead of re-resolving the session each time.
  */
 export const getCurrentUser = cache(async (): Promise<SessionUser | null> => {
+  // Bearer-authenticated callers (the mobile RPC route) resolve their session
+  // up front and inject it, because they have no cookie jar to read. Always
+  // empty on the web, so the cookie path below is unchanged. See
+  // ./request-context.ts.
+  const injected = injectedSession();
+  if (injected) return injected;
+
   if (isDemoMode) return DEMO_USER;
 
   const { createServerClient } = await import("@/lib/supabase/server");
-  const { prisma } = await import("@/lib/db/prisma");
 
   const supabase = await createServerClient();
   const {
@@ -25,8 +32,25 @@ export const getCurrentUser = cache(async (): Promise<SessionUser | null> => {
   } = await supabase.auth.getUser();
   if (!user) return null;
 
+  return resolveSessionUser(user.id);
+});
+
+/**
+ * Join a verified Supabase auth id to the application user + company + roles.
+ *
+ * Extracted verbatim from `getCurrentUser` so the bearer-token path (mobile RPC)
+ * produces a session that is IDENTICAL in every respect — same permission
+ * resolution, same Owner rule, same DISABLED handling. There is deliberately
+ * only one implementation: any future change to what a session means applies to
+ * web and mobile at once.
+ *
+ * The caller MUST have already verified `authUserId` against the auth server.
+ */
+export async function resolveSessionUser(authUserId: string): Promise<SessionUser | null> {
+  const { prisma } = await import("@/lib/db/prisma");
+
   const appUser = await prisma.user.findUnique({
-    where: { id: user.id },
+    where: { id: authUserId },
     include: {
       company: true,
       companyRole: true,
@@ -63,7 +87,7 @@ export const getCurrentUser = cache(async (): Promise<SessionUser | null> => {
     isOwner,
     company: { id: appUser.company.id, name: appUser.company.name },
   };
-});
+}
 
 /** Throw-if-absent variant for guarded server routes/actions. */
 export async function requireUser(): Promise<SessionUser> {

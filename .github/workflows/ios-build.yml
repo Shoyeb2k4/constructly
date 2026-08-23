@@ -1,0 +1,369 @@
+name: iOS build
+
+# Phase 2: prove that Apple's real toolchain can compile the Capacitor-generated
+# Constructly iOS project on a GitHub-hosted macOS runner.
+#
+# UNSIGNED, SIMULATOR-ONLY, BUILD-ONLY. No certificates, no provisioning
+# profiles, no Team ID, no archive, no IPA, no App Store Connect. Adding any of
+# those is a later phase and a deliberate decision, not a side effect of this
+# workflow.
+#
+# This workflow never writes to the repository.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ios-app]
+
+# Never run from main.
+concurrency:
+  group: ios-build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Unsigned Xcode compile
+    runs-on: macos-15
+    timeout-minutes: 45
+
+    env:
+      NEXT_TELEMETRY_DISABLED: "1"
+      # Stated independently of capacitor.config.ts on purpose: the build step
+      # ASSERTS the compiled Info.plist matches this, so an accidental identity
+      # change fails CI instead of shipping quietly.
+      BUNDLE_ID: in.co.constructly.app
+      # Client-safe values ONLY. Every one of these is inlined into the mobile
+      # JS bundle and is therefore public by definition — the Supabase
+      # publishable key is designed to be shipped to clients. They are
+      # repository VARIABLES, not secrets, precisely so that nothing here
+      # implies confidentiality.
+      #
+      # No server-only value (SUPABASE_SERVICE_ROLE_KEY, DATABASE_URL,
+      # DIRECT_URL, SUPABASE_DB_PASSWORD, AUTH_AUTOCONFIRM) is referenced
+      # anywhere in this file. scripts/verify-mobile-bundle.mjs independently
+      # fails the build if any of them reach the bundle.
+      #
+      # Fallbacks keep the compile proof runnable with zero configuration: the
+      # native build does not care what these strings are, they are only inlined
+      # into JavaScript.
+      NEXT_PUBLIC_SUPABASE_URL: ${{ vars.NEXT_PUBLIC_SUPABASE_URL || 'https://ci-placeholder.supabase.co' }}
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${{ vars.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || 'sb_publishable_ci_placeholder' }}
+      NEXT_PUBLIC_MOBILE_API_BASE: ${{ vars.NEXT_PUBLIC_MOBILE_API_BASE || 'https://ci-placeholder.invalid' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      # ── Diagnostics ────────────────────────────────────────────────────
+      # Captured before anything can fail, so a broken run still tells us which
+      # toolchain produced it. Nothing sensitive is printed.
+      - name: Inspect toolchain
+        run: |
+          set -euo pipefail
+          echo "── macOS ──";            sw_vers
+          echo "── Xcode ──";            xcodebuild -version
+          echo "── Xcode path ──";       xcode-select -p
+          echo "── iOS Simulator SDK ──"; xcrun --sdk iphonesimulator --show-sdk-version
+          echo "── Swift ──";            swift --version
+          echo "── Node ──";             node --version
+          echo "── npm ──";              npm --version
+
+      # Runs before anything expensive: if signing material ever gets committed,
+      # the right response is to stop immediately and rotate it, not to spend
+      # ten minutes building first.
+      - name: Reject committed signing material
+        run: npm run verify:signing
+
+      - name: Install dependencies
+        run: npm ci
+
+      # ── Web layer ──────────────────────────────────────────────────────
+      # Uses the repository's own scripts rather than re-implementing them in
+      # YAML, so CI and local builds cannot drift apart.
+      - name: Build mobile SPA
+        run: npm run mobile:build
+
+      - name: Verify no server secrets in the bundle
+        run: npm run mobile:verify
+
+      - name: Capacitor sync (iOS)
+        run: npx cap sync ios
+
+      # Read-only check of the REAL production OAuth provider configuration,
+      # using only the public project URL and publishable key. It signs nobody
+      # in, mutates nothing, and needs no Google account.
+      #
+      # Reports-and-passes while the Google provider is still disabled, so this
+      # can ship before the dashboard work is done. Set the repository variable
+      # EXPECT_GOOGLE_OAUTH=true once Google is enabled and it becomes
+      # enforcing — a disabled provider or a rejected redirect then fails CI.
+      - name: Verify OAuth provider configuration
+        run: |
+          set -euo pipefail
+          if [ "${{ vars.EXPECT_GOOGLE_OAUTH }}" = "true" ]; then
+            npm run verify:oauth -- --require-provider
+          else
+            npm run verify:oauth
+          fi
+
+      # ── Native layer ───────────────────────────────────────────────────
+      - name: List Xcode schemes
+        run: |
+          set -euo pipefail
+          xcodebuild -list -project ios/App/App.xcodeproj
+
+      # Capacitor 8 uses Swift Package Manager, NOT CocoaPods — there is no
+      # Podfile and no `pod install`. The local CapApp-SPM package depends on
+      # ionic-team/capacitor-swift-pm pinned to an exact version, so resolution
+      # is deterministic. Done as its own step so a network/resolution failure
+      # is never mistaken for a compile failure.
+      - name: Resolve Swift packages
+        run: |
+          set -euo pipefail
+          xcodebuild -resolvePackageDependencies \
+            -project ios/App/App.xcodeproj \
+            -scheme App \
+            -clonedSourcePackagesDirPath .spm-cache
+
+      - name: Compile (unsigned, iOS Simulator)
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project ios/App/App.xcodeproj \
+            -scheme App \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build/DerivedData \
+            -clonedSourcePackagesDirPath .spm-cache \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" \
+            build
+
+      - name: Confirm app bundle was produced
+        run: |
+          set -euo pipefail
+          # Located by searching the controlled DerivedData output rather than
+          # assuming a path, so a future Xcode layout change fails loudly.
+          APP=$(find build/DerivedData/Build/Products -maxdepth 2 -name '*.app' -print -quit)
+          if [ -z "$APP" ]; then
+            echo "No .app produced — failing."
+            exit 1
+          fi
+          echo "Built: $APP"
+
+          ACTUAL_ID=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist")
+          EXECUTABLE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")
+          echo "bundle id: $ACTUAL_ID"
+          echo "executable: $EXECUTABLE"
+
+          test "$ACTUAL_ID" = "${{ env.BUNDLE_ID }}" \
+            || (echo "Bundle id mismatch — expected ${{ env.BUNDLE_ID }}" && exit 1)
+          test -x "$APP/$EXECUTABLE" \
+            || (echo "Executable missing or not executable" && exit 1)
+          test -f "$APP/public/index.html" \
+            || (echo "MISSING bundled web assets" && exit 1)
+          echo "OK bundle id, executable and bundled web assets all present"
+
+          echo "APP_PATH=$APP" >> "$GITHUB_ENV"
+
+      # ── Runtime validation ─────────────────────────────────────────────
+      # Compiling proves the native shell builds. It does NOT prove the app runs:
+      # a Capacitor app can launch perfectly and render a white rectangle if the
+      # WebView never loads. Everything below exists to close that gap.
+
+      - name: Select an iOS Simulator
+        id: sim
+        run: |
+          set -euo pipefail
+          echo "── installed runtimes ──"
+          xcrun simctl list runtimes
+          echo "── choosing a device ──"
+          node scripts/select-simulator.mjs
+
+      - name: Boot simulator
+        run: |
+          set -euo pipefail
+          xcrun simctl boot '${{ steps.sim.outputs.udid }}' || true
+          xcrun simctl bootstatus '${{ steps.sim.outputs.udid }}' -b
+          echo "Booted ${{ steps.sim.outputs.name }} (${{ steps.sim.outputs.runtime }})"
+
+      # Check 1 — the PRODUCTION-configured bundle (real transport, placeholder
+      # backend host). It cannot reach a backend from CI, so the expected screen
+      # is the app's own "couldn't reach Constructly" boot state. That still
+      # proves React mounted, Capacitor started, the SPA executed, and the RPC
+      # base URL was absolute rather than resolved against capacitor://localhost.
+      - name: Runtime check — production config
+        run: |
+          bash scripts/simulator-check.sh \
+            '${{ steps.sim.outputs.udid }}' \
+            "$APP_PATH" \
+            '${{ env.BUNDLE_ID }}' \
+            '01-production-boot' \
+            artifacts \
+            15 \
+            'boot-error' \
+            'require-bridge'
+
+      # Check 2 — the same native shell with a DEMO-configured web layer, which
+      # renders real Constructly screens from seeded fixtures with no network.
+      # This is runtime/UI evidence only; it is NOT a re-test of authenticated
+      # production RPC, which was proven separately against the real backend.
+      - name: Rebuild web layer in demo mode
+        env:
+          NEXT_PUBLIC_CONSTRUCTLY_DEMO: "1"
+        run: |
+          set -euo pipefail
+          npm run mobile:build
+          npm run mobile:verify
+          npx cap sync ios
+
+      - name: Recompile with demo web layer
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project ios/App/App.xcodeproj \
+            -scheme App \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build/DerivedData \
+            -clonedSourcePackagesDirPath .spm-cache \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" \
+            build
+
+      - name: Runtime check — demo config
+        run: |
+          bash scripts/simulator-check.sh \
+            '${{ steps.sim.outputs.udid }}' \
+            "$APP_PATH" \
+            '${{ env.BUNDLE_ID }}' \
+            '02-demo-dashboard' \
+            artifacts \
+            12 \
+            'app-shell' \
+            'require-bridge'
+
+      # Deep-link plumbing, exercised end to end without a human Google login.
+      #
+      # `simctl openurl` makes iOS route a URL to the app exactly as it would
+      # after a real OAuth return, which proves the registered CFBundleURLTypes
+      # scheme resolves to this bundle and that the app survives handling it.
+      # It cannot prove a real Google authorization — that needs interactive
+      # credentials on a signed build — but it does prove the transport that
+      # Google's response would arrive on, and that a malformed callback is
+      # handled rather than crashing the app.
+      - name: Deep-link handling (synthetic OAuth callback)
+        run: |
+          set -euo pipefail
+          UDID='${{ steps.sim.outputs.udid }}'
+          SCHEME='${{ env.BUNDLE_ID }}'
+
+          # The previous runtime check tore down its console pipe on exit, so the
+          # app is not running here. Launch it explicitly and wait until it is
+          # actually up — otherwise this step would test nothing.
+          xcrun simctl launch "$UDID" "$SCHEME" >/dev/null 2>&1 || true
+          before=""
+          for _ in $(seq 1 20); do
+            before="$(xcrun simctl spawn "$UDID" launchctl list 2>/dev/null \
+              | awk -v id="UIKitApplication:${SCHEME}" '$3 ~ id && $1 ~ /^[0-9]+$/ {print $1; exit}')"
+            [ -n "$before" ] && break
+            sleep 1
+          done
+          if [ -z "$before" ]; then
+            echo "x could not start the app to test deep links"
+            exit 1
+          fi
+          echo "app pid before: $before"
+
+          # A callback carrying an error, and one missing its code: both must be
+          # handled as failures inside the app, never as a crash.
+          xcrun simctl openurl "$UDID" "${SCHEME}://auth/callback?error=access_denied&error_description=synthetic"
+          sleep 3
+          xcrun simctl openurl "$UDID" "${SCHEME}://auth/callback"
+          sleep 3
+          # An unrelated deep link must be ignored outright.
+          xcrun simctl openurl "$UDID" "${SCHEME}://projects/123"
+          sleep 3
+
+          after="$(xcrun simctl spawn "$UDID" launchctl list 2>/dev/null \
+            | awk -v id="UIKitApplication:${SCHEME}" '$3 ~ id && $1 ~ /^[0-9]+$/ {print $1; exit}')"
+          echo "app pid after:  ${after:-none}"
+
+          if [ -z "$after" ]; then
+            echo "x app died while handling deep links"
+            exit 1
+          fi
+          if [ -n "$before" ] && [ "$before" != "$after" ]; then
+            echo "x app was relaunched — it crashed handling a deep link"
+            exit 1
+          fi
+          echo "OK custom scheme resolves to this bundle; malformed callbacks handled without crashing"
+          xcrun simctl io "$UDID" screenshot artifacts/03-after-deeplinks.png
+
+      # Conclusive, log-free proof that what rendered was OUR SPA.
+      #
+      # Each check already proves its screen differs from its own launch frame,
+      # so something painted. This proves WHAT painted: the two runs share an
+      # identical native shell, splash and launch storyboard, and differ only in
+      # the JavaScript bundle's configuration. If the settled frames differ, the
+      # pixels are being produced by our web layer reacting to that config —
+      # a splash, an error page, or a dead WebView would look the same in both.
+      - name: Prove the rendered screen is driven by our web layer
+        run: |
+          set -euo pipefail
+          PROD=artifacts/01-production-boot.png
+          DEMO=artifacts/02-demo-dashboard.png
+          test -f "$PROD" && test -f "$DEMO" || (echo "missing screenshots" && exit 1)
+          if cmp -s "$PROD" "$DEMO"; then
+            echo "x production and demo screens are byte-identical — not our SPA rendering."
+            exit 1
+          fi
+          echo "OK production and demo configs render different screens:"
+          echo "   production ($(wc -c < "$PROD" | tr -d ' ') bytes) != demo ($(wc -c < "$DEMO" | tr -d ' ') bytes)"
+
+      - name: Write run metadata
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          cat > artifacts/metadata.json <<JSON
+          {
+            "simulatorName": "${{ steps.sim.outputs.name }}",
+            "simulatorUdid": "${{ steps.sim.outputs.udid }}",
+            "iosRuntime": "${{ steps.sim.outputs.runtime }}",
+            "bundleId": "${{ env.BUNDLE_ID }}",
+            "appPath": "${APP_PATH:-unknown}",
+            "deploymentTarget": "15.0",
+            "xcode": "$(xcodebuild -version | head -1)",
+            "simulatorSdk": "$(xcrun --sdk iphonesimulator --show-sdk-version)",
+            "signing": "none (CODE_SIGNING_ALLOWED=NO)"
+          }
+          JSON
+          cat artifacts/metadata.json
+
+      # Uploaded even on failure — a blank screenshot is exactly the evidence
+      # needed to diagnose one.
+      - name: Upload runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: ios-simulator-evidence
+          path: artifacts/
+          retention-days: 7
+
+      - name: Shut down simulator
+        if: always()
+        run: xcrun simctl shutdown '${{ steps.sim.outputs.udid }}' || true
