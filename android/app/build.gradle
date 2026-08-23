@@ -77,9 +77,12 @@ android {
                 storePassword signing.storePassword
                 keyAlias signing.alias
                 keyPassword signing.keyPassword
-                // Both schemes: v1 keeps API 24 installs working, v2 is what
-                // modern Android verifies. Play re-signs the delivered APKs
-                // anyway, but a directly-installed APK relies on these.
+                // v2 is what actually signs this app: it is verified from
+                // API 24 up, which is our minSdk, so AGP correctly SKIPS v1
+                // (apksigner reports "v1 scheme: false" — that is expected, not
+                // a misconfiguration). v1 is left enabled only so that lowering
+                // minSdk below 24 would start producing it again rather than
+                // silently shipping an APK those devices cannot verify.
                 enableV1Signing true
                 enableV2Signing true
             }

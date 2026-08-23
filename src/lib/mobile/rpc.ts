@@ -20,17 +20,52 @@ export class RpcError extends Error {
   }
 }
 
+/**
+ * The request never became an HTTP response.
+ *
+ * Distinct from `RpcError` on purpose. `RpcError` means the server answered and
+ * we did not like the answer — it carries a status, and the caller can act on
+ * it (401 means sign in). This means the WebView refused or failed to send the
+ * request at all: no DNS, no route to host, TLS rejected, or — the case that
+ * cost a full device investigation — a CORS preflight that came back without
+ * `Access-Control-Allow-Origin` because the endpoint was not deployed.
+ *
+ * `fetch` reports every one of those as the same bare `TypeError: Failed to
+ * fetch`, with no URL and no cause. Surfacing that string to a user, as this
+ * app did on its first run on real hardware, tells them nothing and tells a
+ * developer nothing either. Carrying the URL turns "Failed to fetch" into
+ * "could not reach https://…/api/mobile/session/me", which names the thing to
+ * go and check.
+ */
+export class RpcTransportError extends Error {
+  constructor(
+    readonly url: string,
+    readonly cause?: unknown,
+  ) {
+    super(`Could not reach ${url}`);
+    this.name = "RpcTransportError";
+  }
+}
+
 export async function call<T>(feature: string, method: string, args: unknown[] = []): Promise<T> {
   const token = await getAccessToken();
+  const url = `${mobileApiBase}/api/mobile/${feature}/${method}`;
 
-  const res = await fetch(`${mobileApiBase}/api/mobile/${feature}/${method}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    body: JSON.stringify({ args }),
-  });
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ args }),
+    });
+  } catch (err) {
+    // Blocked or failed before any response existed. Never a domain error, so
+    // it must not be reported as one.
+    throw new RpcTransportError(url, err);
+  }
 
   const payload = (await res.json().catch(() => ({}))) as { data?: T; error?: string };
 

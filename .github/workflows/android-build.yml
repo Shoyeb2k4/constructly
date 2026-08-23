@@ -121,6 +121,14 @@ jobs:
       - name: Capacitor sync (Android)
         run: npx cap sync android
 
+      # The artifact is only as good as the backend it points at. A signed APK
+      # with the correct production URL still dies on launch with "Failed to
+      # fetch" if /api/mobile/** was never deployed there — which is exactly how
+      # the first real-device install failed. Reachable-but-wrong is a hard
+      # failure; unreachable or a CI placeholder is "cannot verify" and passes.
+      - name: Verify the backend can serve the mobile app
+        run: npm run verify:backend
+
       # ── Signing ────────────────────────────────────────────────────────
       # The keystore exists only for the life of this job, outside the workspace
       # so it cannot be picked up by an artifact upload. `base64 -d` reads from
@@ -154,7 +162,7 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: npm run android:apk
+        run: node scripts/android-build.mjs apk
 
       - name: Build AAB
         if: ${{ inputs.artifact == 'aab' || inputs.artifact == 'both' || github.event_name == 'push' }}
@@ -162,7 +170,7 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: npm run android:aab
+        run: node scripts/android-build.mjs aab
 
       # ── Proof ──────────────────────────────────────────────────────────
       - name: Verify artifacts carry no privileged material
