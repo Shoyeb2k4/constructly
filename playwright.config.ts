@@ -23,7 +23,22 @@ export default defineConfig({
   use: {
     baseURL: `http://localhost:${PORT}`,
     trace: "on-first-retry",
+    /**
+     * A cold Turbopack compile of a heavy dynamic route legitimately takes
+     * 30-50s on the first request — `/labor/contractors/[id]` was measured at
+     * 47s cold and 0.9s warm. Playwright's 30s default counted that as a test
+     * failure, so whichever spec happened to touch a route first failed, and
+     * the failing set moved between runs.
+     *
+     * This changes no assertion: it waits for the dev server to answer instead
+     * of calling a slow compile a bug. Everything after navigation keeps the
+     * ordinary 5s expect timeout, so a genuinely missing element still fails
+     * fast.
+     */
+    navigationTimeout: 90_000,
   },
+  /** Per-test budget, raised in step with the navigation timeout above. */
+  timeout: 120_000,
   webServer: {
     command: "npm run dev:demo",
     url: `http://localhost:${PORT}`,
