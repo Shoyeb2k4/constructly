@@ -82,3 +82,9 @@ AuthKey_*.p8
 
 .vercel
 .env*
+
+# Staging environment. `.env*` is already ignored above, but these are named
+# explicitly because they are the files most likely to be created by hand in a
+# hurry and the consequence of committing them is a leaked service-role key.
+/.env.staging
+/.env.staging.ids
