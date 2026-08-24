@@ -30,7 +30,8 @@ import {
   X,
 } from "lucide-react";
 import { useCan } from "@/features/rbac/permission-context";
-import { authorizeReportExport } from "../server/actions";
+import { authorizeReportExport } from "../data";
+import { describeExportFailure, type ExportFailure } from "../authorization";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -131,20 +132,46 @@ export function ReportView({
     permissions,
   });
 
-  /** Export is server-gated: the data never leaves via a download unless the
-   *  caller can both view AND export it. */
+  /**
+   * Export is server-gated: the data never leaves via a download unless the
+   * caller can both view AND export it. The gate is unchanged — what changed is
+   * that a failure is now REPORTED for what it is.
+   *
+   * This used to wrap the authorization call in a bare `catch` and tell the user
+   * they lacked permission, whatever had actually gone wrong. An Owner holding
+   * every permission was told they had none, because the real fault — an expired
+   * session, a request that never arrived, a Server Action masked by Next in
+   * production — arrived here as an indistinguishable thrown error. Generating
+   * the file was outside the `try` entirely, so a failure there said nothing at
+   * all.
+   */
   async function runExport(kind: "excel" | "csv" | "pdf") {
     if (!result) return;
+
+    let failure: ExportFailure | null = null;
+
     try {
-      await authorizeReportExport(id);
-    } catch {
-      toast.error("You don't have permission to export this report.");
-      return;
+      const decision = await authorizeReportExport(id);
+      if (!decision.allowed) failure = { kind: "denied", reason: decision.reason };
+    } catch (err) {
+      // `requireUser()` throws when there is no session at all; anything else
+      // means the decision never came back. Neither is a permission denial.
+      const message = err instanceof Error ? err.message : "";
+      failure = /UNAUTHENTICATED/i.test(message) ? { kind: "signed-out" } : { kind: "unreachable" };
     }
-    const ex = await import("../exporters");
-    if (kind === "excel") await ex.reportToExcel(result, companyName);
-    else if (kind === "csv") await ex.reportToCsv(result, companyName);
-    else await ex.reportToPdf(result);
+
+    if (!failure) {
+      try {
+        const ex = await import("../exporters");
+        if (kind === "excel") await ex.reportToExcel(result, companyName);
+        else if (kind === "csv") await ex.reportToCsv(result, companyName);
+        else await ex.reportToPdf(result);
+      } catch {
+        failure = { kind: "generation-failed" };
+      }
+    }
+
+    if (failure) toast.error(describeExportFailure(failure));
   }
 
   if (!def) {

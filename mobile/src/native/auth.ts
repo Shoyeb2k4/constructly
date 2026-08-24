@@ -85,19 +85,56 @@ export async function completeAuthCallback(rawUrl: string): Promise<AuthCallback
 }
 
 /**
+ * URLs already handed to `completeAuthCallback`.
+ *
+ * An authorization code is single-use: redeeming it twice fails, and the second
+ * failure would be reported to the user as a broken sign-in even though the
+ * first one worked. Two sources feed this module (the launch intent and
+ * `appUrlOpen`), so the guard is necessary rather than defensive.
+ */
+const handled = new Set<string>();
+
+/**
  * Subscribe to deep links. Returns an unsubscribe function.
  *
- * Registered once at bootstrap, before React renders, so a cold start opened
- * *by* a link is not missed.
+ * TWO SOURCES, BECAUSE ANDROID HAS TWO PATHS.
+ *
+ * `appUrlOpen` fires from the App plugin's `handleOnNewIntent` ONLY — that is,
+ * when the activity already exists and is handed a new intent. It is the warm
+ * path, and it was the only one this function listened to.
+ *
+ * A cold start is different. If Android kills the app while the user is away in
+ * the system browser — entirely ordinary on a low-memory device — the redirect
+ * LAUNCHES the activity instead of re-entering it. The intent then arrives
+ * through `onCreate`, `onNewIntent` is never called, no `appUrlOpen` is ever
+ * emitted, and the authorization code is dropped in silence: no session, no
+ * error, just the sign-in screen again.
+ *
+ * Capacitor exposes that intent separately as `getLaunchUrl()`. Reading it here
+ * closes the gap. Both paths funnel through `handled`, so a URL delivered by
+ * both is redeemed once.
  */
 export async function listenForAuthLinks(
   onResult: (result: AuthCallback) => void,
 ): Promise<() => void> {
   if (!Capacitor.isNativePlatform()) return () => {};
 
-  const handle = await App.addListener("appUrlOpen", (event) => {
-    void completeAuthCallback(event.url).then(onResult);
-  });
+  const deliver = (url: string) => {
+    if (handled.has(url)) return;
+    handled.add(url);
+    void completeAuthCallback(url).then(onResult);
+  };
+
+  const handle = await App.addListener("appUrlOpen", (event) => deliver(event.url));
+
+  // The intent that started this process, if any. Checked AFTER the listener is
+  // registered so neither path can race the other into an unhandled state.
+  try {
+    const launch = await App.getLaunchUrl();
+    if (launch?.url) deliver(launch.url);
+  } catch {
+    // No launch URL is the normal case; never let it block start-up.
+  }
 
   return () => void handle.remove();
 }

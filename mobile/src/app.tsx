@@ -38,6 +38,8 @@ export function MobileApp() {
 function SessionBoundary() {
   const { data: user, isPending, error, refetch } = useSession();
   const [recovering, setRecovering] = React.useState(false);
+  /** An OAuth/email link that came back broken — shown on the sign-in screen. */
+  const [linkError, setLinkError] = React.useState<string | null>(null);
 
   // Deep links resolve outside React (they can arrive before the tree exists),
   // so results are delivered through a bus rather than props.
@@ -50,7 +52,15 @@ function SessionBoundary() {
         if (result.type === "recovery") setRecovering(true);
         else void refetch();
       } else if (result.kind === "error") {
+        // Toast for immediacy, state for persistence. The reason comes straight
+        // from Supabase and is the only thing that says WHY the exchange failed;
+        // losing it to a 4-second timer is what made this undiagnosable from the
+        // device.
         toast.error("Sign-in link failed", { description: result.reason });
+        setLinkError(`Sign-in link failed: ${result.reason}`);
+      } else {
+        // A link that worked clears any previous failure.
+        setLinkError(null);
       }
     });
   }, [refetch]);
@@ -83,7 +93,7 @@ function SessionBoundary() {
 
   if (isPending) return <BootScreen label="Starting Constructly…" />;
   if (error) return <BootError error={error} onRetry={() => void refetch()} />;
-  if (!user) return <SignInScreen onSignedIn={() => void refetch()} />;
+  if (!user) return <SignInScreen onSignedIn={() => void refetch()} initialError={linkError} />;
 
   return (
     <PermissionProvider permissions={user.permissions ?? []} isOwner={user.isOwner}>

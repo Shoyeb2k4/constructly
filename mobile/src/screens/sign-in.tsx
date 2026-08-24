@@ -32,15 +32,40 @@ function GoogleIcon() {
  *
  * Nothing here logs credentials, tokens, or provider responses.
  */
-export function SignInScreen({ onSignedIn }: { onSignedIn: () => void }) {
+export function SignInScreen({
+  onSignedIn,
+  initialError = null,
+}: {
+  onSignedIn: () => void;
+  /**
+   * A failure that happened OUTSIDE this screen — specifically an OAuth deep
+   * link that came back broken while the app was still resuming from the system
+   * browser. It is passed in rather than toasted at the source because a toast
+   * fired during a resume can be missed entirely, and the user is then left on a
+   * sign-in screen with no idea why they are back on it.
+   */
+  initialError?: string | null;
+}) {
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
   const [busy, setBusy] = React.useState<"password" | "google" | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  /**
+   * Set once the user starts a fresh attempt, which retires the inherited
+   * failure. Tracked as a flag rather than by copying `initialError` into state
+   * in an effect: syncing a prop into state that way triggers a cascading
+   * render, and React's lint rule is right to refuse it. The displayed value is
+   * DERIVED below instead.
+   */
+  const [ownAttempt, setOwnAttempt] = React.useState(false);
+
+  /** Local failures win; otherwise show what the deep link brought in. */
+  const shownError = error ?? (ownAttempt ? null : initialError);
 
   async function signIn(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    setOwnAttempt(true);
     if (!isSupabaseConfigured) {
       setError("This build has no Supabase configuration.");
       return;
@@ -79,6 +104,7 @@ export function SignInScreen({ onSignedIn }: { onSignedIn: () => void }) {
 
   async function googleSignIn() {
     setError(null);
+    setOwnAttempt(true);
     if (!isSupabaseConfigured) {
       setError("This build has no Supabase configuration.");
       return;
@@ -96,6 +122,10 @@ export function SignInScreen({ onSignedIn }: { onSignedIn: () => void }) {
     }
   }
 
+  // The toast is the notification; the panel below is the record. A sign-in
+  // failure is something the user has to act on, so it must not disappear on a
+  // timer — which is exactly how a Google failure became "it just says sign in
+  // failed" with no way to find out more.
   React.useEffect(() => {
     if (error) toast.error(error);
   }, [error]);
@@ -115,6 +145,16 @@ export function SignInScreen({ onSignedIn }: { onSignedIn: () => void }) {
             </p>
           </div>
         </div>
+
+        {shownError && (
+          <div
+            role="alert"
+            data-testid="signin-error"
+            className="mb-4 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2.5 text-sm text-danger"
+          >
+            {shownError}
+          </div>
+        )}
 
         <form className="space-y-4" onSubmit={signIn}>
           <div className="space-y-1.5">

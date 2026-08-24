@@ -4,6 +4,7 @@ import * as projects from "@/features/projects/server/actions";
 import { gatherServerDashboard } from "@/features/dashboard/server/gather";
 import { gatherServerPayments } from "@/features/payments/server/gather";
 import * as budget from "@/features/budget/server-actions";
+import * as reports from "@/features/reports/server/actions";
 import * as agreements from "@/features/contracts/server/actions";
 import * as amendments from "@/features/contracts/server/amendments";
 import * as attribution from "@/features/contracts/server/attribution";
@@ -277,6 +278,23 @@ const budgetMethods: Record<string, RpcMethod> = {
   spendByProject: () => budget.spendByProject(),
 };
 
+/**
+ * The reports layer's export gate.
+ *
+ * Read-only and decision-only: it returns whether THIS caller may export THIS
+ * report, resolved from the session on the server. It hands back no report data
+ * — the rows are fetched through each source module's own gated API — so
+ * registering it widens the reachable surface by one boolean, not by a dataset.
+ *
+ * It has to be here at all because `server/actions.ts` is stubbed out of the
+ * mobile bundle; without a native path every export on a phone failed and was
+ * misreported as a permission denial.
+ */
+const reportsMethods: Record<string, RpcMethod> = {
+  authorizeExport: (a) =>
+    reports.authorizeReportExport(...(a as Parameters<typeof reports.authorizeReportExport>)),
+};
+
 const REGISTRY: Record<string, Record<string, RpcMethod>> = {
   session: sessionMethods,
   dashboard: dashboardMethods,
@@ -290,6 +308,7 @@ const REGISTRY: Record<string, Record<string, RpcMethod>> = {
   branding: brandingMethods,
   payments: paymentsMethods,
   budget: budgetMethods,
+  reports: reportsMethods,
 };
 
 /**
