@@ -15,6 +15,7 @@ import {
   CommandShortcut,
 } from "@/components/ui/command";
 import { NAV_ITEMS } from "@/config/nav";
+import { useCanAccessModule } from "@/features/rbac/permission-context";
 import { useProjects } from "@/features/projects/hooks";
 
 /** Open the command palette from anywhere (e.g. the topbar search button). */
@@ -27,6 +28,11 @@ export function CommandPalette() {
   const router = useRouter();
   const { resolvedTheme, setTheme } = useTheme();
   const { data: projects = [] } = useProjects({});
+  // Same permission filter the sidebar applies. Without it the palette offers
+  // destinations that bounce straight back to the dashboard — which was already
+  // true of several modules and would now be true of Materials too.
+  const canAccessModule = useCanAccessModule();
+  const navItems = NAV_ITEMS.filter((i) => !i.modules || i.modules.some(canAccessModule));
 
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -55,7 +61,7 @@ export function CommandPalette() {
       <CommandList>
         <CommandEmpty>No results found.</CommandEmpty>
         <CommandGroup heading="Navigate">
-          {NAV_ITEMS.map((item) => (
+          {navItems.map((item) => (
             <CommandItem
               key={item.href}
               value={item.label}

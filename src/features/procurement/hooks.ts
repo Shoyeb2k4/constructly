@@ -4,11 +4,14 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tansta
 import { toast } from "sonner";
 import { procurementApi, procurementKeys } from "./data";
 import type {
+  CreateMaterialInput,
   CreatePaymentInput,
   CreatePOInput,
   CreateVendorInput,
   PaymentFilters,
+  MaterialFilters,
   POFilters,
+  UpdateMaterialInput,
   UpdateVendorInput,
   VendorFilters,
   VendorStatus,
@@ -21,9 +24,6 @@ export function useVendors(filters: VendorFilters = {}) {
 }
 export function useVendor(id: string) {
   return useQuery({ queryKey: procurementKeys.vendor(id), queryFn: () => procurementApi.getVendor(id) });
-}
-export function useMaterials() {
-  return useQuery({ queryKey: procurementKeys.materials, queryFn: () => procurementApi.listMaterials(), staleTime: 5 * 60_000 });
 }
 export function useMembers() {
   return useQuery({ queryKey: procurementKeys.members, queryFn: () => procurementApi.listMembers(), staleTime: 5 * 60_000 });
@@ -68,7 +68,197 @@ export function useVendorAging(vendorId: string, projectId?: string) {
   });
 }
 
+/* ── Material master ─────────────────────────────────────────────────── */
+
+export function useMaterialMaster(filters: MaterialFilters = {}, opts: { enabled?: boolean } = {}) {
+  return useQuery({
+    queryKey: procurementKeys.materialMaster(filters),
+    queryFn: () => procurementApi.listMaterialMaster(filters),
+    // Keep the current rows on screen while a search refetches, so the table
+    // never blanks between keystrokes.
+    placeholderData: keepPreviousData,
+    enabled: opts.enabled ?? true,
+  });
+}
+
+/**
+ * The materials a vendor NORMALLY supplies (active only) — what the PO picker
+ * lists first. One query per vendor, shared by every line of an order.
+ */
+export function useVendorMaterials(vendorId: string, opts: { enabled?: boolean } = {}) {
+  return useQuery({
+    queryKey: procurementKeys.vendorMaterials(vendorId),
+    queryFn: () => procurementApi.listVendorMaterials(vendorId),
+    enabled: !!vendorId && (opts.enabled ?? true),
+  });
+}
+
+/**
+ * Add one material to a vendor's usual list — the PO editor's optional "Also
+ * add to …". Invalidates only what a mapping change affects: that vendor's
+ * mappings, its detail, and the vendor lists that show its chips. Never the
+ * Material Master (a mapping changes no material). Toasts are the caller's,
+ * because the caller reports several of these as one outcome.
+ */
+export function useAddMaterialToVendor() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { vendorId: string; materialId: string }) =>
+      procurementApi.addMaterialToVendor(v.vendorId, v.materialId),
+    onSuccess: (_list, v) => {
+      qc.invalidateQueries({ queryKey: procurementKeys.vendorMaterials(v.vendorId) });
+      qc.invalidateQueries({ queryKey: procurementKeys.vendor(v.vendorId) });
+      qc.invalidateQueries({ queryKey: ["procurement", "vendors"] });
+    },
+  });
+}
+
+export function useMaterial(id: string) {
+  return useQuery({
+    queryKey: procurementKeys.material(id),
+    queryFn: () => procurementApi.getMaterial(id),
+    enabled: !!id,
+  });
+}
+
+/**
+ * The invalidation contract documented on `procurementKeys`, and nothing wider.
+ * A material write cannot change a purchase order or a payment (their material
+ * text is a frozen snapshot), so invalidating `procurementKeys.all` would only
+ * queue refetches that cannot return anything new — the same mistake
+ * `invalidateProcurementWrites` exists to avoid on the PO side.
+ *
+ * `materials` (the legacy name list older apps use) IS included, because it is
+ * derived from the master — see ProcurementRepository.listMaterials.
+ */
+function invalidateMaterial(qc: ReturnType<typeof useQueryClient>, id?: string) {
+  qc.invalidateQueries({ queryKey: ["procurement", "material-master"] });
+  qc.invalidateQueries({ queryKey: procurementKeys.materials });
+  if (id) qc.invalidateQueries({ queryKey: procurementKeys.material(id) });
+  // Since Pass 7, views that LABEL materials by identity show the Material's
+  // current name and archived state: vendor chips and material search, the
+  // vendor ⇄ project rollups, and the dashboard's top materials. Those — and
+  // still not POs or payments, whose snapshots a material write never touches.
+  for (const queryKey of MATERIAL_LABEL_VIEWS) qc.invalidateQueries({ queryKey });
+}
+
+export const MATERIAL_LABEL_VIEWS = [
+  ["procurement", "vendors"],
+  ["procurement", "vendor"],
+  ["procurement", "project"],
+  ["dashboard"],
+] as const;
+
+/** Recorded names on unlinked PO lines — options for the PO material filter. */
+export function useUnlinkedMaterialNames(opts: { enabled?: boolean } = {}) {
+  return useQuery({
+    queryKey: procurementKeys.unlinkedMaterialNames,
+    queryFn: () => procurementApi.listUnlinkedMaterialNames(),
+    staleTime: 5 * 60_000,
+    enabled: opts.enabled ?? true,
+  });
+}
+
+/** Known domain errors from the material actions, in the user's words. */
+function materialErrorMessage(e: unknown, fallback: string): string {
+  const code = e instanceof Error ? e.message : "";
+  switch (code) {
+    case "MATERIAL_NAME_TAKEN":
+      return "A material with this name already exists.";
+    case "INVALID_UNIT":
+      return "Select a valid unit.";
+    case "INVALID_CATEGORY":
+      return "Select a category from the list.";
+    case "NOT_FOUND":
+      return "That material no longer exists.";
+    case "FORBIDDEN":
+      return "You don't have permission to do that.";
+    default:
+      return fallback;
+  }
+}
+
+export function useMaterialMutations() {
+  const qc = useQueryClient();
+
+  const create = useMutation({
+    mutationFn: (input: CreateMaterialInput) => procurementApi.createMaterial(input),
+    onSuccess: (m) => {
+      invalidateMaterial(qc);
+      toast.success("Material added", { description: m.name });
+    },
+    onError: (e) => toast.error(materialErrorMessage(e, "Couldn't add the material")),
+  });
+
+  const update = useMutation({
+    mutationFn: (v: { id: string; patch: UpdateMaterialInput }) =>
+      procurementApi.updateMaterial(v.id, v.patch),
+    onSuccess: (m) => {
+      invalidateMaterial(qc, m.id);
+      toast.success("Saved");
+    },
+    onError: (e) => toast.error(materialErrorMessage(e, "Couldn't save the material")),
+  });
+
+  const setArchived = useMutation({
+    mutationFn: (v: { id: string; archived: boolean }) =>
+      procurementApi.setMaterialArchived(v.id, v.archived),
+    onSuccess: (m, v) => {
+      invalidateMaterial(qc, m.id);
+      toast.success(v.archived ? "Material archived" : "Material restored", { description: m.name });
+    },
+    // A restore can legitimately fail because a live material has taken the name
+    // in the meantime. That is the user's to resolve, so it is surfaced rather
+    // than swallowed.
+    onError: (e, v) =>
+      toast.error(
+        materialErrorMessage(
+          e,
+          v.archived ? "Couldn't archive the material" : "Couldn't restore the material",
+        ),
+      ),
+  });
+
+  return { create, update, setArchived };
+}
+
 /* ── Vendor mutations ────────────────────────────────────────────────── */
+
+/** Known errors from a vendor save — including its material mappings. */
+function vendorErrorMessage(e: unknown, fallback: string): string {
+  const code = e instanceof Error ? e.message : "";
+  switch (code) {
+    case "NOT_FOUND":
+      return "This vendor, or one of the selected materials, no longer exists.";
+    case "MATERIAL_ARCHIVED":
+      return "One of the selected materials has been archived. Remove it and save again.";
+    case "FORBIDDEN":
+      return "You don't have permission to do that.";
+    default:
+      return fallback;
+  }
+}
+
+/**
+ * What a vendor create/update can actually change, and nothing wider.
+ *
+ * Always: the vendor lists, and the transitional material-name list (the
+ * vendor's legacy mirror feeds its filter options). On update, also that
+ * vendor's detail and mappings, plus the purchase-order-side screens — the
+ * vendor's name and status are rendered on PO rows, payments and project
+ * procurement. Never the material master, members or categories: a vendor
+ * write cannot change those.
+ */
+function invalidateVendorWrite(qc: ReturnType<typeof useQueryClient>, id?: string) {
+  qc.invalidateQueries({ queryKey: ["procurement", "vendors"] });
+  qc.invalidateQueries({ queryKey: procurementKeys.materials });
+  if (!id) return;
+  qc.invalidateQueries({ queryKey: procurementKeys.vendor(id) });
+  qc.invalidateQueries({ queryKey: procurementKeys.vendorMaterials(id) });
+  for (const key of [["procurement", "pos"], ["procurement", "po"], ["procurement", "payments"], ["procurement", "project"]]) {
+    qc.invalidateQueries({ queryKey: key });
+  }
+}
 
 export function useVendorMutations() {
   const qc = useQueryClient();
@@ -77,16 +267,19 @@ export function useVendorMutations() {
   const create = useMutation({
     mutationFn: (input: CreateVendorInput) => procurementApi.createVendor(input),
     onSuccess: (v) => {
-      invalidate();
+      // A brand-new vendor is on no purchase order yet.
+      invalidateVendorWrite(qc);
       toast.success("Vendor added", { description: v.businessName });
     },
+    onError: (e) => toast.error(vendorErrorMessage(e, "Couldn't add the vendor")),
   });
   const update = useMutation({
     mutationFn: (v: { id: string; patch: UpdateVendorInput }) => procurementApi.updateVendor(v.id, v.patch),
-    onSuccess: () => {
-      invalidate();
+    onSuccess: (vendor) => {
+      invalidateVendorWrite(qc, vendor.id);
       toast.success("Saved");
     },
+    onError: (e) => toast.error(vendorErrorMessage(e, "Couldn't save the vendor")),
   });
   const setStatus = useMutation({
     mutationFn: (v: { id: string; status: VendorStatus }) => procurementApi.setVendorStatus(v.id, v.status),
@@ -140,11 +333,30 @@ function invalidateProcurementWrites(
     ["procurement", "vendor"],
     ["procurement", "vendor-aging"],
     ["procurement", "pending-approvals"],
+    // A PO write can add or link an unlinked line — the filter's older-order names.
+    ["procurement", "unlinked-material-names"],
   ];
   for (const queryKey of keys) qc.invalidateQueries({ queryKey });
   qc.invalidateQueries({ queryKey: ["budget"] });
   qc.invalidateQueries({ queryKey: ["dashboard"] });
   if (opts.projects) qc.invalidateQueries({ queryKey: ["projects"] });
+}
+
+/** Known errors from saving a purchase order, in the user's words. */
+function poErrorMessage(e: unknown, fallback: string): string {
+  const code = e instanceof Error ? e.message : "";
+  switch (code) {
+    case "MATERIAL_ARCHIVED":
+      return "A material on this order has been archived. Choose an active material for that line.";
+    case "NOT_FOUND":
+      return "A material or vendor on this order no longer exists.";
+    case "FORBIDDEN":
+      return "You don't have permission to do that.";
+    case "IMMUTABLE":
+      return "This purchase order can no longer be edited.";
+    default:
+      return fallback;
+  }
 }
 
 export function usePOMutations() {
@@ -157,7 +369,7 @@ export function usePOMutations() {
       invalidateAll();
       toast.success(`Purchase order ${po.poNumber} created`);
     },
-    onError: () => toast.error("Couldn't create the purchase order"),
+    onError: (e) => toast.error(poErrorMessage(e, "Couldn't create the purchase order")),
   });
   const update = useMutation({
     mutationFn: (v: { id: string; input: CreatePOInput }) => procurementApi.updatePurchaseOrder(v.id, v.input),
@@ -166,6 +378,8 @@ export function usePOMutations() {
       qc.setQueryData(procurementKeys.po(po.id), po);
       toast.success("Saved");
     },
+    // Previously absent: a failed edit said nothing at all.
+    onError: (e) => toast.error(poErrorMessage(e, "Couldn't save the purchase order")),
   });
   const submit = useMutation({
     mutationFn: (id: string) => procurementApi.submitPurchaseOrder(id),

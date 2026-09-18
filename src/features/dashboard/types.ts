@@ -1,4 +1,5 @@
 import type { PurchaseOrderListItem } from "@/features/procurement/types";
+import type { MaterialIdentityRef } from "@/features/procurement/material-identity";
 
 /** Raw inputs gathered by demo/server, then assembled by the pure
  *  assembleDashboard() — the single business-logic source (no duplication). */
@@ -47,7 +48,11 @@ export interface RawLabourEntry {
 
 /** One material line on a counted PO, for material-spend rollups. */
 export interface RawProcurementLine {
+  /** Frozen PO snapshot — the label of an UNLINKED line's bucket only. */
   material: string;
+  /** Identity. Null/absent = unlinked (legacy, older app, or hard-deleted
+   *  Material): grouped by `legacy:<normalized snapshot>`. */
+  materialId?: string | null;
   category: string | null;
   amountPaise: number; // taxable (ex-GST)
 }
@@ -82,6 +87,9 @@ export interface RawDashboardData {
   labourEntries: RawLabourEntry[];
   pendingPOs: PurchaseOrderListItem[];
   procurementPOs: RawProcurementPO[];
+  /** The company's Material Master, archived included — labels canonical
+   *  material buckets by their CURRENT name. Loaded once, not per line. */
+  procurementMaterials?: MaterialIdentityRef[];
   procurementPayments: RawProcurementPayment[];
   approvalRequired: boolean;
   activity: DashActivity[];
@@ -152,7 +160,14 @@ export interface VendorRollupRow {
 }
 
 export interface MaterialSpendRow {
+  /** Bucket identity: the materialId, or `legacy:<normalized snapshot>`. */
+  key: string;
+  materialId: string | null;
+  /** Display label: the Material's current name, or the unlinked snapshot. */
   material: string;
+  /** False = unlinked recorded name (not yet tied to a Material). */
+  linked: boolean;
+  archived: boolean;
   category: string | null;
   amountPaise: number;
 }

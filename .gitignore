@@ -88,3 +88,4 @@ AuthKey_*.p8
 # hurry and the consequence of committing them is a leaked service-role key.
 /.env.staging
 /.env.staging.ids
+/backups

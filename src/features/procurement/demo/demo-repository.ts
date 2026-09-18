@@ -1,8 +1,12 @@
 import type { ProcurementRepository } from "../repository";
 import type {
+  CreateMaterialInput,
   CreatePaymentInput,
   CreatePOInput,
   CreateVendorInput,
+  Material,
+  MaterialFilters,
+  UpdateMaterialInput,
   PaymentFilters,
   POFilters,
   ProjectProcurement,
@@ -12,6 +16,7 @@ import type {
   Vendor,
   VendorDetail,
   VendorFilters,
+  VendorMaterialRef,
   VendorPaymentItem,
   VendorStatus,
 } from "../types";
@@ -29,17 +34,35 @@ import {
   type PaymentForRollup,
   type POForRollup,
 } from "../calc";
-import { DEFAULT_MATERIAL_CATEGORIES } from "../constants";
+import { DEFAULT_MATERIAL_CATEGORIES, UNITS } from "../constants";
+import { normalizeMaterialName } from "../material-backfill";
+import {
+  distinctMaterialLabels,
+  materialFilterIntent,
+  materialIndex,
+  matchesRecordedName,
+  unlinkedRecordedNames,
+  type MaterialIdentityRef,
+} from "../material-identity";
+import {
+  buildMirror,
+  planLegacyVendorMaterials,
+  unlinkedLegacyNames,
+} from "../vendor-legacy-materials";
 import { poComparator } from "../sort";
 import { demoApprovalRequired } from "@/features/budget/spend";
 import {
   DEMO_VENDORS,
+  demoMaterials,
   demoPayments,
   demoPurchaseOrders,
   demoVendorDocs,
+  demoVendorMaterials,
+  type MaterialRecord,
   type PaymentRecord,
   type PORecord,
   type VendorDocRecord,
+  type VendorMaterialRecord,
   type VendorRecord,
 } from "./seed";
 
@@ -48,6 +71,8 @@ const K = {
   pos: "constructly.demo.pos.v2",
   payments: "constructly.demo.vendorPayments.v1",
   vendorDocs: "constructly.demo.vendorDocs.v1",
+  materials: "constructly.demo.materials.v1",
+  vendorMaterials: "constructly.demo.vendorMaterials.v1",
   projects: "constructly.demo.projects.v1",
   settings: "constructly.demo.settings.v1",
   // Legacy (pre-GST / pre-payments) stores migrated by ensureStores().
@@ -121,6 +146,165 @@ const loadVendors = () => read<VendorRecord>(K.vendors, () => DEMO_VENDORS);
 const loadPOs = () => read<PORecord>(K.pos, () => demoPurchaseOrders());
 const loadPayments = () => read<PaymentRecord>(K.payments, () => demoPayments());
 const loadVendorDocs = () => read<VendorDocRecord>(K.vendorDocs, () => demoVendorDocs());
+const loadMaterials = () => read<MaterialRecord>(K.materials, () => demoMaterials());
+const loadVendorMaterials = () =>
+  read<VendorMaterialRecord>(K.vendorMaterials, () => demoVendorMaterials());
+
+function toMaterialDTO(m: MaterialRecord): Material {
+  return {
+    id: m.id,
+    name: m.name,
+    category: m.category,
+    defaultUnit: m.defaultUnit,
+    hsnCode: m.hsnCode,
+    displayOrder: m.displayOrder,
+    isActive: m.deletedAt === null,
+    createdAt: m.createdAt,
+    updatedAt: m.updatedAt,
+  };
+}
+
+/** Demo stand-in for the server's tenant guard. */
+function assertDemoVendor(vendorId: string): void {
+  if (!loadVendors().some((v) => v.id === vendorId)) throw new Error("NOT_FOUND");
+}
+
+function assertDemoUnit(unit: string | null | undefined): void {
+  if (unit === null || unit === undefined || unit === "") return;
+  if (!(UNITS as readonly string[]).includes(unit)) throw new Error("INVALID_UNIT");
+}
+
+/** Same error shape as the server: unknown id is NOT_FOUND, deactivated is
+ *  MATERIAL_ARCHIVED. */
+function resolveDemoActiveMaterials(ids: string[]): MaterialRecord[] {
+  const rows = loadMaterials();
+  const out: MaterialRecord[] = [];
+  for (const id of ids) {
+    const m = rows.find((x) => x.id === id);
+    if (!m) throw new Error("NOT_FOUND");
+    if (m.deletedAt !== null) throw new Error("MATERIAL_ARCHIVED");
+    out.push(m);
+  }
+  return out;
+}
+
+function vendorMaterialDTOs(vendorId: string): Material[] {
+  const byId = new Map(loadMaterials().map((m) => [m.id, m]));
+  return loadVendorMaterials()
+    .filter((l) => l.vendorId === vendorId)
+    .map((l) => byId.get(l.materialId))
+    .filter((m): m is MaterialRecord => !!m && m.deletedAt === null)
+    .sort((a, b) => a.displayOrder - b.displayOrder || a.name.localeCompare(b.name))
+    .map(toMaterialDTO);
+}
+
+/** Every vendor's mapped materials, archived included, built ONCE per call so
+ *  the list does not re-read storage per row. Same ordering as the server. */
+function demoMaterialRefsByVendor(): Map<string, VendorMaterialRef[]> {
+  const byId = new Map(loadMaterials().map((m) => [m.id, m]));
+  const grouped = new Map<string, MaterialRecord[]>();
+  for (const l of loadVendorMaterials()) {
+    const m = byId.get(l.materialId);
+    if (!m) continue;
+    grouped.set(l.vendorId, [...(grouped.get(l.vendorId) ?? []), m]);
+  }
+  const out = new Map<string, VendorMaterialRef[]>();
+  for (const [vendorId, list] of grouped) {
+    out.set(
+      vendorId,
+      list
+        .slice()
+        .sort(
+          (a, b) =>
+            Number(a.deletedAt !== null) - Number(b.deletedAt !== null) ||
+            a.displayOrder - b.displayOrder ||
+            a.name.localeCompare(b.name),
+        )
+        .map((m) => ({ id: m.id, name: m.name, isActive: m.deletedAt === null })),
+    );
+  }
+  return out;
+}
+
+/** Demo twin of the server's planVendorMaterials — same errors, same rule that
+ *  an archived material may be KEPT on a vendor but never newly added. */
+function planDemoVendorMaterials(materialIds: string[], currentIds: string[]) {
+  const ids = [...new Set(materialIds)];
+  const current = new Set(currentIds);
+  const byId = new Map(loadMaterials().map((m) => [m.id, m]));
+  const rows = ids.map((id) => {
+    const m = byId.get(id);
+    if (!m) throw new Error("NOT_FOUND");
+    if (m.deletedAt !== null && !current.has(id)) throw new Error("MATERIAL_ARCHIVED");
+    return m;
+  });
+  return { ids, names: rows.map((m) => m.name).sort((a, b) => a.localeCompare(b)) };
+}
+
+/** Replace a vendor's links and refresh its legacy mirror, as the server does
+ *  in one nested write. */
+function applyDemoVendorMaterials(vendorId: string, outcome: { ids: string[]; mirror: string[] }) {
+  const kept = loadVendorMaterials().filter((l) => l.vendorId !== vendorId);
+  write(K.vendorMaterials, [...kept, ...outcome.ids.map((materialId) => ({ vendorId, materialId }))]);
+  const vendors = loadVendors();
+  const rec = vendors.find((v) => v.id === vendorId);
+  if (rec) {
+    rec.materialsSupplied = outcome.mirror;
+    write(K.vendors, vendors);
+  }
+}
+
+type DemoMappingState = { column: string[]; current: { id: string; name: string; isActive: boolean }[] };
+const EMPTY_DEMO_STATE: DemoMappingState = { column: [], current: [] };
+
+/** A vendor's legacy column + canonical mappings, archived included. */
+function demoMappingState(vendorId: string): DemoMappingState {
+  const byId = new Map(loadMaterials().map((m) => [m.id, m]));
+  const current = loadVendorMaterials()
+    .filter((l) => l.vendorId === vendorId)
+    .map((l) => byId.get(l.materialId))
+    .filter((m): m is MaterialRecord => !!m)
+    .map((m) => ({ id: m.id, name: m.name, isActive: m.deletedAt === null }));
+  const column = loadVendors().find((v) => v.id === vendorId)?.materialsSupplied ?? [];
+  return { column, current };
+}
+
+/** New client, as on the server: legacy-only names are carried forward. */
+function demoOutcomeFromIds(materialIds: string[], state: DemoMappingState) {
+  const plan = planDemoVendorMaterials(materialIds, state.current.map((m) => m.id));
+  const extras = unlinkedLegacyNames(state.column, state.current.map((m) => m.name));
+  return { ids: plan.ids, mirror: buildMirror(plan.names, extras) };
+}
+
+/** Older app: the shared transition rule, exactly as the server applies it. */
+function demoOutcomeFromLegacyNames(names: string[], state: DemoMappingState) {
+  const plan = planLegacyVendorMaterials({
+    submitted: names,
+    previousColumn: state.column,
+    current: state.current,
+    master: loadMaterials().map((m) => ({ id: m.id, name: m.name, isActive: m.deletedAt === null })),
+  });
+  return { ids: plan.finalIds, mirror: plan.mirror };
+}
+
+
+/** Resolve the materialIds a PO's lines reference, mirroring the server's rules
+ *  (including grandfathering an archived material already on the order). */
+function resolveDemoLineMaterials(
+  lines: { materialId?: string | null }[],
+  grandfathered: Set<string> = new Set(),
+): Map<string, MaterialRecord> {
+  const ids = [...new Set(lines.map((l) => l.materialId).filter((x): x is string => !!x))];
+  const rows = loadMaterials();
+  const out = new Map<string, MaterialRecord>();
+  for (const id of ids) {
+    const m = rows.find((x) => x.id === id);
+    if (!m) throw new Error("NOT_FOUND");
+    if (m.deletedAt !== null && !grandfathered.has(id)) throw new Error("MATERIAL_ARCHIVED");
+    out.set(id, m);
+  }
+  return out;
+}
 
 function readSettings(): Record<string, unknown> {
   if (typeof window === "undefined") return {};
@@ -159,7 +343,16 @@ function projectMeta(): Map<string, { name: string; code: string; procurementBud
 
 /* ── Pure-calc adapters ──────────────────────────────────────────────── */
 
-function toRollupPO(p: PORecord): POForRollup {
+/** The demo Material Master as an identity index — built ONCE per call site,
+ *  never per PO or per line. Archived rows included: history keeps its bucket. */
+function demoMaterialIndex(): Map<string, MaterialIdentityRef> {
+  return materialIndex(loadMaterials().map((m) => ({ id: m.id, name: m.name, archived: m.deletedAt !== null })));
+}
+const NO_MATERIAL_INDEX: ReadonlyMap<string, MaterialIdentityRef> = new Map();
+
+/** `index` labels linked materials; callers that only need money omit it
+ *  (identity keys are the same either way — only labels differ). */
+function toRollupPO(p: PORecord, index: ReadonlyMap<string, MaterialIdentityRef> = NO_MATERIAL_INDEX): POForRollup {
   return {
     id: p.id,
     vendorId: p.vendorId,
@@ -167,12 +360,17 @@ function toRollupPO(p: PORecord): POForRollup {
     status: p.status,
     totalPaise: p.totalPaise,
     purchaseDate: p.purchaseDate,
-    materials: [...new Set(p.lineItems.map((l) => l.material))],
+    materials: distinctMaterialLabels(p.lineItems, index),
   };
 }
 const toRollupPayment = (p: PaymentRecord): PaymentForRollup => p;
 
-function vendorRollup(v: VendorRecord, pos: PORecord[], payments: PaymentRecord[]): Vendor {
+function vendorRollup(
+  v: VendorRecord,
+  pos: PORecord[],
+  payments: PaymentRecord[],
+  refs: Map<string, VendorMaterialRef[]> = demoMaterialRefsByVendor(),
+): Vendor {
   const approval = demoApprovalRequired();
   const counted = pos.filter((p) => p.vendorId === v.id && poCounted(p.status, approval));
   return {
@@ -185,13 +383,18 @@ function vendorRollup(v: VendorRecord, pos: PORecord[], payments: PaymentRecord[
     pan: v.pan,
     address: v.address,
     materialsSupplied: v.materialsSupplied,
+    materials: refs.get(v.id) ?? [],
+    unlinkedMaterialNames: unlinkedLegacyNames(
+      v.materialsSupplied,
+      (refs.get(v.id) ?? []).map((m) => m.name),
+    ),
     paymentTerms: v.paymentTerms,
     status: v.status,
     notes: v.notes,
     isFavorite: v.isFavorite,
     totalPurchasedPaise: counted.reduce((s, p) => s + p.totalPaise, 0),
     outstandingPaise: outstandingPaise(
-      pos.map(toRollupPO),
+      pos.map((p) => toRollupPO(p)),
       payments.map(toRollupPayment),
       { vendorId: v.id },
       approval,
@@ -271,7 +474,10 @@ function toDetail(
   return {
     ...toListItem(po, vendors, meta, paidByPO(payments)),
     notes: po.notes,
-    lineItems: po.lineItems.map((l) => ({ ...l })),
+    // `materialId` is absent on PO lines stored before the material master
+    // existed. Normalising here is the whole compatibility path: old
+    // localStorage data keeps working untouched, and nothing needs rewriting.
+    lineItems: po.lineItems.map((l) => ({ ...l, materialId: l.materialId ?? null })),
     payments: payments
       .filter((p) => p.purchaseOrderId === po.id)
       .sort((a, b) => b.date.localeCompare(a.date))
@@ -289,10 +495,13 @@ function nextPoNumber(pos: PORecord[]): string {
   return `PO-${String(max + 1).padStart(4, "0")}`;
 }
 
-function buildLines(input: CreatePOInput) {
+function buildLines(input: CreatePOInput, byId: Map<string, MaterialRecord> = new Map()) {
   return input.lineItems.map((l, i) => ({
     id: uid(),
-    material: l.material,
+    // As on the server: a line naming a material takes the master's name, so a
+    // client-supplied string can never disagree with the id.
+    material: l.materialId ? byId.get(l.materialId)!.name : l.material,
+    materialId: l.materialId ?? null,
     category: l.category ?? null,
     quantity: l.quantity,
     unit: l.unit,
@@ -308,10 +517,24 @@ export const demoProcurementRepository: ProcurementRepository = {
   async listVendors(filters: VendorFilters = {}) {
     const pos = loadPOs();
     const payments = loadPayments();
+    const refs = demoMaterialRefsByVendor();
     let rows = loadVendors();
     if (filters.status && filters.status !== "ALL") rows = rows.filter((v) => v.status === filters.status);
-    if (filters.material && filters.material !== "ALL")
-      rows = rows.filter((v) => v.materialsSupplied.includes(filters.material!));
+    // Same rules as the server: the VendorMaterial relation is canonical; the
+    // name form (older apps) matches a mapped Material by normalized name, or
+    // an unmapped name an older app recorded in the legacy column.
+    const material = materialFilterIntent(filters);
+    if (material?.kind === "id") {
+      rows = rows.filter((v) => (refs.get(v.id) ?? []).some((m) => m.id === material.materialId));
+    } else if (material?.kind === "name") {
+      const key = normalizeMaterialName(material.name);
+      rows = rows.filter(
+        (v) =>
+          (refs.get(v.id) ?? []).some((m) => normalizeMaterialName(m.name) === key) ||
+          v.materialsSupplied.includes(material.name) ||
+          v.materialsSupplied.includes(material.name.replace(/\s+/g, " ").trim()),
+      );
+    }
     if (filters.favoritesOnly) rows = rows.filter((v) => v.isFavorite);
     if (filters.search) {
       const q = filters.search.toLowerCase();
@@ -319,12 +542,12 @@ export const demoProcurementRepository: ProcurementRepository = {
         (v) =>
           v.businessName.toLowerCase().includes(q) ||
           (v.contactPerson ?? "").toLowerCase().includes(q) ||
-          v.materialsSupplied.some((m) => m.toLowerCase().includes(q)),
+          (refs.get(v.id) ?? []).some((m) => m.name.toLowerCase().includes(q)),
       );
     }
     return rows
       .sort((a, b) => a.businessName.localeCompare(b.businessName))
-      .map((v) => vendorRollup(v, pos, payments));
+      .map((v) => vendorRollup(v, pos, payments, refs));
   },
 
   async getVendor(id) {
@@ -336,7 +559,8 @@ export const demoProcurementRepository: ProcurementRepository = {
     const meta = projectMeta();
     const approval = demoApprovalRequired();
     const paid = paidByPO(payments);
-    const rollups = vendorProjectRollups(pos.map(toRollupPO), payments.map(toRollupPayment), id, approval);
+    const index = demoMaterialIndex();
+    const rollups = vendorProjectRollups(pos.map((p) => toRollupPO(p, index)), payments.map(toRollupPayment), id, approval);
     return {
       ...vendorRollup(v, pos, payments),
       purchaseHistory: pos
@@ -377,24 +601,43 @@ export const demoProcurementRepository: ProcurementRepository = {
       gstin: input.gstin ?? null,
       pan: input.pan ?? null,
       address: input.address ?? null,
-      materialsSupplied: input.materialsSupplied ?? [],
+      // Written by the outcome below, as on the server.
+      materialsSupplied: [],
       paymentTerms: input.paymentTerms ?? null,
       status: "ACTIVE",
       notes: input.notes ?? null,
       isFavorite: false,
     };
+    // Resolve before writing anything, so a bad id leaves no half-made vendor.
+    const plan =
+      input.materialIds !== undefined
+        ? demoOutcomeFromIds(input.materialIds, EMPTY_DEMO_STATE)
+        : input.materialsSupplied !== undefined
+          ? demoOutcomeFromLegacyNames(input.materialsSupplied, EMPTY_DEMO_STATE)
+          : null;
     rows.push(rec);
     write(K.vendors, rows);
-    return vendorRollup(rec, loadPOs(), loadPayments());
+    if (plan) applyDemoVendorMaterials(rec.id, plan);
+    return vendorRollup(loadVendors().find((v) => v.id === rec.id)!, loadPOs(), loadPayments());
   },
 
   async updateVendor(id, patch: UpdateVendorInput) {
     const rows = loadVendors();
     const rec = rows.find((v) => v.id === id);
     if (!rec) throw new Error("NOT_FOUND");
-    Object.assign(rec, patch);
+    // Neither materials field is stored as-is: both become a mapping outcome,
+    // as on the server.
+    const { materialIds, materialsSupplied, ...fields } = patch;
+    const plan =
+      materialIds !== undefined
+        ? demoOutcomeFromIds(materialIds, demoMappingState(id))
+        : materialsSupplied !== undefined
+          ? demoOutcomeFromLegacyNames(materialsSupplied, demoMappingState(id))
+          : null;
+    Object.assign(rec, fields);
     write(K.vendors, rows);
-    return vendorRollup(rec, loadPOs(), loadPayments());
+    if (plan) applyDemoVendorMaterials(id, plan);
+    return vendorRollup(loadVendors().find((v) => v.id === id)!, loadPOs(), loadPayments());
   },
 
   async setVendorStatus(id, status: VendorStatus) {
@@ -412,6 +655,10 @@ export const demoProcurementRepository: ProcurementRepository = {
 
   async listMaterials() {
     return [...new Set(loadVendors().flatMap((v) => v.materialsSupplied))].sort();
+  },
+
+  async listUnlinkedMaterialNames() {
+    return unlinkedRecordedNames(loadPOs().flatMap((p) => p.lineItems));
   },
 
   async listMembers() {
@@ -453,6 +700,144 @@ export const demoProcurementRepository: ProcurementRepository = {
     return clean;
   },
 
+  /* ── Material master ───────────────────────────────────────────────── */
+
+  async listMaterialMaster(filters: MaterialFilters = {}) {
+    let rows = loadMaterials();
+    if (!filters.includeArchived) rows = rows.filter((m) => m.deletedAt === null);
+    if (filters.category && filters.category !== "ALL")
+      rows = rows.filter((m) => m.category === filters.category);
+    if (filters.search) {
+      const q = filters.search.toLowerCase();
+      rows = rows.filter((m) => m.name.toLowerCase().includes(q));
+    }
+    return rows
+      .slice()
+      .sort((a, b) => a.displayOrder - b.displayOrder || a.name.localeCompare(b.name))
+      .map(toMaterialDTO);
+  },
+
+  async getMaterial(id) {
+    const m = loadMaterials().find((x) => x.id === id);
+    return m ? toMaterialDTO(m) : null;
+  },
+
+  async createMaterial(input: CreateMaterialInput) {
+    const name = input.name.trim();
+    if (!name) throw new Error("INVALID_NAME");
+    assertDemoUnit(input.defaultUnit);
+    const rows = loadMaterials();
+    if (rows.some((m) => m.deletedAt === null && m.name.toLowerCase() === name.toLowerCase())) {
+      throw new Error("MATERIAL_NAME_TAKEN");
+    }
+    const now = new Date().toISOString();
+    const rec: MaterialRecord = {
+      id: uid(),
+      name,
+      category: input.category ?? null,
+      defaultUnit: input.defaultUnit || null,
+      hsnCode: input.hsnCode || null,
+      displayOrder: rows.filter((m) => m.deletedAt === null).length,
+      deletedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    rows.push(rec);
+    write(K.materials, rows);
+    return toMaterialDTO(rec);
+  },
+
+  async updateMaterial(id, patch: UpdateMaterialInput) {
+    const rows = loadMaterials();
+    const rec = rows.find((m) => m.id === id);
+    if (!rec) throw new Error("NOT_FOUND");
+    const previousName = rec.name;
+    assertDemoUnit(patch.defaultUnit);
+    if (patch.name !== undefined) {
+      const name = patch.name.trim();
+      if (!name) throw new Error("INVALID_NAME");
+      if (
+        rows.some(
+          (m) => m.id !== id && m.deletedAt === null && m.name.toLowerCase() === name.toLowerCase(),
+        )
+      ) {
+        throw new Error("MATERIAL_NAME_TAKEN");
+      }
+      rec.name = name;
+    }
+    if (patch.category !== undefined) rec.category = patch.category ?? null;
+    if (patch.defaultUnit !== undefined) rec.defaultUnit = patch.defaultUnit || null;
+    if (patch.hsnCode !== undefined) rec.hsnCode = patch.hsnCode || null;
+    if (patch.displayOrder !== undefined) rec.displayOrder = patch.displayOrder;
+    rec.updatedAt = new Date().toISOString();
+    write(K.materials, rows);
+    // As on the server: a rename refreshes the matching entry in each mapped
+    // vendor's legacy mirror. PO line snapshots are still left alone.
+    if (previousName !== rec.name) {
+      const oldKey = normalizeMaterialName(previousName);
+      const mapped = new Set(
+        loadVendorMaterials().filter((l) => l.materialId === id).map((l) => l.vendorId),
+      );
+      const vendors = loadVendors();
+      for (const v of vendors) {
+        if (!mapped.has(v.id)) continue;
+        v.materialsSupplied = buildMirror(
+          [],
+          v.materialsSupplied.map((n) => (normalizeMaterialName(n) === oldKey ? rec.name : n)),
+        );
+      }
+      write(K.vendors, vendors);
+    }
+    return toMaterialDTO(rec);
+  },
+
+  async setMaterialArchived(id, archived) {
+    const rows = loadMaterials();
+    const rec = rows.find((m) => m.id === id);
+    if (!rec) throw new Error("NOT_FOUND");
+    if (!archived && rec.deletedAt !== null) {
+      if (
+        rows.some(
+          (m) => m.id !== id && m.deletedAt === null && m.name.toLowerCase() === rec.name.toLowerCase(),
+        )
+      ) {
+        throw new Error("MATERIAL_NAME_TAKEN");
+      }
+    }
+    rec.deletedAt = archived ? new Date().toISOString() : null;
+    rec.updatedAt = new Date().toISOString();
+    write(K.materials, rows);
+    return toMaterialDTO(rec);
+  },
+
+  /* ── Vendor to material links ──────────────────────────────────────── */
+
+  async listVendorMaterials(vendorId) {
+    assertDemoVendor(vendorId);
+    return vendorMaterialDTOs(vendorId);
+  },
+
+  async setVendorMaterials(vendorId, materialIds) {
+    assertDemoVendor(vendorId);
+    applyDemoVendorMaterials(vendorId, demoOutcomeFromIds(materialIds, demoMappingState(vendorId)));
+    return vendorMaterialDTOs(vendorId);
+  },
+
+  async addMaterialToVendor(vendorId, materialId) {
+    assertDemoVendor(vendorId);
+    resolveDemoActiveMaterials([materialId]);
+    const links = loadVendorMaterials();
+    // Idempotent: re-adding an existing link changes nothing.
+    if (!links.some((l) => l.vendorId === vendorId && l.materialId === materialId)) {
+      const state = demoMappingState(vendorId);
+      applyDemoVendorMaterials(
+        vendorId,
+        demoOutcomeFromIds([...state.current.map((m) => m.id), materialId], state),
+      );
+    }
+    return vendorMaterialDTOs(vendorId);
+  },
+
   async listPurchaseOrders(filters: POFilters = {}) {
     const vendors = loadVendors();
     const meta = projectMeta();
@@ -462,8 +847,13 @@ export const demoProcurementRepository: ProcurementRepository = {
     if (filters.status && filters.status !== "ALL") rows = rows.filter((p) => p.status === filters.status);
     if (filters.projectId && filters.projectId !== "ALL") rows = rows.filter((p) => p.projectId === filters.projectId);
     if (filters.vendorId && filters.vendorId !== "ALL") rows = rows.filter((p) => p.vendorId === filters.vendorId);
-    if (filters.material && filters.material !== "ALL")
-      rows = rows.filter((p) => p.lineItems.some((l) => l.material === filters.material));
+    // Material: identity (materialId) or the recorded-name compatibility path —
+    // the same rule as the server (material-identity.ts).
+    const material = materialFilterIntent(filters);
+    if (material?.kind === "id")
+      rows = rows.filter((p) => p.lineItems.some((l) => l.materialId === material.materialId));
+    else if (material?.kind === "name")
+      rows = rows.filter((p) => p.lineItems.some((l) => matchesRecordedName(l.material, material.name)));
     if (filters.category && filters.category !== "ALL")
       rows = rows.filter((p) => p.lineItems.some((l) => l.category === filters.category));
     if (filters.createdById && filters.createdById !== "ALL")
@@ -476,11 +866,16 @@ export const demoProcurementRepository: ProcurementRepository = {
     if (filters.dateTo) rows = rows.filter((p) => p.purchaseDate <= filters.dateTo!);
     if (filters.search) {
       const q = filters.search.toLowerCase();
+      const index = demoMaterialIndex();
       rows = rows.filter(
         (p) =>
           p.poNumber.toLowerCase().includes(q) ||
           (vendors.find((v) => v.id === p.vendorId)?.businessName ?? "").toLowerCase().includes(q) ||
-          p.lineItems.some((l) => l.material.toLowerCase().includes(q)),
+          p.lineItems.some(
+            (l) =>
+              l.material.toLowerCase().includes(q) ||
+              (!!l.materialId && (index.get(l.materialId)?.name.toLowerCase().includes(q) ?? false)),
+          ),
       );
     }
     let items = rows
@@ -501,7 +896,9 @@ export const demoProcurementRepository: ProcurementRepository = {
   async createPurchaseOrder(input: CreatePOInput) {
     const pos = loadPOs();
     const finalize = !demoApprovalRequired();
-    const lineItems = buildLines(input);
+    // A new order may only name live materials. No vendor-mapping check: the
+    // mapping is a convenience catalogue, never an ordering constraint.
+    const lineItems = buildLines(input, resolveDemoLineMaterials(input.lineItems));
     const totals = poTotals(input.lineItems);
     const rec: PORecord = {
       id: uid(),
@@ -534,7 +931,12 @@ export const demoProcurementRepository: ProcurementRepository = {
     const rec = pos.find((p) => p.id === id);
     if (!rec) throw new Error("NOT_FOUND");
     if (rec.status !== "DRAFT") throw new Error("IMMUTABLE");
-    const lineItems = buildLines(input);
+    // Lines are rebuilt wholesale, so materialId has to be carried through — and
+    // a material archived since this order was raised stays usable on it.
+    const grandfathered = new Set(
+      rec.lineItems.map((l) => l.materialId).filter((x): x is string => !!x),
+    );
+    const lineItems = buildLines(input, resolveDemoLineMaterials(input.lineItems, grandfathered));
     const totals = poTotals(input.lineItems);
     Object.assign(rec, {
       vendorId: input.vendorId,
@@ -659,7 +1061,8 @@ export const demoProcurementRepository: ProcurementRepository = {
     const vendors = loadVendors();
     const meta = projectMeta();
     const approval = demoApprovalRequired();
-    const rollupPOs = pos.map(toRollupPO);
+    const index = demoMaterialIndex();
+    const rollupPOs = pos.map((p) => toRollupPO(p, index));
     const rollupPays = payments.map(toRollupPayment);
     const paid = paidByPO(payments);
     return {
@@ -688,7 +1091,7 @@ export const demoProcurementRepository: ProcurementRepository = {
   async vendorAging(vendorId, projectId) {
     const pos = loadPOs();
     const buckets = agingBuckets(
-      pos.map(toRollupPO),
+      pos.map((p) => toRollupPO(p)),
       loadPayments().map(toRollupPayment),
       vendorId,
       demoApprovalRequired(),
@@ -722,7 +1125,15 @@ function cloneAsDraft(id: string, opts: { linkRevision: boolean }): PurchaseOrde
     createdByName: ACTOR,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
-    lineItems: src.lineItems.map((l) => ({ ...l, id: uid() })),
+    // As on the server: a duplicate (a NEW order) drops the id of a material
+    // archived since, keeping the line's name; a revise keeps everything.
+    lineItems: src.lineItems.map((l) => {
+      const archived =
+        !opts.linkRevision &&
+        !!l.materialId &&
+        loadMaterials().some((m) => m.id === l.materialId && m.deletedAt !== null);
+      return { ...l, id: uid(), materialId: archived ? null : (l.materialId ?? null) };
+    }),
   };
   pos.push(copy);
   write(K.pos, pos);

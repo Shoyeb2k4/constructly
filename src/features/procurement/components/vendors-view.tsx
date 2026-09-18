@@ -27,13 +27,15 @@ import {
 import { cn } from "@/lib/utils";
 import { TagChip } from "@/features/projects/components/tag-chip";
 import type { Vendor, VendorFilters, VendorStatus } from "../types";
-import { useVendors, useMaterials, useVendorMutations } from "../hooks";
+import { useVendors, useMaterialMaster, useVendorMutations } from "../hooks";
+import { MaterialFilterSelect } from "./material-filter-select";
 import { useRecentVendors } from "../recently-vendors";
 import { useCan } from "@/features/rbac/permission-context";
 import { AddVendorSheet } from "./add-vendor-sheet";
+import { MaterialRefChip } from "./material-ref-chip";
 
 /** Pin, edit and lifecycle for one vendor. Kept out of the row link. */
-function VendorRowActions({ vendor: v }: { vendor: Vendor }) {
+function VendorRowActions({ vendor: v, onEdit }: { vendor: Vendor; onEdit: (v: Vendor) => void }) {
   const can = useCan();
   const canEdit = can("vendors.edit");
   const canArchive = can("vendors.archive");
@@ -51,7 +53,7 @@ function VendorRowActions({ vendor: v }: { vendor: Vendor }) {
       >
         <Star className={cn("size-4", v.isFavorite && "fill-warning text-warning")} />
       </button>
-      {lifecycle && (
+      {(canEdit || lifecycle) && (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" size="icon" className="size-8" aria-label={`Actions for ${v.businessName}`}>
@@ -60,24 +62,24 @@ function VendorRowActions({ vendor: v }: { vendor: Vendor }) {
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             {canEdit && (
-              <DropdownMenuItem asChild>
-                <Link href={`/vendors/${v.id}`}>
-                  <Pencil />
-                  Open vendor
-                </Link>
+              <DropdownMenuItem onSelect={() => onEdit(v)}>
+                <Pencil />
+                Edit vendor
               </DropdownMenuItem>
             )}
-            <DropdownMenuItem
-              onSelect={() =>
-                setStatusM.mutate({
-                  id: v.id,
-                  status: v.status === "ACTIVE" ? "INACTIVE" : "ACTIVE",
-                })
-              }
-            >
-              {v.status === "ACTIVE" ? <UserX /> : <UserCheck />}
-              {v.status === "ACTIVE" ? "Deactivate" : "Activate"}
-            </DropdownMenuItem>
+            {lifecycle && (
+              <DropdownMenuItem
+                onSelect={() =>
+                  setStatusM.mutate({
+                    id: v.id,
+                    status: v.status === "ACTIVE" ? "INACTIVE" : "ACTIVE",
+                  })
+                }
+              >
+                {v.status === "ACTIVE" ? <UserX /> : <UserCheck />}
+                {v.status === "ACTIVE" ? "Deactivate" : "Activate"}
+              </DropdownMenuItem>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
       )}
@@ -90,14 +92,18 @@ export function VendorsView() {
   const canCreate = can("vendors.create");
   const [search, setSearch] = React.useState("");
   const [status, setStatus] = React.useState<VendorStatus | "ALL">("ALL");
-  const [material, setMaterial] = React.useState("ALL");
+  // Identity, not a name: vendors are filtered through their VendorMaterial
+  // mappings, so a renamed Material still finds the same vendors.
+  const [materialId, setMaterialId] = React.useState<string | undefined>(undefined);
   const [favoritesOnly, setFavoritesOnly] = React.useState(false);
   const [addOpen, setAddOpen] = React.useState(false);
   const [editVendor, setEditVendor] = React.useState<Vendor | null>(null);
 
-  const filters: VendorFilters = { search, status, material, favoritesOnly };
+  const filters: VendorFilters = { search, status, materialId, favoritesOnly };
   const { data: vendors = [], isLoading } = useVendors(filters);
-  const { data: materials = [] } = useMaterials();
+  // Archived included: a grandfathered mapping to an archived Material must
+  // stay filterable. Same cached query as the rest of procurement.
+  const { data: materials = [] } = useMaterialMaster({ includeArchived: true });
   const recent = useRecentVendors();
 
   return (
@@ -124,13 +130,13 @@ export function VendorsView() {
           <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-foreground-subtle" />
           <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search vendors or materials…" className="pl-9" />
         </div>
-        <Select value={material} onValueChange={setMaterial}>
-          <SelectTrigger className="w-40"><SelectValue placeholder="Material" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="ALL">All materials</SelectItem>
-            {materials.map((m) => <SelectItem key={m} value={m}>{m}</SelectItem>)}
-          </SelectContent>
-        </Select>
+        <MaterialFilterSelect
+          className="w-40"
+          value={{ materialId }}
+          onChange={(v) => setMaterialId(v.materialId)}
+          materials={materials}
+          allLabel="All materials"
+        />
         <Select value={status} onValueChange={(v) => setStatus(v as VendorStatus | "ALL")}>
           <SelectTrigger className="w-32" aria-label="Filter by vendor status"><SelectValue /></SelectTrigger>
           <SelectContent>
@@ -185,15 +191,15 @@ export function VendorsView() {
               key: "materials",
               header: "Supplies",
               hideBelow: "xl",
+              // Canonical Material Master names from the vendor's mappings —
+              // already on the row, so no request per vendor.
               cell: (v) =>
-                v.materialsSupplied.length > 0 ? (
+                v.materials.length > 0 ? (
                   <span className="flex flex-wrap gap-1">
-                    {v.materialsSupplied.slice(0, 2).map((m) => (
-                      <TagChip key={m} label={m} />
+                    {v.materials.slice(0, 2).map((m) => (
+                      <MaterialRefChip key={m.id} material={m} />
                     ))}
-                    {v.materialsSupplied.length > 2 && (
-                      <TagChip label={`+${v.materialsSupplied.length - 2}`} />
-                    )}
+                    {v.materials.length > 2 && <TagChip label={`+${v.materials.length - 2}`} />}
                   </span>
                 ) : (
                   <span className="text-xs text-foreground-subtle">—</span>
@@ -231,7 +237,7 @@ export function VendorsView() {
               header: "Actions",
               headerHidden: true,
               numeric: true,
-              cell: (v) => <VendorRowActions vendor={v} />,
+              cell: (v) => <VendorRowActions vendor={v} onEdit={setEditVendor} />,
             },
           ]}
           renderCard={(v) => (
@@ -246,7 +252,7 @@ export function VendorsView() {
                     {v.contactPerson || "No contact"}
                   </span>
                 </Link>
-                <VendorRowActions vendor={v} />
+                <VendorRowActions vendor={v} onEdit={setEditVendor} />
               </div>
               <div className="mt-2 flex flex-wrap items-center gap-2">
                 <Badge variant={v.status === "INACTIVE" ? "neutral" : "success"}>

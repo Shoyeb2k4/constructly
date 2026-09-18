@@ -82,6 +82,13 @@ export const SYSTEM_ROLES: SystemRoleDef[] = [
       "contracts.complete",
       "contracts.pay",
       "vendors.view",
+      // Materials: a PM picks materials when raising a PO, and may add one that
+      // is genuinely missing rather than being blocked mid-order. Creating is
+      // additive and reversible; RESHAPING the catalogue everyone else orders
+      // from is not, so edit/archive are withheld — matching the fact that a PM
+      // gets vendors.view but never vendors.edit.
+      "materials.view",
+      "materials.create",
       // Legacy PROJECT_MANAGER could raise + edit draft POs on assigned projects
       // (no approve/delete, no broad scope).
       "purchase_orders.view",
@@ -115,6 +122,12 @@ export const SYSTEM_ROLES: SystemRoleDef[] = [
       "vendors.view",
       "vendors.create",
       "vendors.edit",
+      // Materials mirror this role's vendor authority exactly: curate the
+      // catalogue (view/create/edit), but withdrawing an item company-wide is
+      // not theirs — just as vendors.archive is not.
+      "materials.view",
+      "materials.create",
+      "materials.edit",
       "reports.view",
     ],
   },
@@ -151,6 +164,9 @@ export const SYSTEM_ROLES: SystemRoleDef[] = [
       "contracts.pay_delete",
       "purchase_orders.view",
       "vendors.view",
+      // Read-only, mirroring vendors.view: an Accountant reviews what was
+      // ordered and needs the catalogue to read it, never to change it.
+      "materials.view",
       "reports.view",
       "reports.export",
       "reports.print",

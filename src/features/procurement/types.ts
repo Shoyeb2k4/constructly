@@ -8,6 +8,18 @@ export type POPaymentStatus = "UNPAID" | "PARTIAL" | "PAID";
 export type PaymentMode = "CASH" | "UPI" | "BANK_TRANSFER" | "CHEQUE" | "CARD" | "OTHER";
 export type VendorDocumentCategory = "DRAWING" | "PDF" | "PHOTO" | "CONTRACT" | "OTHER";
 
+/**
+ * A material a vendor is mapped to, as the vendor screens show it. Deliberately
+ * slim — enough to label a chip and flag an archived one, nothing more.
+ */
+export interface VendorMaterialRef {
+  id: string;
+  name: string;
+  /** false = the material was archived after being mapped. Still shown, so the
+   *  mapping is never silently hidden; never offered as a new choice. */
+  isActive: boolean;
+}
+
 export interface Vendor {
   id: string;
   businessName: string;
@@ -17,7 +29,23 @@ export interface Vendor {
   gstin: string | null;
   pan: string | null;
   address: string | null;
+  /**
+   * LEGACY mirror: the names of the vendor's mapped materials plus any names an
+   * older app sent that match no Material. Kept only for older apps, which
+   * still read and write it. Web filtering and search no longer use it (Pass 7
+   * — they go through the VendorMaterial relation); no screen renders it — read
+   * `materials`.
+   */
   materialsSupplied: string[];
+  /** Canonical: the vendor's VendorMaterial mappings, archived ones included. */
+  materials: VendorMaterialRef[];
+  /**
+   * Names an OLDER app recorded for this vendor that match no Material Master
+   * record, so they could not be mapped. Kept (never silently dropped) and shown
+   * read-only until someone adds the material; they are carried forward on
+   * every save. Transitional — goes when the legacy column does.
+   */
+  unlinkedMaterialNames: string[];
   paymentTerms: string | null;
   status: VendorStatus;
   notes: string | null;
@@ -30,9 +58,51 @@ export interface Vendor {
   projectsServed: number;
 }
 
+/**
+ * A material master record, as application code sees it.
+ *
+ * Deliberately narrower than the Prisma row: `companyId`, `deletedById` and the
+ * raw `deletedAt` timestamp are tenant/audit internals and never cross this
+ * boundary. Deactivation is exposed as the single fact callers act on —
+ * `isActive`.
+ */
+export interface Material {
+  id: string;
+  name: string;
+  /** One of the company's material categories, or null. */
+  category: string | null;
+  /** Pre-selected as the PO line unit; one of UNITS. */
+  defaultUnit: string | null;
+  hsnCode: string | null;
+  displayOrder: number;
+  /** false = deactivated: hidden from new orders, but kept so history resolves. */
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateMaterialInput {
+  name: string;
+  category?: string | null;
+  defaultUnit?: string | null;
+  hsnCode?: string | null;
+}
+
+export type UpdateMaterialInput = Partial<CreateMaterialInput> & { displayOrder?: number };
+
+export interface MaterialFilters {
+  search?: string;
+  category?: string | "ALL";
+  /** Include deactivated rows (master-data admin + historical lookups). */
+  includeArchived?: boolean;
+}
+
 export interface POLineItem {
   id: string;
   material: string;
+  /** Canonical material identity; null on every line written before the
+   *  material master existed, and on legacy free-text lines. */
+  materialId: string | null;
   category: string | null;
   quantity: number;
   unit: string;
@@ -46,7 +116,11 @@ export interface POLineItem {
 }
 
 export interface POLineItemInput {
+  /** Free text. IGNORED when `materialId` is supplied — the server snapshots the
+   *  master record's name instead, so a client cannot desynchronise the two. */
   material: string;
+  /** Optional canonical material. Omit for legacy free-text lines. */
+  materialId?: string | null;
   category?: string | null;
   quantity: number;
   unit: string;
@@ -170,6 +244,11 @@ export interface ProjectProcurement {
 export interface VendorFilters {
   search?: string;
   status?: VendorStatus | "ALL";
+  /** Canonical: vendors with a VendorMaterial mapping to this Material. */
+  materialId?: string | "ALL";
+  /** COMPATIBILITY ONLY — the name filter older apps send. Ignored when
+   *  `materialId` is set. Matches a mapped Material by normalized name, or an
+   *  unmapped name an older app recorded. */
   material?: string | "ALL";
   favoritesOnly?: boolean;
 }
@@ -195,6 +274,14 @@ export interface POFilters {
   status?: PurchaseOrderStatus | "ALL";
   projectId?: string | "ALL";
   vendorId?: string | "ALL";
+  /** Canonical: POs with a line LINKED to this Material (identity — survives
+   *  renames and archiving; never matched by snapshot text). Wins over
+   *  `material` when both are present. */
+  materialId?: string | "ALL";
+  /** RECORDED-NAME filter — the compatibility path for `?material=` bookmarks,
+   *  older apps, and unlinked history: POs with a line whose snapshot text
+   *  equals this after trim / collapse-whitespace / case-fold, linked or not.
+   *  Ignored when `materialId` is set. */
   material?: string | "ALL";
   category?: string | "ALL";
   paymentStatus?: POPaymentStatus | "ALL";
@@ -218,7 +305,16 @@ export interface CreateVendorInput {
   gstin?: string | null;
   pan?: string | null;
   address?: string | null;
+  /** LEGACY free text. Accepted from older clients and written to the legacy
+   *  column only — it never creates or maps a material. Ignored when
+   *  `materialIds` is present. */
   materialsSupplied?: string[];
+  /**
+   * The vendor's supplied materials, as master ids. When present it REPLACES
+   * the vendor's mappings in the same write as the vendor itself, so the record
+   * and its materials cannot end up half-saved.
+   */
+  materialIds?: string[];
   paymentTerms?: string | null;
   notes?: string | null;
 }

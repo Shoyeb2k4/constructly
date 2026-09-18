@@ -16,6 +16,7 @@ const h = vi.hoisted(() => ({
     vendorFavorite: { findMany: vi.fn() },
     company: { findUnique: vi.fn() },
     activityLog: { create: vi.fn() },
+    vendorMaterial: { findMany: vi.fn() },
   },
 }));
 vi.mock("@/lib/auth/current-user", () => ({
@@ -52,6 +53,7 @@ beforeEach(() => {
   h.prisma.company.findUnique.mockResolvedValue({ settings: {} });
   h.prisma.vendor.update.mockResolvedValue(vendorRow);
   h.prisma.activityLog.create.mockResolvedValue({});
+  h.prisma.vendorMaterial.findMany.mockResolvedValue([]);
 });
 
 describe("vendor view/create/edit gates", () => {

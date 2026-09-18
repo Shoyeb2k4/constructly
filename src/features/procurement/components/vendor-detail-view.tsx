@@ -20,6 +20,7 @@ import {
   Trash2,
   ExternalLink,
   Upload,
+  Pencil,
   File as FileIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -30,7 +31,8 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { EmptyState } from "@/components/patterns/empty-state";
 import { MoneyText } from "@/components/patterns/money-text";
 import { StatusBadge, PO_STATUS_META } from "@/components/patterns/status-badge";
-import { TagChip } from "@/features/projects/components/tag-chip";
+import { AddVendorSheet } from "./add-vendor-sheet";
+import { MaterialRefChip, UnlinkedMaterialNames } from "./material-ref-chip";
 import { cn } from "@/lib/utils";
 import { formatDate } from "@/features/projects/format";
 import { useVendor, useVendorAging, useVendorMutations } from "../hooks";
@@ -66,6 +68,7 @@ export function VendorDetailView({ id }: { id: string }) {
   /** Project filter pill — set from the Projects tab, applies profile-wide. */
   const [projectFilter, setProjectFilter] = React.useState<string | null>(null);
   const [confirmPaymentId, setConfirmPaymentId] = React.useState<string | null>(null);
+  const [editOpen, setEditOpen] = React.useState(false);
   const { data: aging } = useVendorAging(id, projectFilter ?? undefined);
   const fileRef = React.useRef<HTMLInputElement>(null);
 
@@ -108,13 +111,29 @@ export function VendorDetailView({ id }: { id: string }) {
             {vendor.status === "INACTIVE" && <Badge variant="neutral">Inactive</Badge>}
           </div>
         </div>
-        {can("payments.create") && (
-          <Button variant="primary" onClick={() => setPayOpen(true)}>
-            <IndianRupee />
-            Record payment
-          </Button>
-        )}
+        <div className="flex flex-wrap items-center gap-2">
+          {can("vendors.edit") && (
+            <Button variant="secondary" onClick={() => setEditOpen(true)}>
+              <Pencil />
+              Edit vendor
+            </Button>
+          )}
+          {can("payments.create") && (
+            <Button variant="primary" onClick={() => setPayOpen(true)}>
+              <IndianRupee />
+              Record payment
+            </Button>
+          )}
+        </div>
       </div>
+      {editOpen && (
+        <AddVendorSheet
+          key={vendor.id}
+          open
+          vendor={vendor}
+          onOpenChange={(o) => !o && setEditOpen(false)}
+        />
+      )}
 
       {filterName && (
         <button
@@ -164,14 +183,26 @@ export function VendorDetailView({ id }: { id: string }) {
                   <Row icon={FileText} label="Payment terms" value={vendor.paymentTerms} />
                 </CardContent>
               </Card>
-              {vendor.materialsSupplied.length > 0 && (
-                <Card>
-                  <CardHeader><CardTitle>Materials</CardTitle></CardHeader>
-                  <CardContent className="flex flex-wrap gap-1.5">
-                    {vendor.materialsSupplied.map((m) => <TagChip key={m} label={m} />)}
-                  </CardContent>
-                </Card>
-              )}
+              {/* From the vendor's Material Master mappings. Shown even when
+                  empty, and archived materials are listed (marked) rather than
+                  hidden — the card states what the vendor is mapped to. */}
+              <Card>
+                <CardHeader><CardTitle>Materials supplied</CardTitle></CardHeader>
+                <CardContent className="space-y-3">
+                  {vendor.materials.length === 0 && vendor.unlinkedMaterialNames.length === 0 ? (
+                    <p className="text-sm text-foreground-subtle">No materials recorded for this vendor.</p>
+                  ) : vendor.materials.length === 0 ? null : (
+                    <ul className="flex flex-wrap gap-1.5" aria-label="Materials supplied">
+                      {vendor.materials.map((m) => (
+                        <li key={m.id} className="max-w-full">
+                          <MaterialRefChip material={m} />
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <UnlinkedMaterialNames names={vendor.unlinkedMaterialNames} />
+                </CardContent>
+              </Card>
             </div>
             <Card>
               <CardHeader><CardTitle>Recent purchase orders</CardTitle></CardHeader>

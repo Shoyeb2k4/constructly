@@ -44,6 +44,23 @@ describe("mobile RPC allowlist", () => {
     expect(lookupRpcMethod("contractors", "createSettlement")).toBeTypeOf("function");
     expect(lookupRpcMethod("contracts", "recordContractPayment")).toBeTypeOf("function");
     expect(lookupRpcMethod("procurement", "createPayment")).toBeTypeOf("function");
+    // Material master + vendor material links. The native app shares one
+    // repository contract with the web app, so anything missing here is a
+    // method that simply fails on the device while working in the browser.
+    for (const m of [
+      "listMaterialMaster",
+      "getMaterial",
+      "createMaterial",
+      "updateMaterial",
+      "setMaterialArchived",
+      "listVendorMaterials",
+      "setVendorMaterials",
+      "addMaterialToVendor",
+      "listMaterials",
+      "listUnlinkedMaterialNames",
+    ]) {
+      expect(lookupRpcMethod("procurement", m), m).toBeTypeOf("function");
+    }
     expect(lookupRpcMethod("payments", "gather")).toBeTypeOf("function");
   });
 

@@ -119,6 +119,8 @@ model Company {
   labourSubcategories          LabourSubcategory[]
   labourAttendance             LabourAttendance[]
   vendors                      Vendor[]
+  materials                    Material[]
+  vendorMaterials              VendorMaterial[]
   purchaseOrders               PurchaseOrder[]
   vendorPayments               VendorPayment[]
   vendorDocuments              VendorDocument[]
@@ -179,6 +181,7 @@ model User {
   companyRole            CompanyRole?      @relation("UserCompanyRole", fields: [companyRoleId], references: [id], onDelete: SetNull)
   roleAssignments        UserRole[]        @relation("UserRoleMember")
   rolesAssignedByMe      UserRole[]        @relation("UserRoleAssignedBy")
+  deletedMaterials           Material[]          @relation("MaterialDeletedBy")
   deletedLabourCategories    LabourCategory[]    @relation("LabourCategoryDeletedBy")
   deletedLabourSubcategories LabourSubcategory[] @relation("LabourSubcategoryDeletedBy")
   createdContracts           ContractorContract[]        @relation("ContractCreatedBy")
@@ -1296,6 +1299,94 @@ enum PurchaseOrderStatus {
   APPROVED
 }
 
+/// Company material master — the canonical catalogue of things this company
+/// buys ("OPC 53 Cement", "TMT Steel 12mm"). Distinct from the material
+/// CATEGORY presets in Company.settings.materialCategories, which group
+/// materials; `category` below holds a value from that same string domain
+/// (see features/procurement/constants.ts DEFAULT_MATERIAL_CATEGORIES).
+///
+/// DEACTIVATED, NEVER DELETED — exactly like LabourCategory. Setting
+/// `deletedAt` hides the row from pickers while KEEPING it, so historical
+/// PO lines that reference it still resolve. A PO line additionally snapshots
+/// the name in POLineItem.material, so even a hard delete cannot rewrite
+/// purchase history.
+model Material {
+  id           String    @id @default(uuid()) @db.Uuid
+  companyId    String    @map("company_id") @db.Uuid
+  name         String
+  /// One of Company.settings.materialCategories (same domain as
+  /// POLineItem.category). Deliberately a string, not an FK — the category
+  /// taxonomy is Settings-managed and has no table.
+  category     String?
+  /// Pre-selected as the PO line unit; always overridable per line.
+  defaultUnit  String?   @map("default_unit")
+  hsnCode      String?   @map("hsn_code")
+  displayOrder Int       @default(0) @map("display_order")
+  /// Soft-delete (deactivation). Set = hidden from master data and pickers,
+  /// row RETAINED so historical references keep resolving. deletedById records
+  /// the acting user.
+  deletedAt    DateTime? @map("deleted_at")
+  deletedById  String?   @map("deleted_by_id") @db.Uuid
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  company   Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  deletedBy User?            @relation("MaterialDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
+  vendors   VendorMaterial[]
+  poLines   POLineItem[]
+
+  // Active-name uniqueness is CASE-INSENSITIVE and scoped per company. It is a
+  // PARTIAL, EXPRESSION unique index —
+  //     UNIQUE (company_id, lower(name)) WHERE deleted_at IS NULL
+  // — created in prisma/migration-material-master.sql. Prisma can express
+  // neither a partial nor an expression index, so the compile-time @@unique is
+  // intentionally omitted here (same convention as LabourCategory). A name
+  // freed by a deactivation becomes reusable; "Cement" and "cement" cannot both
+  // be active in one company; two DIFFERENT companies may each have "Cement".
+  //
+  // @@unique([id, companyId]) exists only to back the COMPOSITE foreign keys on
+  // vendor_materials, which is what makes a cross-company vendor-material link
+  // structurally impossible rather than merely discouraged.
+  @@unique([id, companyId])
+  @@index([companyId, deletedAt])
+  @@index([companyId, category])
+  @@map("materials")
+}
+
+/// Which materials a vendor NORMALLY supplies — eligibility/config only.
+///
+/// It records capability, nothing transactional: no quantities, no ordered
+/// amounts, no received amounts, no dates, no history. What was ordered lives
+/// on POLineItem; what arrived lives on GoodsReceiptItem. Unlinking a row here
+/// changes only future pickers — it cannot touch an existing PO, its frozen
+/// material snapshot, a goods receipt, or any report.
+model VendorMaterial {
+  companyId  String   @map("company_id") @db.Uuid
+  vendorId   String   @map("vendor_id") @db.Uuid
+  materialId String   @map("material_id") @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  company  Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  vendor   Vendor   @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  material Material @relation(fields: [materialId], references: [id], onDelete: Cascade)
+
+  // The composite primary key makes a duplicate vendor-material mapping
+  // structurally impossible — no application check required.
+  //
+  // TENANT INTEGRITY: in the DATABASE the vendor and material references are
+  // COMPOSITE foreign keys — (vendor_id, company_id) -> vendors(id, company_id)
+  // and (material_id, company_id) -> materials(id, company_id) — so a row can
+  // only ever join a vendor and a material belonging to the SAME company.
+  // Prisma cannot model a composite FK whose columns overlap between two
+  // relations, so the client-side relations above are declared single-column
+  // and the real constraints live in prisma/migration-material-master.sql.
+  // The DB is authoritative; this is the same kind of divergence the partial
+  // unique indexes on labour_categories already carry.
+  @@id([vendorId, materialId])
+  @@index([companyId, materialId])
+  @@map("vendor_materials")
+}
+
 /// A material supplier. Lean by design; future payments, ledger, credit
 /// balances, and GST reports attach as NEW tables referencing vendorId —
 /// no redesign of this model required.
@@ -1317,12 +1408,18 @@ model Vendor {
   updatedAt         DateTime     @updatedAt @map("updated_at")
 
   company        Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  materials      VendorMaterial[]
   purchaseOrders PurchaseOrder[]
   favorites      VendorFavorite[]
   payments       VendorPayment[]
   documents      VendorDocument[]
   goodsReceipts  GoodsReceipt[]
 
+  // Backs the COMPOSITE foreign key (vendor_id, company_id) on
+  // vendor_materials — the constraint that makes a cross-company
+  // vendor-material link impossible. Additive and never rejecting: `id` is
+  // already the primary key, so (id, company_id) is trivially unique.
+  @@unique([id, companyId])
   @@index([companyId, status])
   @@map("vendors")
 }
@@ -1407,7 +1504,18 @@ model PurchaseOrder {
 model POLineItem {
   id              String  @id @default(uuid()) @db.Uuid
   purchaseOrderId String  @map("purchase_order_id") @db.Uuid
+  /// FROZEN DOCUMENT SNAPSHOT of the material name, in the same spirit as
+  /// `ratePaise` below — written once at entry and never recomputed. Renaming
+  /// the Material master row does NOT rewrite this, because a purchase order is
+  /// a commercial document. Always present, including on rows predating the
+  /// material master (materialId = NULL).
   material        String
+  /// Canonical material identity for NEW data. NULLABLE and nullable forever:
+  /// every PO line written before the material master existed keeps
+  /// materialId = NULL and stays completely valid. Never the display source —
+  /// `material` above is. ON DELETE SET NULL, so even a hard-deleted master row
+  /// only clears the key and leaves the snapshot intact.
+  materialId      String? @map("material_id") @db.Uuid
   /// Material category preset (Cement, Steel, …) — powers filters + analytics.
   category        String?
   quantity        Decimal @db.Decimal(12, 3)
@@ -1427,8 +1535,10 @@ model POLineItem {
   sortOrder       Int     @default(0) @map("sort_order")
 
   purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  materialRef   Material?     @relation(fields: [materialId], references: [id], onDelete: SetNull)
 
   @@index([purchaseOrderId])
+  @@index([materialId])
   @@map("po_line_items")
 }
 

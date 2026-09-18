@@ -24,7 +24,7 @@ export async function gatherServerDashboard(): Promise<RawDashboardData> {
 
   const projectWhere = { companyId, deletedAt: null, ...(isOwner ? {} : { pmId: user.id }) };
 
-  const [projects, spend, company, labour, pos, payments, logs] = await Promise.all([
+  const [projects, spend, company, labour, pos, payments, logs, materials] = await Promise.all([
     prisma.project.findMany({ where: projectWhere, include: { deadlines: true } }),
     spendByProject(),
     prisma.company.findUnique({ where: { id: companyId }, select: { settings: true } }),
@@ -37,7 +37,7 @@ export async function gatherServerDashboard(): Promise<RawDashboardData> {
       include: {
         vendor: { select: { businessName: true } },
         project: { select: { name: true, code: true } },
-        lineItems: { select: { material: true, category: true, amountPaise: true } },
+        lineItems: { select: { material: true, materialId: true, category: true, amountPaise: true } },
       },
     }),
     prisma.vendorPayment.findMany({
@@ -50,6 +50,9 @@ export async function gatherServerDashboard(): Promise<RawDashboardData> {
       take: 20,
       include: { actor: { select: { fullName: true } } },
     }),
+    // One query for the whole Material Master (archived included) — labels the
+    // top-materials buckets by current name. Never a lookup per line.
+    prisma.material.findMany({ where: { companyId }, select: { id: true, name: true, deletedAt: true } }),
   ]);
 
   const approval = (company?.settings as { poApprovalRequired?: boolean } | null)?.poApprovalRequired ?? false;
@@ -138,7 +141,12 @@ export async function gatherServerDashboard(): Promise<RawDashboardData> {
     totalPaise: Number(p.totalPaise),
     paidPaise: paidByPO.get(p.id) ?? 0,
     createdAt: p.createdAt.toISOString(),
-    lines: p.lineItems.map((l) => ({ material: l.material, category: l.category, amountPaise: Number(l.amountPaise) })),
+    lines: p.lineItems.map((l) => ({
+      material: l.material,
+      materialId: l.materialId,
+      category: l.category,
+      amountPaise: Number(l.amountPaise),
+    })),
   }));
   const procurementPayments: RawProcurementPayment[] = payments.map((p) => ({
     vendorId: p.vendorId,
@@ -160,6 +168,7 @@ export async function gatherServerDashboard(): Promise<RawDashboardData> {
     labourEntries,
     pendingPOs,
     procurementPOs,
+    procurementMaterials: materials.map((m) => ({ id: m.id, name: m.name, archived: m.deletedAt !== null })),
     procurementPayments,
     approvalRequired: approval,
     activity,

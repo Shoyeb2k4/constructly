@@ -51,8 +51,10 @@ export interface POForRollup {
   totalPaise: number;
   /** ISO yyyy-mm-dd. */
   purchaseDate: string;
-  /** Distinct materials on the PO (for "materials supplied" rollups). */
-  materials?: string[];
+  /** Distinct materials on the PO (for "materials supplied" rollups), keyed by
+   *  IDENTITY — the materialId, or `legacy:<normalized>` for an unlinked line
+   *  (material-identity.ts) — and carried with a display label. */
+  materials?: { key: string; label: string }[];
 }
 
 /** Minimal payment shape. */
@@ -218,7 +220,9 @@ function rollupBy(
     }
     return g;
   };
-  const materialSets = new Map<string, Set<string>>();
+  // Per group: identity key -> label. Deduping by key (not label) means a
+  // renamed Material counts once, and two Materials sharing a name stay two.
+  const materialSets = new Map<string, Map<string, string>>();
   for (const po of pos) {
     if (!poCounted(po.status, approvalRequired)) continue;
     const g = get(po[key]);
@@ -228,8 +232,8 @@ function rollupBy(
     if (!g.lastSupplyDate || po.purchaseDate > g.lastSupplyDate) g.lastSupplyDate = po.purchaseDate;
     if (po.materials?.length) {
       let set = materialSets.get(po[key]);
-      if (!set) materialSets.set(po[key], (set = new Set()));
-      po.materials.forEach((m) => set!.add(m));
+      if (!set) materialSets.set(po[key], (set = new Map()));
+      for (const m of po.materials) if (!set.has(m.key)) set.set(m.key, m.label);
     }
   }
   for (const pay of payments) {
@@ -237,7 +241,7 @@ function rollupBy(
     // (advance to a vendor on a new project) — shows as negative outstanding.
     get(pay[key]).outstandingPaise -= pay.amountPaise;
   }
-  for (const [id, set] of materialSets) get(id).materials = [...set].sort();
+  for (const [id, set] of materialSets) get(id).materials = [...set.values()].sort();
   return [...groups.values()].sort((a, b) => b.purchaseValuePaise - a.purchaseValuePaise);
 }
 

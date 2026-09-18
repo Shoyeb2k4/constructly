@@ -162,7 +162,9 @@ export async function updateRole(
   const user = await requirePermission("roles.edit");
   const role = await prisma.companyRole.findFirst({ where: { id, companyId: user.company.id } });
   if (!role) throw new Error("NOT_FOUND");
-  // Owner is implicit all-access and can't be edited; system templates are editable.
+  // Owner is implicit all-access; built-in system roles are READ-ONLY templates
+  // (Duplicate to customise) so prisma/reconcile-rbac.ts can never discard a
+  // company's work. Only custom roles get past here — see features/team/authz.
   assertRoleEditable(role);
 
   const data: { name?: string; description?: string | null; permissions?: Permission[] } = {};

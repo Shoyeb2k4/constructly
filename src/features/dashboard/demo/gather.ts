@@ -12,6 +12,7 @@ import type {
 import { poPaymentStatus } from "@/features/procurement/calc";
 import {
   DEMO_VENDORS,
+  demoMaterials,
   demoPayments,
   demoPurchaseOrders,
 } from "@/features/procurement/demo/seed";
@@ -33,6 +34,7 @@ const K = {
   vendors: "constructly.demo.vendors.v2",
   vendorsV1: "constructly.demo.vendors.v1",
   payments: "constructly.demo.vendorPayments.v1",
+  materials: "constructly.demo.materials.v1",
 };
 
 /**
@@ -77,7 +79,8 @@ interface StoredProject {
 interface StoredLabour { projectId: string; date: string; labourSubcategoryId: string; quantityPresent: number; estimatedCostPaise: number }
 interface StoredCategory { id: string; name: string; color: string | null }
 interface StoredSubcategory { id: string; categoryId: string; name: string }
-interface StoredPOLine { material: string; category: string | null; amountPaise: number }
+interface StoredPOLine { material: string; materialId?: string | null; category: string | null; amountPaise: number }
+interface StoredMaterial { id: string; name: string; deletedAt: string | null }
 interface StoredPO { id: string; poNumber: string; vendorId: string; projectId: string; status: string; purchaseDate: string; expectedDelivery: string | null; subtotalPaise: number; gstPaise: number; totalPaise: number; invoiceNumber: string | null; createdByName: string; createdAt: string; approvedByName: string | null; approvedAt: string | null; lineItems: StoredPOLine[] }
 interface StoredVendor { id: string; businessName: string }
 interface StoredPayment { vendorId: string; projectId: string; purchaseOrderId: string | null; amountPaise: number }
@@ -202,7 +205,12 @@ export function gatherDemoDashboard(opts: { userId: string; isOwner: boolean }):
     totalPaise: p.totalPaise,
     paidPaise: paidByPO.get(p.id) ?? 0,
     createdAt: p.createdAt,
-    lines: (p.lineItems ?? []).map((l) => ({ material: l.material, category: l.category ?? null, amountPaise: l.amountPaise })),
+    lines: (p.lineItems ?? []).map((l) => ({
+      material: l.material,
+      materialId: l.materialId ?? null,
+      category: l.category ?? null,
+      amountPaise: l.amountPaise,
+    })),
   }));
   const procurementPayments: RawProcurementPayment[] = payments.map((p) => ({
     vendorId: p.vendorId,
@@ -232,6 +240,11 @@ export function gatherDemoDashboard(opts: { userId: string; isOwner: boolean }):
     labourEntries,
     pendingPOs,
     procurementPOs,
+    procurementMaterials: read<StoredMaterial>(K.materials, demoMaterials).map((m) => ({
+      id: m.id,
+      name: m.name,
+      archived: m.deletedAt !== null,
+    })),
     procurementPayments,
     approvalRequired: approval,
     activity,

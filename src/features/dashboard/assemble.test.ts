@@ -184,7 +184,16 @@ describe("assembleDashboard", () => {
       { projectId: "p2", name: "B", code: "PRJ-2", amountPaise: 100_000 },
     ]);
     // Top materials by taxable amount (draft excluded).
-    expect(pr.topMaterials[0]).toEqual({ material: "TMT Steel", category: "Steel", amountPaise: 246_000 });
+    // An unlinked fixture line: its own legacy bucket, labelled by its snapshot.
+    expect(pr.topMaterials[0]).toEqual({
+      key: "legacy:tmt steel",
+      materialId: null,
+      material: "TMT Steel",
+      linked: false,
+      archived: false,
+      category: "Steel",
+      amountPaise: 246_000,
+    });
     // Upcoming delivery: po1 expected 2026-07-20 (5 days from today 2026-07-15).
     expect(pr.upcomingDeliveries).toEqual([
       { poId: "po1", poNumber: "PO-1", vendorName: "Steelco", projectName: "A", expectedDelivery: "2026-07-20", daysUntil: 5, totalPaise: 300_000 },

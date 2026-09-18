@@ -40,7 +40,8 @@ import type { POFilters, POSort } from "../types";
 import {
   usePurchaseOrders,
   useVendors,
-  useMaterials,
+  useMaterialMaster,
+  useUnlinkedMaterialNames,
   useMaterialCategories,
   useMembers,
   usePendingApprovalCount,
@@ -56,6 +57,7 @@ import { encodePOQuery, decodePOQuery, countActiveFilters } from "../url-filters
 import { useCan } from "@/features/rbac/permission-context";
 import { POEditorSheet } from "./po-editor-sheet";
 import { ProcurementFilterSheet } from "./procurement-filter-sheet";
+import { materialFilterLabel } from "./material-filter-select";
 import { PoTable, PoColumnsMenu, usePoColumns } from "./po-table";
 
 const PAGE_SIZE = 25;
@@ -112,7 +114,10 @@ export function ProcurementView() {
   const { data: pos = [], isLoading, isFetching } = usePurchaseOrders(filters);
   const { data: projects = [] } = useProjects({});
   const { data: vendors = [] } = useVendors({});
-  const { data: materials = [] } = useMaterials();
+  // The SAME cached query the PO editor uses (archived included), so chips
+  // and the filter resolve names without another fetch.
+  const { data: materials = [] } = useMaterialMaster({ includeArchived: true });
+  const { data: unlinkedNames = [] } = useUnlinkedMaterialNames();
   const { data: categories = [] } = useMaterialCategories();
   const { data: members = [] } = useMembers();
   const { data: pending = 0 } = usePendingApprovalCount();
@@ -152,7 +157,8 @@ export function ProcurementView() {
   if (on(filters.status)) chips.push({ key: "status", label: `Status: ${PO_STATUS_LABEL[filters.status as keyof typeof PO_STATUS_LABEL]}`, onClear: () => patch({ status: undefined }) });
   if (on(filters.projectId)) chips.push({ key: "project", label: `Project: ${nameOf(filters.projectId)}`, onClear: () => patch({ projectId: undefined }) });
   if (on(filters.vendorId)) chips.push({ key: "vendor", label: `Vendor: ${nameOf(filters.vendorId)}`, onClear: () => patch({ vendorId: undefined }) });
-  if (on(filters.material)) chips.push({ key: "material", label: `Material: ${filters.material}`, onClear: () => patch({ material: undefined }) });
+  const materialChip = materialFilterLabel(filters, materials);
+  if (materialChip) chips.push({ key: "material", label: materialChip, onClear: () => patch({ materialId: undefined, material: undefined }) });
   if (on(filters.category)) chips.push({ key: "category", label: `Category: ${filters.category}`, onClear: () => patch({ category: undefined }) });
   if (on(filters.paymentStatus)) chips.push({ key: "pay", label: `Payment: ${PO_PAYMENT_STATUS_LABEL[filters.paymentStatus as keyof typeof PO_PAYMENT_STATUS_LABEL]}`, onClear: () => patch({ paymentStatus: undefined }) });
   if (on(filters.createdById)) chips.push({ key: "by", label: `By: ${nameOf(filters.createdById)}`, onClear: () => patch({ createdById: undefined }) });
@@ -358,6 +364,7 @@ export function ProcurementView() {
         projects={projects.map((p) => ({ id: p.id, name: p.name }))}
         vendors={vendors.map((v) => ({ id: v.id, businessName: v.businessName }))}
         materials={materials}
+        unlinkedNames={unlinkedNames}
         categories={categories}
         members={members}
       />

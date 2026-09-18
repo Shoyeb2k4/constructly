@@ -121,8 +121,19 @@ export function ProcurementCard({ procurement }: { procurement: ProcurementWidge
               {procurement.topMaterials.length > 0 && (
                 <ListSection title="Top materials" icon={Package}>
                   {procurement.topMaterials.slice(0, 5).map((m) => (
-                    <div key={m.material} className="flex items-center justify-between gap-2 text-sm">
-                      <span className="min-w-0 truncate">{m.material}</span>
+                    <div key={m.key} className="flex items-center justify-between gap-2 text-sm">
+                      <span className="flex min-w-0 items-center gap-1.5">
+                        <span className="min-w-0 truncate">{m.material}</span>
+                        {/* Unlinked history and archived materials are real
+                            buckets, labelled so a same-named pair is legible. */}
+                        {!m.linked ? (
+                          <span className="shrink-0 text-[11px] text-foreground-subtle" title="Recorded on older orders, not linked to the Material Master">
+                            unlinked
+                          </span>
+                        ) : m.archived ? (
+                          <span className="shrink-0 text-[11px] text-foreground-subtle">archived</span>
+                        ) : null}
+                      </span>
                       <span className="shrink-0 font-mono text-xs tabular-nums text-foreground-muted"><MoneyText paise={m.amountPaise} compact /></span>
                     </div>
                   ))}

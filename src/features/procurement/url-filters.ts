@@ -1,3 +1,4 @@
+import { materialFilterIntent } from "./material-identity";
 import type {
   POFilters,
   POGstFilter,
@@ -29,6 +30,13 @@ export function decodePOQuery(sp: URLSearchParams): POQueryState {
     const n = Number(v);
     return Number.isFinite(n) && n >= 0 ? n : undefined;
   };
+  // Material: `materialId` is identity. `material` is the pre-Pass-7 name
+  // key, still honoured for old bookmarks and shared links as a RECORDED-NAME
+  // filter — deliberately not rewritten to an id, since every order raised
+  // before materials were linked has no id and would silently drop out of the
+  // link's results. If both are present, `materialId` wins and the name is
+  // discarded, so the state never holds two contradictory material filters.
+  const material = materialFilterIntent({ materialId: str("materialId"), material: str("material") });
   const aminRupees = num("amin");
   const amaxRupees = num("amax");
 
@@ -37,7 +45,8 @@ export function decodePOQuery(sp: URLSearchParams): POQueryState {
     status: str("status") as PurchaseOrderStatus | undefined,
     projectId: str("project"),
     vendorId: str("vendor"),
-    material: str("material"),
+    materialId: material?.kind === "id" ? material.materialId : undefined,
+    material: material?.kind === "name" ? material.name : undefined,
     category: str("category"),
     paymentStatus: str("pay") as POPaymentStatus | undefined,
     createdById: str("by"),
@@ -61,7 +70,9 @@ export function encodePOQuery({ filters, page }: POQueryState): string {
   set("status", filters.status);
   set("project", filters.projectId);
   set("vendor", filters.vendorId);
-  set("material", filters.material);
+  const material = materialFilterIntent(filters);
+  if (material?.kind === "id") sp.set("materialId", material.materialId);
+  else if (material?.kind === "name") sp.set("material", material.name);
   set("category", filters.category);
   set("pay", filters.paymentStatus);
   set("by", filters.createdById);
@@ -84,7 +95,7 @@ export function countActiveFilters(f: POFilters): number {
   if (on(f.status)) n++;
   if (on(f.projectId)) n++;
   if (on(f.vendorId)) n++;
-  if (on(f.material)) n++;
+  if (materialFilterIntent(f)) n++; // one dimension, whichever key carries it
   if (on(f.category)) n++;
   if (on(f.paymentStatus)) n++;
   if (on(f.createdById)) n++;

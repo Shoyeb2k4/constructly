@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { toPaise, toRupees } from "@/lib/money";
 import type {
+  CreateMaterialInput,
   CreatePaymentInput,
   CreatePOInput,
   CreateVendorInput,
@@ -44,7 +45,10 @@ export const vendorFormSchema = z.object({
   gstin,
   pan,
   address: optionalStr(240),
-  materialsSupplied: z.array(z.string()).optional(),
+  /** Material Master ids. Part of the form itself (not side state), so reset,
+   *  dirty-tracking and a failed submit all treat it like any other field.
+   *  Optional: a vendor may be saved with none. */
+  materialIds: z.array(z.string()).optional(),
   paymentTerms: optionalStr(80),
   notes: optionalStr(500),
 });
@@ -60,14 +64,55 @@ export function vendorFormToInput(v: z.output<typeof vendorFormSchema>): CreateV
     gstin: v.gstin ?? null,
     pan: v.pan ?? null,
     address: v.address ?? null,
-    materialsSupplied: v.materialsSupplied ?? [],
+    // Ids only. The legacy free-text list is no longer sent — the server
+    // derives that column from these.
+    materialIds: v.materialIds ?? [],
     paymentTerms: v.paymentTerms ?? null,
     notes: v.notes ?? null,
   };
 }
 
+/* ── Material master ──────────────────────────────────────── */
+
+/** Mirrors the server's materialInputSchema so the same rules are enforced in
+ *  the form; the server remains the authority. Empty strings mean "not set"
+ *  and become null, matching how the other forms here treat optional fields. */
+export const materialFormSchema = z.object({
+  name: z.string().trim().min(1, "Enter a material name").max(120),
+  category: z.string().optional(),
+  defaultUnit: z.string().optional(),
+  hsnCode: z
+    .string()
+    .trim()
+    .max(10, "Too long")
+    .regex(/^\d*$/, "Digits only")
+    .optional()
+    .or(z.literal("")),
+});
+
+export type MaterialFormValues = z.input<typeof materialFormSchema>;
+
+export function materialFormToInput(
+  v: z.output<typeof materialFormSchema>,
+): CreateMaterialInput {
+  return {
+    name: v.name,
+    category: v.category ? v.category : null,
+    defaultUnit: v.defaultUnit ? v.defaultUnit : null,
+    hsnCode: v.hsnCode ? v.hsnCode : null,
+  };
+}
+
 export const poLineItemSchema = z.object({
-  material: z.string().trim().min(1, "Required").max(120),
+  /** The line's material NAME. Chosen from the Material Master it is the
+   *  master's name (the server re-snapshots it from the id regardless); on a
+   *  legacy line with no id it is the text that was recorded. */
+  material: z.string().trim().min(1, "Choose a material").max(120),
+  /** Canonical material. "" on a legacy line that was never linked. */
+  materialId: z.string().optional(),
+  /** UI-only: also add this material to the vendor's usual materials after the
+   *  order is saved. Never sent with the order itself. */
+  addToVendor: z.boolean().optional(),
   category: z.string().trim().max(60).optional().or(z.literal("")),
   quantity: z.coerce.number().positive("Must be > 0"),
   unit: z.string().trim().min(1, "Unit"),
@@ -77,8 +122,12 @@ export const poLineItemSchema = z.object({
 });
 
 export const poFormSchema = z.object({
-  vendorId: z.string().uuid("Pick a vendor"),
-  projectId: z.string().uuid("Pick a project"),
+  // Presence, not UUID format: zod 4's uuid() is strict RFC 9562 and rejects
+  // the demo seed's ids, which silently blocked every order and payment
+  // against seeded data. The server resolves both ids inside the caller's
+  // company regardless — that is the real check.
+  vendorId: z.string().min(1, "Pick a vendor"),
+  projectId: z.string().min(1, "Pick a project"),
   purchaseDate: z.string().min(1, "Pick a date"),
   expectedDelivery: z.string().optional().or(z.literal("")),
   invoiceNumber: optionalStr(60),
@@ -98,6 +147,7 @@ export function poFormToInput(v: z.output<typeof poFormSchema>): CreatePOInput {
     notes: v.notes ?? null,
     lineItems: v.lineItems.map((l) => ({
       material: l.material,
+      materialId: l.materialId ? l.materialId : null,
       category: l.category ? l.category : null,
       quantity: l.quantity,
       unit: l.unit,
@@ -118,6 +168,10 @@ export function poDetailToForm(po: PurchaseOrderDetail): POFormValues {
     notes: po.notes ?? "",
     lineItems: po.lineItems.map((l) => ({
       material: l.material,
+      // Carried through the edit: the server rebuilds every line on save, so a
+      // line only keeps its canonical material if the form sends it back.
+      materialId: l.materialId ?? "",
+      addToVendor: false,
       category: l.category ?? "",
       quantity: l.quantity,
       unit: l.unit,
@@ -132,8 +186,12 @@ export function poDetailToForm(po: PurchaseOrderDetail): POFormValues {
 const PAYMENT_MODES = ["CASH", "UPI", "BANK_TRANSFER", "CHEQUE", "CARD", "OTHER"] as const;
 
 export const paymentFormSchema = z.object({
-  vendorId: z.string().uuid("Pick a vendor"),
-  projectId: z.string().uuid("Pick a project"),
+  // Presence, not UUID format: zod 4's uuid() is strict RFC 9562 and rejects
+  // the demo seed's ids, which silently blocked every order and payment
+  // against seeded data. The server resolves both ids inside the caller's
+  // company regardless — that is the real check.
+  vendorId: z.string().min(1, "Pick a vendor"),
+  projectId: z.string().min(1, "Pick a project"),
   /** Optional — advances / on-account / multi-PO settlements. */
   purchaseOrderId: z.string().optional().or(z.literal("")),
   amountRupees: z.coerce.number().positive("Must be > 0"),

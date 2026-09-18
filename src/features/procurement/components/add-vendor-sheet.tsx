@@ -1,9 +1,8 @@
 "use client";
 
 import * as React from "react";
-import { useForm } from "react-hook-form";
+import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { X } from "lucide-react";
 import {
   Sheet,
   SheetContent,
@@ -25,6 +24,8 @@ import {
 import { vendorFormSchema, vendorFormToInput, type VendorFormValues } from "../schema";
 import { useVendorMutations } from "../hooks";
 import type { Vendor, VendorStatus } from "../types";
+import { VendorMaterialsField } from "./vendor-materials-field";
+import { UnlinkedMaterialNames } from "./material-ref-chip";
 
 function Field({ label, error, children }: { label: string; error?: string; children: React.ReactNode }) {
   return (
@@ -35,6 +36,22 @@ function Field({ label, error, children }: { label: string; error?: string; chil
     </div>
   );
 }
+
+/** What an empty Add form holds. Explicit, so `reset()` returns here rather than
+ *  to whatever the last vendor left behind — this sheet stays mounted between
+ *  uses on the Vendors page. */
+const EMPTY: VendorFormValues = {
+  businessName: "",
+  contactPerson: "",
+  phone: "",
+  email: "",
+  gstin: "",
+  pan: "",
+  address: "",
+  materialIds: [],
+  paymentTerms: "",
+  notes: "",
+};
 
 /**
  * Add a vendor, or edit one when `vendor` is supplied. Mount with a key tied to
@@ -51,11 +68,9 @@ export function AddVendorSheet({
 }) {
   const { create, update } = useVendorMutations();
   const isEdit = !!vendor;
-  const [materials, setMaterials] = React.useState<string[]>(vendor?.materialsSupplied ?? []);
   const [status, setStatus] = React.useState<VendorStatus>(vendor?.status ?? "ACTIVE");
-  const [draft, setDraft] = React.useState("");
 
-  const { register, handleSubmit, reset, formState: { errors } } = useForm<VendorFormValues>({
+  const { register, control, handleSubmit, reset, formState: { errors } } = useForm<VendorFormValues>({
     resolver: zodResolver(vendorFormSchema),
     defaultValues: vendor
       ? {
@@ -66,29 +81,39 @@ export function AddVendorSheet({
           gstin: vendor.gstin ?? "",
           pan: vendor.pan ?? "",
           address: vendor.address ?? "",
+          // Canonical mappings — archived ones included, so saving an unrelated
+          // change keeps them rather than silently dropping them.
+          materialIds: vendor.materials.map((m) => m.id),
           paymentTerms: vendor.paymentTerms ?? "",
           notes: vendor.notes ?? "",
         }
-      : undefined,
+      : EMPTY,
   });
 
   function close() {
     reset();
-    setMaterials(vendor?.materialsSupplied ?? []);
-    setDraft("");
+    setStatus(vendor?.status ?? "ACTIVE");
     onOpenChange(false);
-  }
-  function addMaterial() {
-    const m = draft.trim();
-    if (m && !materials.includes(m)) setMaterials([...materials, m]);
-    setDraft("");
   }
 
   const onSubmit = handleSubmit(async (values) => {
-    const parsed = vendorFormSchema.parse({ ...values, materialsSupplied: materials });
-    const input = vendorFormToInput(parsed);
-    if (vendor) await update.mutateAsync({ id: vendor.id, patch: { ...input, status } });
-    else await create.mutateAsync(input);
+    const input = vendorFormToInput(vendorFormSchema.parse(values));
+    try {
+      if (vendor) {
+        // Status only travels when it CHANGED. The server treats any status in
+        // the patch as a lifecycle action needing vendors.archive/restore, so
+        // always sending it would make every edit by someone who can edit but
+        // not archive (a Purchase Manager) fail — for a status they never touched.
+        const patch = status !== vendor.status ? { ...input, status } : input;
+        await update.mutateAsync({ id: vendor.id, patch });
+      } else {
+        await create.mutateAsync(input);
+      }
+    } catch {
+      // The mutation hook has already shown why. Leave the sheet open with
+      // everything the user entered — including their material selection.
+      return;
+    }
     close();
   });
 
@@ -134,24 +159,26 @@ export function AddVendorSheet({
                 <Input placeholder="Peenya, Bengaluru" {...register("address")} />
               </Field>
             </div>
-            <Field label="Materials supplied">
-              <div className="flex flex-wrap items-center gap-1.5 rounded-[var(--radius)] border border-border-strong bg-surface px-2 py-1.5">
-                {materials.map((m) => (
-                  <span key={m} className="inline-flex items-center gap-1 rounded-md bg-surface-muted px-1.5 py-0.5 text-[11px] font-medium text-foreground-muted">
-                    {m}
-                    <button type="button" onClick={() => setMaterials(materials.filter((x) => x !== m))} className="text-foreground-subtle hover:text-foreground"><X className="size-3" /></button>
-                  </span>
-                ))}
-                <input
-                  value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === ",") { e.preventDefault(); addMaterial(); } }}
-                  onBlur={addMaterial}
-                  placeholder={materials.length ? "" : "Cement, Steel…"}
-                  className="min-w-24 flex-1 bg-transparent text-sm outline-none placeholder:text-foreground-subtle"
-                />
-              </div>
-            </Field>
+            <div className="space-y-1.5">
+              <Label id="vendor-materials-label">Materials supplied</Label>
+              <p className="text-xs text-foreground-subtle">
+                Which materials does this vendor normally supply?
+              </p>
+              <Controller
+                control={control}
+                name="materialIds"
+                render={({ field }) => (
+                  <VendorMaterialsField
+                    value={field.value ?? []}
+                    onChange={field.onChange}
+                    existing={vendor?.materials}
+                  />
+                )}
+              />
+              {/* Kept on save (the server carries them forward); shown so they
+                  are visible rather than silently preserved. */}
+              <UnlinkedMaterialNames names={vendor?.unlinkedMaterialNames ?? []} />
+            </div>
             <div className="grid grid-cols-2 gap-4">
               <Field label="Payment terms" error={errors.paymentTerms?.message}>
                 <Input placeholder="30 days" {...register("paymentTerms")} />

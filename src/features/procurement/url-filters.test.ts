@@ -86,3 +86,47 @@ describe("countActiveFilters", () => {
     ).toBe(10);
   });
 });
+
+describe("material filter URLs (Pass 7)", () => {
+  const M1 = "90000000-0000-0000-0000-000000000001";
+
+  it("canonical: ?materialId= decodes to identity and round-trips", () => {
+    const { filters } = decode(`materialId=${M1}`);
+    expect(filters.materialId).toBe(M1);
+    expect(filters.material).toBeUndefined();
+    expect(encodePOQuery({ filters, page: 1 })).toBe(`materialId=${M1}`);
+  });
+
+  it("an old shared ?material=Cement link still works — as a recorded-name filter, not rewritten", () => {
+    const { filters } = decode("material=Cement");
+    expect(filters.material).toBe("Cement");
+    expect(filters.materialId).toBeUndefined();
+    // Stays a name: resolving it to an id would drop every order raised before
+    // materials were linked — exactly the orders the link was shared for.
+    expect(encodePOQuery({ filters, page: 1 })).toBe("material=Cement");
+  });
+
+  it("materialId wins when both keys are present — never two material filters", () => {
+    const { filters } = decode(`material=Cement&materialId=${M1}`);
+    expect(filters.materialId).toBe(M1);
+    expect(filters.material).toBeUndefined();
+    expect(encodePOQuery({ filters, page: 1 })).toBe(`materialId=${M1}`);
+    // The same precedence on encode, if state ever held both.
+    expect(encodePOQuery({ filters: { materialId: M1, material: "Cement" }, page: 1 })).toBe(`materialId=${M1}`);
+  });
+
+  it("empty or blank material keys produce no constraint", () => {
+    const { filters } = decode("material=%20%20&materialId=");
+    expect(filters.material).toBeUndefined();
+    expect(filters.materialId).toBeUndefined();
+    expect(countActiveFilters(filters)).toBe(0);
+    expect(encodePOQuery({ filters: { materialId: "ALL", material: "ALL" }, page: 1 })).toBe("");
+  });
+
+  it("counts material as ONE dimension whichever key carries it; reset clears it", () => {
+    expect(countActiveFilters({ materialId: M1 })).toBe(1);
+    expect(countActiveFilters({ material: "Cement" })).toBe(1);
+    expect(countActiveFilters({ materialId: M1, material: "Cement" })).toBe(1);
+    expect(countActiveFilters({ materialId: undefined, material: undefined })).toBe(0);
+  });
+});

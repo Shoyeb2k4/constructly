@@ -4,6 +4,7 @@ import {
   FolderKanban,
   HardHat,
   Truck,
+  Package,
   ShoppingCart,
   Banknote,
   BarChart3,
@@ -26,6 +27,10 @@ export const NAV_ITEMS: NavItem[] = [
   { label: "Projects", href: "/projects", icon: FolderKanban, modules: ["projects"] },
   { label: "Labor", href: "/labor", icon: HardHat, modules: ["labour", "attendance"] },
   { label: "Vendors", href: "/vendors", icon: Truck, modules: ["vendors"] },
+  // Procurement master data, so it sits beside Vendors rather than under the
+  // transactional screen. Its route nests below /procurement — see NavList,
+  // which resolves the overlap by longest match.
+  { label: "Materials", href: "/procurement/materials", icon: Package, modules: ["materials"] },
   { label: "Procurement", href: "/procurement", icon: ShoppingCart, modules: ["purchase_orders"] },
   // Payments sits with the operational modules that FEED it, above Reports:
   // finding a transaction is day-to-day work, analysing them is not.

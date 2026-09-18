@@ -1,7 +1,11 @@
 import type {
+  CreateMaterialInput,
   CreatePaymentInput,
   CreatePOInput,
   CreateVendorInput,
+  Material,
+  MaterialFilters,
+  UpdateMaterialInput,
   PaymentFilters,
   POFilters,
   ProjectProcurement,
@@ -30,7 +34,20 @@ export interface ProcurementRepository {
   updateVendor(id: string, patch: UpdateVendorInput): Promise<Vendor>;
   setVendorStatus(id: string, status: VendorStatus): Promise<Vendor>;
   toggleVendorFavorite(id: string): Promise<boolean>;
+  /**
+   * LEGACY — kept for OLDER APPS only, which build their "Material" filter
+   * dropdowns from it and send the chosen name back as `material`. The union of
+   * active Material names and the legacy `Vendor.materialsSupplied` strings.
+   * The web app filters by `materialId` from the Material Master (Pass 7) and
+   * no longer calls this. Remove once no shipped client does.
+   */
   listMaterials(): Promise<string[]>;
+  /**
+   * Recorded names on UNLINKED PO lines (no materialId), one per normalized
+   * spelling — the "older orders" options of the PO material filter, so history
+   * written before materials were linked stays filterable.
+   */
+  listUnlinkedMaterialNames(): Promise<string[]>;
   listMembers(): Promise<{ id: string; fullName: string }[]>;
   addVendorDocument(
     vendorId: string,
@@ -40,6 +57,25 @@ export interface ProcurementRepository {
   /** Material category presets (Settings-managed, company-wide). */
   listMaterialCategories(): Promise<string[]>;
   setMaterialCategories(categories: string[]): Promise<string[]>;
+
+  // Material master — the canonical catalogue (see features/procurement/types).
+  /** Active materials by default; `includeArchived` adds deactivated rows. */
+  listMaterialMaster(filters?: MaterialFilters): Promise<Material[]>;
+  /** Resolves archived materials too, so history and admin screens can read them. */
+  getMaterial(id: string): Promise<Material | null>;
+  createMaterial(input: CreateMaterialInput): Promise<Material>;
+  updateMaterial(id: string, patch: UpdateMaterialInput): Promise<Material>;
+  /** Deactivate / reactivate. One call, mirroring setVendorStatus — a material
+   *  is never deleted, so this is the whole lifecycle. */
+  setMaterialArchived(id: string, archived: boolean): Promise<Material>;
+
+  // Vendor ↔ material: which materials a vendor NORMALLY supplies.
+  // Eligibility only — never a constraint on what may be ordered.
+  listVendorMaterials(vendorId: string): Promise<Material[]>;
+  /** Replaces the whole mapping set for a vendor. Returns the new set. */
+  setVendorMaterials(vendorId: string, materialIds: string[]): Promise<Material[]>;
+  /** Idempotent add — re-adding an existing link succeeds and changes nothing. */
+  addMaterialToVendor(vendorId: string, materialId: string): Promise<Material[]>;
 
   // Purchase orders
   listPurchaseOrders(filters?: POFilters): Promise<PurchaseOrderListItem[]>;

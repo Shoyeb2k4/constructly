@@ -21,7 +21,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { PO_STATUSES, PO_STATUS_LABEL, PO_PAYMENT_STATUSES, PO_PAYMENT_STATUS_LABEL } from "../constants";
-import type { POFilters, POGstFilter } from "../types";
+import type { Material, POFilters, POGstFilter } from "../types";
+import { MaterialFilterSelect } from "./material-filter-select";
 
 function FilterRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -66,6 +67,7 @@ export function ProcurementFilterSheet({
   projects,
   vendors,
   materials,
+  unlinkedNames,
   categories,
   members,
 }: {
@@ -76,7 +78,10 @@ export function ProcurementFilterSheet({
   onClearAll: () => void;
   projects: { id: string; name: string }[];
   vendors: { id: string; businessName: string }[];
-  materials: string[];
+  /** The Material Master, archived included — the filter stores ids. */
+  materials: Material[];
+  /** Recorded names on unlinked lines (older orders). */
+  unlinkedNames: string[];
   categories: string[];
   members: { id: string; fullName: string }[];
 }) {
@@ -128,11 +133,12 @@ export function ProcurementFilterSheet({
 
           <div className="grid grid-cols-2 gap-3">
             <FilterRow label="Material">
-              <AllSelect
-                value={filters.material ?? "ALL"}
-                onValueChange={(v) => onChange({ material: v })}
-                allLabel="Any material"
-                options={materials.map((m) => ({ value: m, label: m }))}
+              <MaterialFilterSelect
+                className="w-full"
+                value={{ materialId: filters.materialId, material: filters.material }}
+                onChange={onChange}
+                materials={materials}
+                unlinkedNames={unlinkedNames}
               />
             </FilterRow>
             <FilterRow label="Category">
@@ -174,6 +180,7 @@ export function ProcurementFilterSheet({
               <MoneyInput
                 value={filters.amountMinPaise ?? null}
                 onValueChange={(paise) => onChange({ amountMinPaise: paise ?? undefined })}
+                className="min-w-0 flex-1"
                 placeholder="Min"
                 aria-label="Minimum amount"
               />
@@ -181,6 +188,7 @@ export function ProcurementFilterSheet({
               <MoneyInput
                 value={filters.amountMaxPaise ?? null}
                 onValueChange={(paise) => onChange({ amountMaxPaise: paise ?? undefined })}
+                className="min-w-0 flex-1"
                 placeholder="Max"
                 aria-label="Maximum amount"
               />
@@ -191,6 +199,7 @@ export function ProcurementFilterSheet({
             <div className="flex items-center gap-2">
               <Input
                 type="date"
+                className="min-w-0 flex-1"
                 value={filters.dateFrom ?? ""}
                 max={filters.dateTo || undefined}
                 onChange={(e) => onChange({ dateFrom: e.target.value || undefined })}
@@ -198,6 +207,7 @@ export function ProcurementFilterSheet({
               <span className="text-foreground-subtle">–</span>
               <Input
                 type="date"
+                className="min-w-0 flex-1"
                 value={filters.dateTo ?? ""}
                 min={filters.dateFrom || undefined}
                 onChange={(e) => onChange({ dateTo: e.target.value || undefined })}

@@ -196,6 +196,30 @@ export const PERMISSION_CATALOG = [
     ],
   },
   {
+    module: "materials",
+    label: "Materials",
+    // Master data (the company material catalogue) — its own namespace, kept
+    // separate from the transactional purchase_orders permissions, exactly as
+    // `labour` is kept separate from `attendance`. Holding these says nothing
+    // about being able to raise a purchase order, and being able to raise one
+    // says nothing about being able to reshape the catalogue everyone orders
+    // from.
+    //
+    // Deliberately NOT mirrored from vendors: there is no separate `restore`
+    // (archive covers deactivate AND reactivate — a material is never
+    // destroyed, only hidden), no `merge` and no `delete`.
+    actions: [
+      { key: "materials.view", label: "View" },
+      { key: "materials.create", label: "Create" },
+      { key: "materials.edit", label: "Edit" },
+      // Company-wide: deactivating a material withdraws it from every user's
+      // picker at once. Reversible, and history keeps resolving, but it changes
+      // what the whole company can order — hence `danger`, matching
+      // labour.archive rather than the narrower vendors.archive.
+      { key: "materials.archive", label: "Archive (deactivate / restore)", danger: true },
+    ],
+  },
+  {
     module: "reports",
     label: "Reports",
     // Viewing is distinct from exporting; financial reports need a dedicated

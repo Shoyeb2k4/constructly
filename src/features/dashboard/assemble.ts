@@ -1,5 +1,6 @@
 import { deriveBudget, poCountsForBudget } from "@/features/budget/calc";
 import { poPaymentStatus } from "@/features/procurement/calc";
+import { materialBucketOf, materialIndex } from "@/features/procurement/material-identity";
 import type { PurchaseOrderListItem } from "@/features/procurement/types";
 import type {
   BudgetHealthItem,
@@ -133,14 +134,27 @@ function assembleProcurement(raw: RawDashboardData): ProcurementWidget {
   });
   const spendByProject = [...byProject.values()].sort((a, b) => b.amountPaise - a.amountPaise).slice(0, 6);
 
-  // Top materials purchased (taxable line amounts across counted POs).
+  // Top materials purchased (taxable line amounts across counted POs), grouped
+  // by IDENTITY (material-identity.ts): a linked line by its materialId — so a
+  // renamed or archived Material stays one bucket, labelled by its current
+  // name — and an unlinked line by `legacy:<normalized snapshot>`. Money only:
+  // quantities are never summed here (10 bags + 2 tonnes is not a number).
+  const materialIdx = materialIndex(raw.procurementMaterials ?? []);
   const byMaterial = new Map<string, MaterialSpendRow>();
   counted.forEach((p) =>
     p.lines.forEach((l) => {
-      const key = l.material.toLowerCase();
-      const row = byMaterial.get(key) ?? { material: l.material, category: l.category, amountPaise: 0 };
+      const b = materialBucketOf(l, materialIdx);
+      const row = byMaterial.get(b.key) ?? {
+        key: b.key,
+        materialId: b.materialId,
+        material: b.label,
+        linked: b.linked,
+        archived: b.archived,
+        category: l.category,
+        amountPaise: 0,
+      };
       row.amountPaise += l.amountPaise;
-      byMaterial.set(key, row);
+      byMaterial.set(b.key, row);
     }),
   );
   const topMaterials = [...byMaterial.values()].sort((a, b) => b.amountPaise - a.amountPaise).slice(0, 6);

@@ -1,6 +1,7 @@
 "use client";
 
 import { X } from "lucide-react";
+import { usePathname } from "next/navigation";
 import { NAV_ITEMS } from "@/config/nav";
 import type { SessionUser } from "@/lib/auth/types";
 import { cn } from "@/lib/utils";
@@ -14,20 +15,46 @@ export interface ShellBranding {
   logoUrl: string | null;
 }
 
+/**
+ * The active item is the one whose href matches the LONGEST prefix of the
+ * current path. Nested routes (/procurement/materials under /procurement) match
+ * two items, and letting each link decide for itself marks both current —
+ * highlighting two rows and emitting two `aria-current="page"` in one nav.
+ */
+export function activeNavHref(pathname: string, hrefs: string[]): string | null {
+  let best: string | null = null;
+  for (const href of hrefs) {
+    if (pathname === href || pathname.startsWith(`${href}/`)) {
+      if (best === null || href.length > best.length) best = href;
+    }
+  }
+  return best;
+}
+
 function NavList({
   onNavigate,
 }: {
   onNavigate?: () => void;
 }) {
   const canAccessModule = useCanAccessModule();
+  const pathname = usePathname();
   // Show an item when the user can access any of its modules (permission-aware).
   const items = NAV_ITEMS.filter(
     (item) => !item.modules || item.modules.some(canAccessModule),
   );
+  const active = activeNavHref(
+    pathname,
+    items.map((i) => i.href),
+  );
   return (
     <nav className="flex-1 space-y-0.5 px-3 py-4">
       {items.map((item) => (
-        <NavLink key={item.href} item={item} onNavigate={onNavigate} />
+        <NavLink
+          key={item.href}
+          item={item}
+          active={item.href === active}
+          onNavigate={onNavigate}
+        />
       ))}
     </nav>
   );

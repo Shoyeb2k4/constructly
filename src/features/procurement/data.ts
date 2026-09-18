@@ -4,7 +4,7 @@ import type { ProcurementRepository } from "./repository";
 import { demoProcurementRepository } from "./demo/demo-repository";
 import { httpProcurementRepository } from "./http-repository";
 import * as server from "./server/actions";
-import type { PaymentFilters, POFilters, VendorFilters } from "./types";
+import type { MaterialFilters, PaymentFilters, POFilters, VendorFilters } from "./types";
 
 const serverRepository: ProcurementRepository = {
   listVendors: server.listVendors,
@@ -14,11 +14,20 @@ const serverRepository: ProcurementRepository = {
   setVendorStatus: server.setVendorStatus,
   toggleVendorFavorite: server.toggleVendorFavorite,
   listMaterials: server.listMaterials,
+  listUnlinkedMaterialNames: server.listUnlinkedMaterialNames,
   listMembers: server.listMembers,
   addVendorDocument: server.addVendorDocument,
   removeVendorDocument: server.removeVendorDocument,
   listMaterialCategories: server.listMaterialCategories,
   setMaterialCategories: server.setMaterialCategories,
+  listMaterialMaster: server.listMaterialMaster,
+  getMaterial: server.getMaterial,
+  createMaterial: server.createMaterial,
+  updateMaterial: server.updateMaterial,
+  setMaterialArchived: server.setMaterialArchived,
+  listVendorMaterials: server.listVendorMaterials,
+  setVendorMaterials: server.setVendorMaterials,
+  addMaterialToVendor: server.addMaterialToVendor,
   listPurchaseOrders: server.listPurchaseOrders,
   getPurchaseOrder: server.getPurchaseOrder,
   createPurchaseOrder: server.createPurchaseOrder,
@@ -58,9 +67,19 @@ export const procurementKeys = {
   vendors: (f?: VendorFilters) => ["procurement", "vendors", f ?? {}] as const,
   vendor: (id: string) => ["procurement", "vendor", id] as const,
   vendorAging: (id: string, projectId?: string) => ["procurement", "vendor-aging", id, projectId ?? null] as const,
+  /** LEGACY name list — older apps only (see ProcurementRepository.listMaterials). */
   materials: ["procurement", "materials"] as const,
+  unlinkedMaterialNames: ["procurement", "unlinked-material-names"] as const,
   members: ["procurement", "members"] as const,
   materialCategories: ["procurement", "material-categories"] as const,
+  // Material master. Pass 4+ UI must invalidate:
+  //   create / edit / archive / restore -> materialMaster, material(id), materials
+  //   vendor mapping change             -> vendorMaterials(vendorId), vendor(id)
+  // `materials` is included because the transitional name list is derived from
+  // the master (see ProcurementRepository.listMaterials).
+  materialMaster: (f?: MaterialFilters) => ["procurement", "material-master", f ?? {}] as const,
+  material: (id: string) => ["procurement", "material", id] as const,
+  vendorMaterials: (vendorId: string) => ["procurement", "vendor-materials", vendorId] as const,
   pos: (f?: POFilters) => ["procurement", "pos", f ?? {}] as const,
   po: (id: string) => ["procurement", "po", id] as const,
   payments: (f?: PaymentFilters) => ["procurement", "payments", f ?? {}] as const,

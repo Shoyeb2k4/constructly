@@ -286,6 +286,20 @@ export const PERMISSION_META: Record<Permission, PermissionMeta> = {
   ),
   "vendors.edit_all": M("Change any supplier in the company.", "COMPANY", "HIGH"),
 
+  /* ── Materials (master data) ─────────────────────────────────────── */
+  "materials.view": M("See and search the catalogue of things the company buys.", "COMPANY"),
+  "materials.create": M("Add an item to the catalogue that orders are raised against.", "COMPANY"),
+  "materials.edit": M(
+    "Rename a catalogue item or change its category, default unit or HSN code.",
+    "COMPANY",
+  ),
+  "materials.archive": M(
+    "Withdraw an item from the catalogue so it can no longer be ordered.",
+    "COMPANY",
+    "HIGH",
+    "This applies to everyone at once. Orders already raised keep the name they recorded, but nobody can choose the item again until it is restored.",
+  ),
+
   /* ── Reports ─────────────────────────────────────────────────────── */
   "reports.view": M(
     "Open the Reports centre. On its own this shows nothing — one of the two report classes below is also needed.",

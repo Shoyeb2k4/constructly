@@ -24,6 +24,8 @@ vi.mock("@/lib/db/prisma", () => ({
     vendorPayment: { findMany: vi.fn() },
     vendorFavorite: { findMany: vi.fn() },
     company: { findUnique: vi.fn() },
+    // Vendor reads fetch every mapping once, for the vendor's material chips.
+    vendorMaterial: { findMany: vi.fn() },
   },
 }));
 
@@ -54,6 +56,7 @@ function happyPathMocks() {
   db.vendorPayment.findMany.mockResolvedValue([]);
   db.vendorFavorite.findMany.mockResolvedValue([]);
   db.company.findUnique.mockResolvedValue({ settings: {} });
+  db.vendorMaterial.findMany.mockResolvedValue([]);
 }
 
 beforeEach(() => {

@@ -9,7 +9,7 @@ import * as React from "react";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook, waitFor, act } from "@testing-library/react";
-import { usePurchaseOrders, usePOMutations, useMaterials, useMembers } from "./hooks";
+import { usePurchaseOrders, usePOMutations, useMaterialMaster, useMembers } from "./hooks";
 import { procurementApi } from "./data";
 
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
@@ -58,11 +58,11 @@ describe("procurement duplicate does not leave the UI stuck on 'updating…'", (
     const client = makeClient();
     const w = wrapper(client);
     const listSpy = vi.spyOn(procurementApi, "listPurchaseOrders");
-    const materialsSpy = vi.spyOn(procurementApi, "listMaterials");
+    const materialsSpy = vi.spyOn(procurementApi, "listMaterialMaster");
     const membersSpy = vi.spyOn(procurementApi, "listMembers");
 
     const list = renderHook(() => usePurchaseOrders({}), { wrapper: w });
-    const materials = renderHook(() => useMaterials(), { wrapper: w });
+    const materials = renderHook(() => useMaterialMaster({ includeArchived: true }), { wrapper: w });
     const members = renderHook(() => useMembers(), { wrapper: w });
     const mut = renderHook(() => usePOMutations(), { wrapper: w });
 

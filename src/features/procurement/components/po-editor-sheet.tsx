@@ -5,7 +5,8 @@ import { useRouter } from "next/navigation";
 import { useForm, useFieldArray, Controller } from "react-hook-form";
 import { RupeeInput } from "@/components/patterns/money-input";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Plus, Trash2, ChevronUp, ChevronDown } from "lucide-react";
+import { Plus, Trash2, ChevronUp, ChevronDown, ChevronsUpDown } from "lucide-react";
+import { toast } from "sonner";
 import {
   Sheet,
   SheetContent,
@@ -34,13 +35,31 @@ import { deriveBudget } from "@/features/budget/calc";
 import { poFormSchema, poFormToInput, poDetailToForm, type POFormValues } from "../schema";
 import { UNITS } from "../constants";
 import { poTotals } from "../calc";
-import { useVendors, usePOMutations, useMaterialCategories } from "../hooks";
+import {
+  useVendors,
+  usePOMutations,
+  useMaterialCategories,
+  useMaterialMaster,
+  useVendorMaterials,
+  useAddMaterialToVendor,
+} from "../hooks";
+import { useCan } from "@/features/rbac/permission-context";
+import { MaterialPickerSheet } from "./material-picker-sheet";
 import { pushRecentVendor } from "../recently-vendors";
 import { getApprovalRequired } from "@/features/settings/demo-settings";
-import type { PurchaseOrderDetail } from "../types";
+import type { Material, PurchaseOrderDetail } from "../types";
 
 // GST defaults to 0% — users set the applicable rate per line when needed.
-const EMPTY_LINE = { material: "", category: "", quantity: 1, unit: "nos", rateRupees: 0, gstPercent: 0 };
+const EMPTY_LINE = {
+  material: "",
+  materialId: "",
+  addToVendor: false,
+  category: "",
+  quantity: 1,
+  unit: "nos",
+  rateRupees: 0,
+  gstPercent: 0,
+};
 const NO_CATEGORY = "__none__";
 
 function num(v: unknown): number {
@@ -65,7 +84,12 @@ export function POEditorSheet({
   const { data: projects = [] } = useProjects({});
   const { data: vendors = [] } = useVendors({ status: "ACTIVE" });
   const { data: categories = [] } = useMaterialCategories();
+  const can = useCan();
+  const canEditVendor = can("vendors.edit");
+  const addToVendor = useAddMaterialToVendor();
   const isEdit = !!editPo;
+  // Which line the material picker is open for (one picker, shared).
+  const [pickerLine, setPickerLine] = React.useState<number | null>(null);
 
   const createDefaults = React.useMemo<POFormValues>(
     () => ({
@@ -83,6 +107,7 @@ export function POEditorSheet({
     handleSubmit,
     watch,
     reset,
+    setValue,
     formState: { errors },
   } = useForm<POFormValues>({
     resolver: zodResolver(poFormSchema),
@@ -105,6 +130,37 @@ export function POEditorSheet({
   const projectId = watch("projectId");
   const vendorId = watch("vendorId");
 
+  // Material data for EVERY line comes from two queries, fetched once and only
+  // while the editor is open (it stays mounted on three pages): the whole
+  // Material Master — archived included, so a historical line can still say
+  // what it references — and the selected vendor's usual materials.
+  const { data: allMaterials = [] } = useMaterialMaster({ includeArchived: true }, { enabled: open });
+  const { data: vendorMaterials, isFetched: vendorMaterialsLoaded } = useVendorMaterials(vendorId ?? "", {
+    enabled: open,
+  });
+  const activeMaterials = React.useMemo(() => allMaterials.filter((m) => m.isActive), [allMaterials]);
+  const materialById = React.useMemo(() => new Map(allMaterials.map((m) => [m.id, m])), [allMaterials]);
+  const vendorMaterialIds = React.useMemo(
+    () => new Set((vendorMaterials ?? []).map((m) => m.id)),
+    [vendorMaterials],
+  );
+  const vendorName = vendors.find((v) => v.id === vendorId)?.businessName ?? "This vendor";
+
+  /**
+   * Put a Master material on a line. Its default unit and category are applied
+   * NOW — at the moment the material changes — and only if the material has
+   * them. Anything the user sets afterwards is left alone until they change the
+   * material again. The "also add to vendor" choice resets: it was a decision
+   * about the previous material.
+   */
+  function selectMaterial(i: number, m: Material) {
+    setValue(`lineItems.${i}.materialId`, m.id, { shouldDirty: true });
+    setValue(`lineItems.${i}.material`, m.name, { shouldDirty: true, shouldValidate: true });
+    if (m.defaultUnit) setValue(`lineItems.${i}.unit`, m.defaultUnit, { shouldDirty: true });
+    if (m.category) setValue(`lineItems.${i}.category`, m.category, { shouldDirty: true });
+    setValue(`lineItems.${i}.addToVendor`, false);
+  }
+
   const totals = poTotals(
     (lines ?? []).map((l) => ({
       quantity: num(l.quantity),
@@ -126,6 +182,7 @@ export function POEditorSheet({
 
   function close() {
     reset();
+    setPickerLine(null);
     onOpenChange(false);
   }
 
@@ -134,9 +191,49 @@ export function POEditorSheet({
   const onSubmit = handleSubmit(async (values) => {
     const parsed = poFormSchema.parse(values);
     const input = poFormToInput(parsed);
-    const po = isEdit
-      ? await update.mutateAsync({ id: editPo!.id, input })
-      : await create.mutateAsync(input);
+    let po;
+    try {
+      po = isEdit
+        ? await update.mutateAsync({ id: editPo!.id, input })
+        : await create.mutateAsync(input);
+    } catch {
+      // The mutation hook has said why. Keep the sheet open with every line —
+      // and every material choice — exactly as the user left them.
+      return;
+    }
+
+    // "Also add to the vendor's usual materials" runs only AFTER the order is
+    // saved, and independently of it. The order is the transaction that
+    // matters; a convenience mapping failing (or the user lacking
+    // vendors.edit) must never undo or block it, so a failure here is
+    // reported and nothing else.
+    const toMap = canEditVendor
+      ? [
+          ...new Set(
+            parsed.lineItems
+              .filter((l) => l.addToVendor && l.materialId && !vendorMaterialIds.has(l.materialId))
+              .map((l) => l.materialId!),
+          ),
+        ]
+      : [];
+    if (toMap.length > 0) {
+      let failed = 0;
+      for (const materialId of toMap) {
+        try {
+          await addToVendor.mutateAsync({ vendorId: parsed.vendorId, materialId });
+        } catch {
+          failed += 1;
+        }
+      }
+      if (failed > 0) {
+        toast.error(
+          `Purchase order saved, but ${failed} material${failed === 1 ? "" : "s"} couldn't be added to ${vendorName}'s usual materials.`,
+        );
+      } else {
+        toast.success(`Added to ${vendorName}'s usual materials`);
+      }
+    }
+
     const v = vendors.find((x) => x.id === parsed.vendorId);
     if (v) pushRecentVendor({ id: v.id, name: v.businessName });
     close();
@@ -220,24 +317,65 @@ export function POEditorSheet({
                 <div className="hidden grid-cols-[1fr_110px_64px_74px_84px_64px_88px_76px] gap-2 border-b border-border px-3 py-2 text-xs text-foreground-subtle sm:grid">
                   <span>Material</span><span>Category</span><span>Qty</span><span>Unit</span><span>Rate ₹</span><span>GST %</span><span className="text-right">Amount</span><span />
                 </div>
-                {fields.map((f, i) => (
+                {fields.map((f, i) => {
+                  const line = lines?.[i];
+                  const materialId = line?.materialId || "";
+                  const record = materialId ? materialById.get(materialId) : undefined;
+                  const archived = !!record && !record.isActive;
+                  const legacy = !materialId && !!line?.material;
+                  const notUsual =
+                    !!materialId &&
+                    !!vendorId &&
+                    vendorMaterialsLoaded &&
+                    !archived &&
+                    !vendorMaterialIds.has(materialId);
+                  const lineError = errors.lineItems?.[i]?.material?.message;
+                  return (
                   <div key={f.id} className="grid grid-cols-2 items-center gap-2 border-b border-border px-3 py-2 last:border-0 sm:grid-cols-[1fr_110px_64px_74px_84px_64px_88px_76px]">
-                    <Input className="h-8" placeholder="OPC Cement" {...register(`lineItems.${i}.material`)} />
+                    <button
+                      type="button"
+                      disabled={!vendorId}
+                      onClick={() => setPickerLine(i)}
+                      aria-label={
+                        vendorId
+                          ? `Material for line ${i + 1}: ${line?.material || "none chosen"}`
+                          : `Material for line ${i + 1}: select a vendor first`
+                      }
+                      aria-describedby={lineError ? `line-${i}-error` : undefined}
+                      className={cn(
+                        "col-span-2 flex h-8 min-w-0 items-center gap-1 rounded-[var(--radius)] border bg-surface px-2 text-left text-sm sm:col-span-1",
+                        lineError ? "border-danger" : "border-border-strong",
+                        !vendorId && "cursor-not-allowed opacity-60",
+                      )}
+                    >
+                      <span className={cn("min-w-0 flex-1 truncate", !line?.material && "text-foreground-subtle")}>
+                        {!vendorId ? "Select a vendor first" : line?.material || "Choose material"}
+                      </span>
+                      <ChevronsUpDown className="size-3.5 shrink-0 text-foreground-subtle" />
+                    </button>
                     <Controller
                       control={control}
                       name={`lineItems.${i}.category`}
-                      render={({ field }) => (
-                        <Select
-                          value={field.value || NO_CATEGORY}
-                          onValueChange={(v) => field.onChange(v === NO_CATEGORY ? "" : v)}
-                        >
-                          <SelectTrigger className="h-8 px-2 text-xs"><SelectValue /></SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value={NO_CATEGORY}>—</SelectItem>
-                            {categories.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
-                          </SelectContent>
-                        </Select>
-                      )}
+                      render={({ field }) => {
+                        // A line keeps the category it recorded even if Settings
+                        // has since dropped it — it is a frozen PO value.
+                        const opts =
+                          field.value && !categories.includes(field.value)
+                            ? [...categories, field.value]
+                            : categories;
+                        return (
+                          <Select
+                            value={field.value || NO_CATEGORY}
+                            onValueChange={(v) => field.onChange(v === NO_CATEGORY ? "" : v)}
+                          >
+                            <SelectTrigger className="h-8 px-2 text-xs" aria-label={`Category for line ${i + 1}`}><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value={NO_CATEGORY}>—</SelectItem>
+                              {opts.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+                            </SelectContent>
+                          </Select>
+                        );
+                      }}
                     />
                     <Input className="h-8 px-2" type="number" step="0.01" min={0} {...register(`lineItems.${i}.quantity`)} />
                     <Controller
@@ -245,7 +383,7 @@ export function POEditorSheet({
                       name={`lineItems.${i}.unit`}
                       render={({ field }) => (
                         <Select value={field.value} onValueChange={field.onChange}>
-                          <SelectTrigger className="h-8 px-2"><SelectValue /></SelectTrigger>
+                          <SelectTrigger className="h-8 px-2" aria-label={`Unit for line ${i + 1}`}><SelectValue /></SelectTrigger>
                           <SelectContent>
                             {UNITS.map((u) => <SelectItem key={u} value={u}>{u}</SelectItem>)}
                           </SelectContent>
@@ -306,8 +444,41 @@ export function POEditorSheet({
                         <Trash2 className="size-3.5" />
                       </button>
                     </div>
+                    {(archived || legacy || notUsual || lineError) && (
+                      <div className="col-span-2 space-y-1 text-xs sm:col-span-8">
+                        {lineError && <p id={`line-${i}-error`} className="text-danger-foreground">{lineError}</p>}
+                        {archived && (
+                          <p className="text-foreground-subtle">
+                            Archived material — kept on this order as recorded.
+                          </p>
+                        )}
+                        {legacy && (
+                          <p className="text-foreground-subtle">
+                            Not linked to the Material Master. Choose a material to link this line.
+                          </p>
+                        )}
+                        {notUsual && (
+                          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                            <span className="text-foreground-subtle">
+                              Not in {vendorName}&apos;s usual materials.
+                            </span>
+                            {canEditVendor && (
+                              <label className="flex cursor-pointer items-center gap-1.5 text-foreground-muted">
+                                <input
+                                  type="checkbox"
+                                  className="size-3.5 accent-primary"
+                                  {...register(`lineItems.${i}.addToVendor`)}
+                                />
+                                Also add this material to {vendorName}&apos;s usual materials
+                              </label>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
-                ))}
+                  );
+                })}
                 {/* Standard GST slabs as quick suggestions; free entry allowed. */}
                 <datalist id="gst-presets">
                   <option value="0" /><option value="5" /><option value="12" /><option value="18" /><option value="28" />
@@ -355,6 +526,18 @@ export function POEditorSheet({
               </div>
             )}
           </div>
+
+          {pickerLine !== null && (
+            <MaterialPickerSheet
+              open
+              onOpenChange={(o) => !o && setPickerLine(null)}
+              vendorName={vendorName}
+              vendorMaterialIds={vendorMaterialIds}
+              materials={activeMaterials}
+              selectedId={lines?.[pickerLine]?.materialId || undefined}
+              onSelect={(m) => selectMaterial(pickerLine, m)}
+            />
+          )}
 
           <SheetFooter>
             <Button type="button" variant="ghost" onClick={close}>Cancel</Button>

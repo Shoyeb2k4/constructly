@@ -1,6 +1,7 @@
 import type { PaymentMode, PurchaseOrderStatus, VendorDocumentCategory, VendorStatus } from "../types";
 import { lineAmountPaise, lineGstPaise } from "../calc";
 import { toPaise } from "@/lib/money";
+import { planMaterialBackfill } from "../material-backfill";
 
 export interface VendorRecord {
   id: string;
@@ -18,9 +19,32 @@ export interface VendorRecord {
   isFavorite: boolean;
 }
 
+/** Material master record, demo shape. `deletedAt` mirrors the Prisma column;
+ *  the repository maps it to the DTO's `isActive`. */
+export interface MaterialRecord {
+  id: string;
+  name: string;
+  category: string | null;
+  defaultUnit: string | null;
+  hsnCode: string | null;
+  displayOrder: number;
+  deletedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Vendor to material eligibility link. No quantity — see the Prisma model. */
+export interface VendorMaterialRecord {
+  vendorId: string;
+  materialId: string;
+}
+
 export interface POLineRecord {
   id: string;
   material: string;
+  /** Optional canonical material. `undefined` on rows stored before the master
+   *  existed; the repository normalises that to null when mapping. */
+  materialId?: string | null;
   category: string | null;
   quantity: number;
   unit: string;
@@ -115,6 +139,11 @@ function line(
   return {
     id: `line-${seq++}`,
     material,
+    // Seeded lines pick up a canonical reference whenever their text matches a
+    // master entry, so the demo exercises the materialId path. Lines that match
+    // nothing stay free text — which is exactly what a real company's pre-master
+    // history looks like, and worth having represented.
+    materialId: demoMaterialIdByName(material),
     category,
     quantity,
     unit,
@@ -225,4 +254,71 @@ export function demoVendorDocs(): VendorDocRecord[] {
     { id: "80000000-0000-0000-0000-000000000001", vendorId: V1, category: "CONTRACT", filename: "UltraTech-rate-contract-FY26.pdf", sizeBytes: 482_112, mimeType: "application/pdf", storagePath: "demo/vendors/ultratech-rate-contract.pdf", createdAt: iso(-80) },
     { id: "80000000-0000-0000-0000-000000000002", vendorId: V2, category: "PDF", filename: "Sanghvi-GST-certificate.pdf", sizeBytes: 210_774, mimeType: "application/pdf", storagePath: "demo/vendors/sanghvi-gst-cert.pdf", createdAt: iso(-60) },
   ];
+}
+
+/* ── Material master ─────────────────────────────────────────────────── */
+
+/**
+ * The demo material master is DERIVED from the vendors' legacy `materialsSupplied`
+ * arrays using the very rule the production migration uses
+ * (`planMaterialBackfill`), rather than being hand-listed. The demo therefore
+ * shows exactly the relationships a real company ends up with after migrating,
+ * and cannot drift from the backfill's behaviour.
+ */
+const DEMO_COMPANY = "demo";
+
+/** Category + unit, so the demo master reads as curated rather than raw. Keyed
+ *  by normalized name; anything unlisted simply stays uncategorised. */
+const MATERIAL_HINTS: Record<string, { category: string; unit: string }> = {
+  cement: { category: "Cement", unit: "bag" },
+  concrete: { category: "Cement", unit: "brass" },
+  "aac blocks": { category: "Hardware", unit: "nos" },
+  "tmt steel": { category: "Steel", unit: "ton" },
+  "structural steel": { category: "Steel", unit: "ton" },
+  "binding wire": { category: "Steel", unit: "kg" },
+  paints: { category: "Paint", unit: "litre" },
+  primers: { category: "Paint", unit: "litre" },
+  putty: { category: "Paint", unit: "kg" },
+  "river sand": { category: "Sand & Aggregate", unit: "brass" },
+  "m-sand": { category: "Sand & Aggregate", unit: "brass" },
+  aggregate: { category: "Sand & Aggregate", unit: "brass" },
+  wiring: { category: "Electrical", unit: "roll" },
+  switches: { category: "Electrical", unit: "nos" },
+  fixtures: { category: "Electrical", unit: "nos" },
+};
+
+const PLAN = planMaterialBackfill(
+  DEMO_VENDORS.map((v) => ({ id: v.id, companyId: DEMO_COMPANY, materialsSupplied: v.materialsSupplied })),
+);
+
+/** Stable ids, so demo data survives a reload and PO lines can reference it. */
+const MATERIAL_ID = new Map(
+  PLAN.materials.map((m, i) => [m.normalizedName, `90000000-0000-0000-0000-${String(i + 1).padStart(12, "0")}`]),
+);
+
+export function demoMaterials(): MaterialRecord[] {
+  return PLAN.materials.map((m, i) => {
+    const hint = MATERIAL_HINTS[m.normalizedName];
+    return {
+      id: MATERIAL_ID.get(m.normalizedName)!,
+      name: m.name,
+      category: hint?.category ?? null,
+      defaultUnit: hint?.unit ?? null,
+      hsnCode: null,
+      displayOrder: i,
+      deletedAt: null,
+      createdAt: iso(-120),
+      updatedAt: iso(-120),
+    };
+  });
+}
+
+export function demoVendorMaterials(): VendorMaterialRecord[] {
+  return PLAN.links.map((l) => ({ vendorId: l.vendorId, materialId: MATERIAL_ID.get(l.normalizedName)! }));
+}
+
+/** Resolve a seeded material id by name — used to give the seeded purchase
+ *  orders canonical references, so the demo exercises the materialId path. */
+export function demoMaterialIdByName(name: string): string | null {
+  return MATERIAL_ID.get(name.trim().toLowerCase()) ?? null;
 }

@@ -85,9 +85,12 @@ describe("Admin", () => {
     }
   });
 
-  it("matches the 94 permissions production reports", () => {
-    // Verified against the live database during the Phase 6 deployment.
-    expect(admin.permissions.length).toBe(94);
+  it("matches the 98 permissions production reports", () => {
+    // Verified against the live database during the Phase 6 deployment (94),
+    // then +4 when the materials master-data module was added. A change here is
+    // never incidental: it means the catalogue grew or shrank, and with it the
+    // shape of every company's Admin role.
+    expect(admin.permissions.length).toBe(98);
   });
 
   it("includes the advance re-scope permission the reconciliation added", () => {
@@ -321,7 +324,7 @@ describe("built-in roles are read-only templates", () => {
     ).rejects.toThrow("BUILT_IN_ROLE");
 
     const after = (await demoRolesRepository.listRoles()).find((r) => r.key === "admin")!;
-    expect(after.permissions).toHaveLength(94);
+    expect(after.permissions).toHaveLength(ALL_PERMISSIONS.length - 3);
   });
 
   it("refuses a rename of a built-in role too", async () => {
@@ -418,7 +421,7 @@ describe("reconciliation only touches built-in roles", () => {
     reconcile();
 
     const after = (await demoRolesRepository.listRoles()).find((r) => r.key === "admin")!;
-    expect(after.permissions).toHaveLength(94);
+    expect(after.permissions).toHaveLength(ALL_PERMISSIONS.length - 3);
   });
 
   it("keeps a custom role safe across a reload", async () => {
